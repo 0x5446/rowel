@@ -10,7 +10,7 @@
  * Usage:
  *   node ios/asc.mjs builds                      recent builds for the app
  *   node ios/asc.mjs version                     the in-flight version
- *   node ios/asc.mjs attach <buildId>            put that build on the version
+ *   node ios/asc.mjs attach <build|id>           put that build on the version
  *   node ios/asc.mjs ratings                     current age-rating answers
  *   node ios/asc.mjs submit                      send the version to review
  *   node ios/asc.mjs shots <file>...             replace the screenshot set
@@ -100,6 +100,27 @@ const EDITABLE = new Set([
   'PENDING_DEVELOPER_RELEASE',
 ])
 
+/**
+ * The resource id of a build, given the number stamped in its CFBundleVersion.
+ *
+ * @param {string} number the build number, as `builds` prints it.
+ * @returns {Promise<string>} the id Apple wants in a relationship.
+ */
+async function buildIdFor(number) {
+  const found = await call('GET', `/v1/builds?filter[app]=${APP_ID}&filter[version]=${number}&limit=2`)
+  if (found.data.length === 0) {
+    process.stderr.write(`asc: no build numbered ${number} on this app\n`)
+    process.exit(1)
+  }
+  // Build numbers are unique per version string, not per app, so two uploads
+  // under different marketing versions can share one. Refusing beats guessing.
+  if (found.data.length > 1) {
+    process.stderr.write(`asc: build ${number} matches more than one upload; pass the id\n`)
+    process.exit(1)
+  }
+  return found.data[0].id
+}
+
 async function inflight() {
   const versions = await call('GET',
     `/v1/apps/${APP_ID}/appStoreVersions?limit=20&fields[appStoreVersions]=versionString,appStoreState,platform`)
@@ -141,8 +162,14 @@ switch (command) {
     break
   }
   case 'attach': {
-    const [buildId] = rest
-    if (buildId === undefined) { process.stderr.write('asc: attach <buildId>\n'); process.exit(1) }
+    const [asked] = rest
+    if (asked === undefined) { process.stderr.write('asc: attach <build number or id>\n'); process.exit(1) }
+    // A build number is what `builds` prints in the column a person reads and
+    // what `release.sh` says it uploaded, so it is what gets typed here. Apple
+    // wants the resource id, and answers a number with a 409 naming a
+    // relationship rather than the argument — so resolve it here instead of
+    // making the caller go and look it up.
+    const buildId = /^\d+$/u.test(asked) ? await buildIdFor(asked) : asked
     const version = await inflight()
     await call('PATCH', `/v1/appStoreVersions/${version.id}`, {
       data: {
@@ -150,7 +177,7 @@ switch (command) {
         relationships: { build: { data: { type: 'builds', id: buildId } } },
       },
     })
-    process.stdout.write(`attached ${buildId} to ${version.attributes.versionString}\n`)
+    process.stdout.write(`attached build ${asked} to ${version.attributes.versionString}\n`)
     break
   }
   case 'ratings': {
@@ -291,6 +318,6 @@ switch (command) {
     process.stdout.write(`${JSON.stringify(await call('PATCH', rest[0], JSON.parse(rest[1])), null, 2)}\n`)
     break
   default:
-    process.stderr.write('asc: builds | version | attach <id> | ratings | submit | shots <file>... | get <path> | patch <path> <json> | post <path> <json>\n')
+    process.stderr.write('asc: builds | version | attach <build|id> | ratings | submit | shots <file>... | get <path> | patch <path> <json> | post <path> <json>\n')
     process.exit(1)
 }
