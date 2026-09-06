@@ -28,7 +28,12 @@ root="$(cd .. && pwd)"
 home="${ROWEL_SHOTS_HOME:-$HOME/rowel-shots}"
 port="${ROWEL_SHOTS_PORT:-3082}"
 device="${ROWEL_SHOTS_DEVICE:-iPhone 17 Pro Max}"
-sample="$HOME/code/checkout-api"
+# Under /Users/Shared, not under anybody's home. The path is *visible in the
+# product*: the session list, the conversation header and the transcript all
+# print the working directory, so a fixture under $HOME publishes the
+# operator's username in every screenshot and every frame of the demo video —
+# which it did, six times over, on the store listing.
+sample="/Users/Shared/code/checkout-api"
 
 if [ -t 1 ]; then bold=$(printf '\033[1m'); off=$(printf '\033[0m'); else bold=''; off=''; fi
 say() { printf '%s==>%s %s\n' "$bold" "$off" "$*"; }
@@ -107,7 +112,14 @@ YAML
   # reached the fixtures behind the store screenshots, one tap from being
   # legible. A throwaway harness gets a throwaway agents home.
   mkdir -p "$home/agents-home/skills"
+  # A PATH with no user directories on it. The agent probes its environment —
+  # `which python3`, pip, a cache dir — and every one of those answers is a
+  # path, printed into a tool card that renders on screen. With ~/.local/bin
+  # on the PATH the answers all begin /Users/<operator>, which is the same
+  # leak the fixture move fixed, arriving through the toolchain instead. With
+  # only system directories there is nothing user-specific for a probe to find.
   DSH_TELEMETRY_DISABLED=1 DSH_HOME="$home/dsh-home" DSH_AGENTS_HOME="$home/agents-home" \
+    PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
     nohup dsh web >> "$home/dsh.log" 2>&1 &
   printf 'harness starting on :%s ' "$port"
   until curl -s -o /dev/null -m 2 "http://127.0.0.1:$port/"; do printf '.'; sleep 1; done
@@ -163,16 +175,39 @@ def total_with_shipping(items, currency, shipping=0):
     subtotal = sum(item["price"] for item in items)
     return convert(subtotal + shipping, "USD", currency)
 EOF
+  # Self-running, no pytest. Asking the agent to "run the tests" on a machine
+  # without pytest sent it hunting — which python, which pip, a uv cache — and
+  # every answer was a path under the operator's home, printed into cards the
+  # screenshots then show. A plain script needs nothing but python3.
   cat > "$sample/test_rates.py" <<'EOF'
+"""Checks for rates.py. Run directly: python3 test_rates.py"""
 from rates import convert, total_with_shipping
 
+CHECKS = []
 
-def test_same_currency_is_identity():
+
+def check(name):
+    def keep(fn):
+        CHECKS.append((name, fn))
+        return fn
+    return keep
+
+
+@check("same currency is identity")
+def test_identity():
     assert convert(10, "USD", "USD") == 10
 
 
+@check("round trip returns the amount")
 def test_round_trip():
     assert round(convert(convert(10, "USD", "EUR"), "EUR", "USD"), 6) == 10
+
+
+if __name__ == "__main__":
+    for name, fn in CHECKS:
+        fn()
+        print(f"PASS {name}")
+    print(f"{len(CHECKS)} passed")
 EOF
   python3 - "$sample" <<'EOF'
 import json, random, sys
@@ -266,13 +301,13 @@ seed_conversations() {
   [ -n "$wid" ] && rpc workspace.rename "{\"workspaceId\":\"$wid\",\"title\":\"checkout-api\"}" >/dev/null
   say "starting conversations"
   converse "Add CAD and AUD to the currency table" \
-    "Read rates.py and test_rates.py, then add CAD and AUD with correct rates and a test for each. Run the tests when you are done."
+    "Read rates.py and test_rates.py, then add CAD and AUD with correct rates and a check for each. Run python3 test_rates.py when you are done. Work only inside this directory — do not inspect anything else on this machine."
   converse "Why does the webhook retry twice?" \
-    "Read README.md and explain in two sentences what this service is for."
+    "Read README.md and explain in two sentences what this service is for. Work only inside this directory."
   converse "Build the checkout health dashboard" \
-    "Plan this out with a todo list first, then do it. Read metrics.json, work out the trends that matter, and build dashboard.html: a single self-contained dark-mode page with inline SVG charts and a verdict banner. No external assets. Check it renders, then tell me what the data says."
+    "Plan this out with a todo list first, then do it. Read metrics.json, work out the trends that matter, and build dashboard.html: a single self-contained dark-mode page with inline SVG charts and a verdict banner. No external assets. Check it renders with node, then tell me what the data says. Work only inside this directory — do not inspect anything else on this machine."
   converse_with_sketch "Match the dashboard to this sketch" \
-    "I sketched the layout I want on paper. Rework dashboard.html to match it: header up top, three metric cards in a row, one wide chart underneath. Keep the data and the dark theme."
+    "I sketched the layout I want on paper. Rework dashboard.html to match it: header up top, three metric cards in a row, one wide chart underneath. Keep the data and the dark theme. Work only inside this directory."
   # The one that has to stop and ask.
   #
   # It asks *before* pushing rather than after failing to. Letting the push run
@@ -411,6 +446,12 @@ take() {
 
 case "${1:-}" in
   --seed) start_harness; start_bridle; seed_repo; seed_conversations ;;
-  --shots) take ;;
+  # `settle` here too, not only in the full pipeline. Shooting a conversation
+  # that is still streaming does not produce a worse photograph — it produces
+  # no photograph: the transcript never leaves "Loading this conversation…",
+  # the driver spends 147 seconds discovering that, and the failure names the
+  # conversation rather than the reason. Re-running the shots alone is the
+  # common case, and it was the one path that skipped the wait.
+  --shots) settle; take ;;
   *) start_harness; start_bridle; seed_repo; seed_conversations; settle; take ;;
 esac

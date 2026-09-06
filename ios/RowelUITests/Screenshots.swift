@@ -303,7 +303,22 @@ final class Screenshots: XCTestCase {
         app.swipeDown()
         app.swipeDown()
         app.swipeDown()
-        sleep(2)
+        // Whole swipes land the sketch thumbnail half under the navigation
+        // bar, deterministically — three of them always stop at the same
+        // frame. One measured drag brings the attachment fully on screen,
+        // which is the one thing this shot exists to show.
+        let from = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
+        let to = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.52))
+        from.press(forDuration: 0.05, thenDragTo: to)
+        // Wait for the sketch itself, not for a duration. A thumbnail that has
+        // not arrived draws a grey placeholder, and a placeholder photographs
+        // exactly as well as the photo does — which is how a shot of the
+        // failure reached the App Store and stayed there. The image element
+        // only carries a label once real bytes are behind it.
+        let sketch = app.images["attachment.loaded"]
+        XCTAssertTrue(sketch.waitForExistence(timeout: 30),
+                      "the attachment never loaded — this shot would be of the placeholder")
+        sleep(1)
         save("photo")
     }
 }

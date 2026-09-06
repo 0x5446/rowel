@@ -10,7 +10,10 @@ ios/screenshots.sh          # the whole set
 That script starts a throwaway dsh (its own `DSH_HOME`, its own port, its own
 pairing identity) so the shots never contain a real project path, a real
 conversation, or a name belonging to whoever is running it. The sample repo it
-works in is `~/code/checkout-api`, seeded by the script.
+works in is `/Users/Shared/code/checkout-api`, seeded by the script — a
+neutral path on purpose, because the app prints the working directory in
+the list, the header and the transcript, so a fixture under `$HOME` puts
+the operator's username on the store listing.
 
 The driver is `ios/RowelUITests/Screenshots.swift`. Each shot asserts it is
 looking at the right screen before it saves, because a screenshot taken on

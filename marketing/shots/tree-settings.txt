@@ -1,266 +1,276 @@
-Optional(Attributes: Application, 0x107a27700, pid: 28127, label: 'Rowel'
+Optional(Attributes: Application, 0x105277700, pid: 45134, label: 'Rowel'
 Element subtree:
- →Application, 0x107a27700, pid: 28127, label: 'Rowel'
-    Window (Main), 0x107a27980, {{0.0, 0.0}, {440.0, 956.0}}
-      Other, 0x107a27ac0, {{0.0, 0.0}, {440.0, 956.0}}
-        Other, 0x107a27c00, {{0.0, 0.0}, {440.0, 956.0}}
-          Other, 0x107a27d40, {{-440.0, -956.0}, {1320.0, 2868.0}}
-          Other, 0x107a27e80, {{0.0, 0.0}, {440.0, 956.0}}
-            Other, 0x117430000, {{0.0, 0.0}, {440.0, 956.0}}
-              Other, 0x117430140, {{0.0, 0.0}, {440.0, 956.0}}
-                NavigationBar, 0x117430280, {{0.0, 62.0}, {440.0, 114.0}}, identifier: '_TtGC7SwiftUI29PresentationHosting'
-                  Other, 0x1174303c0, {{24.0, 66.0}, {225.7, 36.0}}, label: 'Switch Mac'
-                    Other, 0x117430500, {{24.0, 66.0}, {225.7, 36.0}}
-                      Button, 0x117430640, {{24.0, 66.0}, {225.7, 36.0}}, label: 'Switch Mac'
-                        StaticText, 0x117430780, {{44.0, 75.0}, {154.0, 18.0}}, label: 'alphadeMacBook-Pro'
-                        Image, 0x1174308c0, {{205.3, 78.0}, {16.3, 12.0}}, identifier: 'wifi', label: 'Direct over Wi-Fi'
-                        Image, 0x117430a00, {{230.7, 80.7}, {11.3, 6.7}}, identifier: 'chevron.down', label: 'Go Down'
-                  Other, 0x117430b40, {{380.0, 66.0}, {36.0, 36.0}}, identifier: 'gearshape', label: 'Settings'
-                    Other, 0x117430c80, {{380.0, 66.0}, {36.0, 36.0}}
-                      Button, 0x117430dc0, {{382.3, 66.0}, {31.3, 36.0}}, identifier: 'gearshape', label: 'Settings'
-                  SearchField, 0x117430f00, {{20.0, 117.0}, {400.0, 44.0}}, label: 'Search conversations', placeholderValue: 'Search conversations'
-                    Image, 0x117431040, {{32.0, 129.3}, {20.3, 18.7}}, identifier: 'magnifyingglass', label: 'Search'
-                Other, 0x117431180, {{0.0, 0.0}, {440.0, 956.0}}
-                  Other, 0x1174312c0, {{0.0, 0.0}, {440.0, 956.0}}
-                    Other, 0x117431400, {{0.0, 0.0}, {440.0, 956.0}}
-                      Other, 0x117431540, {{0.0, 0.0}, {440.0, 956.0}}
-                        CollectionView, 0x117431680, {{0.0, 0.0}, {440.0, 956.0}}, identifier: 'sessions.list'
-                          Other, 0x1174317c0, {{0.0, -1736.0}, {440.0, 4232.3}}
-                          Other, 0x117431900, {{0.0, 0.0}, {440.0, 956.0}}
-                            Other, 0x117431a40, {{0.0, 0.0}, {440.0, 225.8}}
-                          Other, 0x117431b80, {{0.0, 0.0}, {440.0, 956.0}}
-                          Cell, 0x117431cc0, {{0.0, 176.0}, {440.0, 81.7}}
-                            Other, 0x117431e00, {{0.0, 176.0}, {440.0, 81.7}}
-                              Other, 0x117431f40, {{0.0, 176.0}, {440.0, 81.7}}
-                                Other, 0x117432080, {{0.0, 176.0}, {440.0, 81.7}}
-                            Other, 0x1174321c0, {{0.0, 176.0}, {440.0, 81.7}}
-                              Other, 0x117432300, {{0.0, 176.0}, {440.0, 81.7}}
-                                Other, 0x117432440, {{0.0, 176.0}, {440.0, 81.7}}
-                                  Button, 0x117432580, {{0.0, 176.0}, {440.0, 81.7}}, label: 'Ship the currency fix, Needs you, /Users/alpha/code/checkout-api, ·, just now'
-                                    StaticText, 0x1174326c0, {{28.0, 194.0}, {156.3, 19.3}}, label: 'Ship the currency fix'
-                                    Image, 0x117432800, {{333.3, 198.3}, {8.3, 11.0}}, identifier: 'hand.raised.fill', label: 'Block'
-                                    StaticText, 0x117432940, {{347.3, 197.0}, {57.7, 13.3}}, label: 'Needs you'
-                                    StaticText, 0x117432a80, {{28.0, 222.8}, {204.0, 13.3}}, label: '/Users/alpha/code/checkout-api'
-                                    StaticText, 0x117432bc0, {{238.0, 219.3}, {4.7, 20.3}}, label: '·'
-                                    StaticText, 0x117432d00, {{248.7, 222.3}, {47.3, 14.3}}, label: 'just now'
-                          Cell, 0x117432e40, {{0.0, 257.7}, {440.0, 81.7}}
-                            Other, 0x117432f80, {{0.0, 257.7}, {440.0, 81.7}}
-                              Other, 0x1174330c0, {{0.0, 257.7}, {440.0, 81.7}}
-                                Other, 0x117433200, {{0.0, 257.7}, {440.0, 81.7}}
-                            Other, 0x117433340, {{0.0, 257.7}, {440.0, 81.7}}
-                              Other, 0x117433480, {{0.0, 257.7}, {440.0, 81.7}}
-                                Other, 0x1174335c0, {{0.0, 257.7}, {440.0, 81.7}}
-                                  Button, 0x117433700, {{0.0, 257.7}, {440.0, 81.7}}, label: 'Match the dashboard to this sketch, /Users/alpha/code/checkout-api, ·, 11m'
-                                    StaticText, 0x117433840, {{28.0, 275.7}, {267.0, 19.3}}, label: 'Match the dashboard to this sketch'
-                                    StaticText, 0x117433980, {{28.0, 304.5}, {204.0, 13.3}}, label: '/Users/alpha/code/checkout-api'
-                                    StaticText, 0x117433ac0, {{238.0, 301.0}, {4.7, 20.3}}, label: '·'
-                                    StaticText, 0x117433c00, {{248.7, 304.0}, {21.7, 14.3}}, label: '11m'
-                          Cell, 0x117433d40, {{0.0, 339.3}, {440.0, 81.7}}
-                            Other, 0x117433e80, {{0.0, 339.3}, {440.0, 81.7}}
-                              Other, 0x117470000, {{0.0, 339.3}, {440.0, 81.7}}
-                                Other, 0x117470140, {{0.0, 339.3}, {440.0, 81.7}}
-                            Other, 0x117470280, {{0.0, 339.3}, {440.0, 81.7}}
-                              Other, 0x1174703c0, {{0.0, 339.3}, {440.0, 81.7}}
-                                Other, 0x117470500, {{0.0, 339.3}, {440.0, 81.7}}
-                                  Button, 0x117470640, {{0.0, 339.3}, {440.0, 81.7}}, label: 'Build the checkout health dashboard, /Users/alpha/code/checkout-api, ·, 17m'
-                                    StaticText, 0x117470780, {{28.0, 357.3}, {277.0, 19.3}}, label: 'Build the checkout health dashboard'
-                                    StaticText, 0x1174708c0, {{28.0, 386.2}, {204.0, 13.3}}, label: '/Users/alpha/code/checkout-api'
-                                    StaticText, 0x117470a00, {{238.0, 382.7}, {4.7, 20.3}}, label: '·'
-                                    StaticText, 0x117470b40, {{248.7, 385.7}, {23.0, 14.3}}, label: '17m'
-                          Cell, 0x117470c80, {{0.0, 421.0}, {440.0, 81.7}}
-                            Other, 0x117470dc0, {{0.0, 421.0}, {440.0, 81.7}}
-                              Other, 0x117470f00, {{0.0, 421.0}, {440.0, 81.7}}
-                                Other, 0x117471040, {{0.0, 421.0}, {440.0, 81.7}}
-                            Other, 0x117471180, {{0.0, 421.0}, {440.0, 81.7}}
-                              Other, 0x1174712c0, {{0.0, 421.0}, {440.0, 81.7}}
-                                Other, 0x117471400, {{0.0, 421.0}, {440.0, 81.7}}
-                                  Button, 0x117471540, {{0.0, 421.0}, {440.0, 81.7}}, label: 'Why does the webhook retry twice?, /Users/alpha/code/checkout-api, ·, 17m'
-                                    StaticText, 0x117471680, {{28.0, 439.0}, {270.0, 19.3}}, label: 'Why does the webhook retry twice?'
-                                    StaticText, 0x1174717c0, {{28.0, 467.8}, {204.0, 13.3}}, label: '/Users/alpha/code/checkout-api'
-                                    StaticText, 0x117471900, {{238.0, 464.3}, {4.7, 20.3}}, label: '·'
-                                    StaticText, 0x117471a40, {{248.7, 467.3}, {23.0, 14.3}}, label: '17m'
-                          Cell, 0x117471b80, {{0.0, 502.7}, {440.0, 81.7}}
-                            Other, 0x117471cc0, {{0.0, 502.7}, {440.0, 81.7}}
-                              Other, 0x117471e00, {{0.0, 502.7}, {440.0, 81.7}}
-                                Other, 0x117471f40, {{0.0, 502.7}, {440.0, 81.7}}
-                            Other, 0x117472080, {{0.0, 502.7}, {440.0, 81.7}}
-                              Other, 0x1174721c0, {{0.0, 502.7}, {440.0, 81.7}}
-                                Other, 0x117472300, {{0.0, 502.7}, {440.0, 81.7}}
-                                  Button, 0x117472440, {{0.0, 502.7}, {440.0, 81.7}}, label: 'Add CAD and AUD to the currency table, /Users/alpha/code/checkout-api, ·, 17m'
-                                    StaticText, 0x117472580, {{28.0, 520.7}, {299.7, 19.3}}, label: 'Add CAD and AUD to the currency table'
-                                    StaticText, 0x1174726c0, {{28.0, 549.5}, {204.0, 13.3}}, label: '/Users/alpha/code/checkout-api'
-                                    StaticText, 0x117472800, {{238.0, 546.0}, {4.7, 20.3}}, label: '·'
-                                    StaticText, 0x117472940, {{248.7, 549.0}, {23.0, 14.3}}, label: '17m'
-                          Other, 0x117472a80, {{407.0, 176.0}, {30.0, 666.0}}, label: 'Vertical scroll bar, 1 page', value: 0%
-                            Other, 0x117472bc0, {{434.0, 832.0}, {3.0, 7.0}}
-                          Other, 0x117472d00, {{407.0, 176.0}, {30.0, 666.0}}, label: 'Vertical scroll bar, 1 page', value: 0%
-                            Other, 0x117472e40, {{434.0, 832.0}, {3.0, 7.0}}
-                        Button, 0x117472f80, {{368.0, 850.0}, {56.0, 56.0}}, identifier: 'square.and.pencil', label: 'New conversation in checkout-api'
-                Other, 0x1174730c0, {{0.0, 0.0}, {440.0, 956.0}}
-                  Other, 0x117473200, {{0.0, 0.0}, {440.0, 956.0}}
-      Other, 0x117473340, {{0.0, 0.0}, {440.0, 956.0}}
-        Other, 0x117473480, {{-440.0, -956.0}, {1320.0, 2868.0}}
-        Other, 0x1174735c0, {{0.0, 62.0}, {440.0, 894.0}}
-          Other, 0x117473700, {{0.0, 62.0}, {440.0, 894.0}}
-            Other, 0x117473840, {{0.0, 62.0}, {440.0, 894.0}}
-              Other, 0x117473980, {{0.0, 62.0}, {440.0, 894.0}}
-                Other, 0x117473ac0, {{0.0, 62.0}, {440.0, 894.0}}
-                  Other, 0x117473c00, {{0.0, 62.0}, {440.0, 894.0}}
-                    NavigationBar, 0x117473d40, {{0.0, 82.0}, {440.0, 54.0}}, identifier: 'Settings'
-                      StaticText, 0x117473e80, {{186.7, 93.7}, {66.7, 20.7}}, label: 'Settings'
-                      Other, 0x117474000, {{351.7, 86.0}, {64.3, 36.0}}, label: 'Done'
-                        Other, 0x117474140, {{351.7, 86.0}, {64.3, 36.0}}
-                          Button, 0x117474280, {{351.7, 86.0}, {64.3, 36.0}}, label: 'Done'
-                    Other, 0x1174743c0, {{0.0, 62.0}, {440.0, 894.0}}
-                      Other, 0x117474500, {{0.0, 62.0}, {440.0, 894.0}}
-                        Other, 0x117474640, {{0.0, 62.0}, {440.0, 894.0}}
-                          Other, 0x117474780, {{0.0, 62.0}, {440.0, 894.0}}
-                            CollectionView, 0x1174748c0, {{0.0, 62.0}, {440.0, 894.0}}
-                              Other, 0x117474a00, {{-20.0, -59.0}, {480.0, 162.0}}
-                              Cell, 0x117474b40, {{20.0, 33.3}, {400.0, 52.0}}
-                                Other, 0x117474c80, {{20.0, 33.3}, {400.0, 52.0}}
-                                  Other, 0x117474dc0, {{20.0, 33.3}, {400.0, 52.0}}
-                                Other, 0x117474f00, {{20.0, 33.3}, {400.0, 52.0}}
-                                  Other, 0x117475040, {{20.0, 33.3}, {400.0, 52.0}}
-                                    Other, 0x117475180, {{20.0, 33.3}, {400.0, 52.0}}
-                                      StaticText, 0x1174752c0, {{40.0, 49.2}, {112.0, 20.3}}, label: 'Key fingerprint'
-                                      StaticText, 0x117475400, {{259.0, 54.2}, {141.0, 14.3}}, label: '38F0-5314-2BD0-E589'
-                              Other, 0x117475540, {{0.0, 62.0}, {440.0, 894.0}}
-                              Other, 0x117475680, {{0.0, 62.0}, {440.0, 894.0}}
-                                Other, 0x1174757c0, {{0.0, 62.0}, {440.0, 128.8}}
-                                  Image, 0x117475900, {{-120.0, -62.0}, {680.0, 248.0}}, identifier: 'AdditionalDimmingOverlay'
-                                  Other, 0x117475a40, {{0.0, 62.0}, {440.0, 64.0}}
-                                  Other, 0x117475b80, {{0.0, 62.0}, {440.0, 128.8}}
-                                    Other, 0x117475cc0, {{0.0, 62.0}, {440.0, 128.8}}
-                                  Other, 0x117475e00, {{0.0, 62.0}, {440.0, 128.8}}
-                                    Other, 0x117475f40, {{0.0, 62.0}, {440.0, 128.8}}
-                                  Other, 0x117476080, {{0.0, 62.0}, {440.0, 128.8}}
-                                    Other, 0x1174761c0, {{0.0, 62.0}, {440.0, 128.8}}
-                                    Other, 0x117476300, {{0.0, 62.0}, {440.0, 128.8}}
-                              Other, 0x117476440, {{-20.0, 103.0}, {480.0, 186.0}}
-                              Cell, 0x117476580, {{20.0, 103.0}, {400.0, 40.3}}
-                                Other, 0x1174766c0, {{20.0, 103.0}, {400.0, 40.3}}
-                                Other, 0x117476800, {{20.0, 103.0}, {400.0, 40.3}}
-                                  Other, 0x117476940, {{20.0, 103.0}, {400.0, 40.3}}
-                                    Other, 0x117476a80, {{20.0, 103.0}, {400.0, 40.3}}
-                                      StaticText, 0x117476bc0, {{20.0, 103.0}, {400.0, 40.3}}, label: 'Security'
-                              Cell, 0x117476d00, {{20.0, 143.3}, {400.0, 52.0}}
-                                Other, 0x117476e40, {{20.0, 143.3}, {400.0, 52.0}}
-                                  Other, 0x117476f80, {{20.0, 143.3}, {400.0, 52.0}}
-                                Other, 0x1174770c0, {{20.0, 143.3}, {400.0, 52.0}}
-                                  Other, 0x117477200, {{20.0, 143.3}, {400.0, 52.0}}
-                                    Other, 0x117477340, {{20.0, 143.3}, {400.0, 52.0}}
-                                      Switch, 0x117477480, {{20.0, 143.3}, {400.0, 52.0}}, label: 'Lock Rowel', value: 0
-                                        StaticText, 0x1174775c0, {{40.0, 159.2}, {86.0, 20.3}}, label: 'Lock Rowel'
-                                        Switch, 0x117477700, {{339.0, 155.3}, {63.0, 28.0}}, value: 0
-                              Cell, 0x117477840, {{20.0, 195.3}, {400.0, 93.7}}
-                                Other, 0x117477980, {{20.0, 195.3}, {400.0, 93.7}}
-                                Other, 0x117477ac0, {{20.0, 195.3}, {400.0, 93.7}}
-                                  Other, 0x117477c00, {{20.0, 195.3}, {400.0, 93.7}}
-                                    Other, 0x117477d40, {{20.0, 195.3}, {400.0, 93.7}}
-                                      StaticText, 0x117477e80, {{20.0, 195.3}, {400.0, 93.7}}, label: 'A paired iPhone can approve commands on your Mac, so an unlocked one in the wrong hands is a shell. Locking bounds how long that lasts — but it is not a substitute for running bridle revoke on the Mac if you lose this phone.'
-                              Other, 0x117498000, {{-20.0, 289.0}, {480.0, 295.0}}
-                              Cell, 0x117498140, {{20.0, 289.0}, {400.0, 40.3}}
-                                Other, 0x117498280, {{20.0, 289.0}, {400.0, 40.3}}
-                                Other, 0x1174983c0, {{20.0, 289.0}, {400.0, 40.3}}
-                                  Other, 0x117498500, {{20.0, 289.0}, {400.0, 40.3}}
-                                    Other, 0x117498640, {{20.0, 289.0}, {400.0, 40.3}}
-                                      StaticText, 0x117498780, {{20.0, 289.0}, {400.0, 40.3}}, label: 'Paired dsh'
-                              Cell, 0x1174988c0, {{20.0, 329.3}, {400.0, 64.3}}
-                                Other, 0x117498a00, {{20.0, 329.3}, {400.0, 64.3}}
-                                  Other, 0x117498b40, {{20.0, 329.3}, {400.0, 64.3}}
-                                Other, 0x117498c80, {{20.0, 329.3}, {400.0, 64.3}}
-                                  Other, 0x117498dc0, {{20.0, 329.3}, {400.0, 64.3}}
-                                    Other, 0x117498f00, {{20.0, 329.3}, {400.0, 64.3}}
-                                      Button, 0x117499040, {{20.0, 329.3}, {400.0, 64.3}}, label: 'alphadeMacBook-Pro, C0D8-C599-C3DB-6CA6, Connected'
-                                        StaticText, 0x117499180, {{40.0, 344.3}, {151.3, 18.0}}, label: 'alphadeMacBook-Pro'
-                                        StaticText, 0x1174992c0, {{40.0, 365.3}, {129.3, 13.3}}, label: 'C0D8-C599-C3DB-6CA6'
-                                        StaticText, 0x117499400, {{316.0, 354.3}, {62.0, 14.3}}, label: 'Connected'
-                                        Image, 0x117499540, {{390.7, 355.7}, {7.0, 12.0}}, identifier: 'chevron.forward'
-                              Cell, 0x117499680, {{20.0, 393.7}, {400.0, 64.3}}
-                                Other, 0x1174997c0, {{20.0, 393.7}, {400.0, 64.3}}
-                                  Other, 0x117499900, {{20.0, 393.7}, {400.0, 64.3}}
-                                Other, 0x117499a40, {{20.0, 393.7}, {400.0, 64.3}}
-                                  Other, 0x117499b80, {{20.0, 393.7}, {400.0, 64.3}}
-                                    Other, 0x117499cc0, {{20.0, 393.7}, {400.0, 64.3}}
-                                      Button, 0x117499e00, {{20.0, 393.7}, {400.0, 64.3}}, label: 'MacBook Pro, ED19, ED19-CDA2-407C-2B36'
-                                        StaticText, 0x117499f40, {{40.0, 408.7}, {93.0, 18.0}}, label: 'MacBook Pro'
-                                        StaticText, 0x11749a080, {{139.0, 411.0}, {27.3, 13.3}}, label: 'ED19'
-                                        StaticText, 0x11749a1c0, {{40.0, 429.7}, {129.3, 13.3}}, label: 'ED19-CDA2-407C-2B36'
-                                        Image, 0x11749a300, {{390.7, 420.0}, {7.0, 12.0}}, identifier: 'chevron.forward'
-                              Other, 0x11749a440, {{40.0, 392.7}, {360.0, 1.0}}
-                              Cell, 0x11749a580, {{20.0, 458.0}, {400.0, 64.3}}
-                                Other, 0x11749a6c0, {{20.0, 458.0}, {400.0, 64.3}}
-                                  Other, 0x11749a800, {{20.0, 458.0}, {400.0, 64.3}}
-                                Other, 0x11749a940, {{20.0, 458.0}, {400.0, 64.3}}
-                                  Other, 0x11749aa80, {{20.0, 458.0}, {400.0, 64.3}}
-                                    Other, 0x11749abc0, {{20.0, 458.0}, {400.0, 64.3}}
-                                      Button, 0x11749ad00, {{20.0, 458.0}, {400.0, 64.3}}, label: 'MacBook Pro, D0F2, D0F2-17F5-7840-DABF'
-                                        StaticText, 0x11749ae40, {{40.0, 473.0}, {93.0, 18.0}}, label: 'MacBook Pro'
-                                        StaticText, 0x11749af80, {{139.0, 475.3}, {27.3, 13.3}}, label: 'D0F2'
-                                        StaticText, 0x11749b0c0, {{40.0, 494.0}, {129.3, 13.3}}, label: 'D0F2-17F5-7840-DABF'
-                                        Image, 0x11749b200, {{390.7, 484.3}, {7.0, 12.0}}, identifier: 'chevron.forward'
-                              Other, 0x11749b340, {{40.0, 457.0}, {360.0, 1.0}}
-                              Cell, 0x11749b480, {{20.0, 522.3}, {400.0, 61.7}}
-                                Other, 0x11749b5c0, {{20.0, 522.3}, {400.0, 61.7}}
-                                Other, 0x11749b700, {{20.0, 522.3}, {400.0, 61.7}}
-                                  Other, 0x11749b840, {{20.0, 522.3}, {400.0, 61.7}}
-                                    Other, 0x11749b980, {{20.0, 522.3}, {400.0, 61.7}}
-                                      StaticText, 0x11749bac0, {{20.0, 522.3}, {400.0, 61.7}}, label: 'Each pairing is one dsh on one machine. Tap to rename it or see details. To stop that machine trusting this iPhone, run bridle revoke there — this end cannot do it for you.'
-                              Other, 0x11749bc00, {{-20.0, 584.0}, {480.0, 191.0}}
-                              Cell, 0x11749bd40, {{20.0, 601.3}, {400.0, 52.0}}
-                                Other, 0x11749be80, {{20.0, 601.3}, {400.0, 52.0}}
-                                  Other, 0x1174a0000, {{20.0, 601.3}, {400.0, 52.0}}
-                                Other, 0x1174a0140, {{20.0, 601.3}, {400.0, 52.0}}
-                                  Other, 0x1174a0280, {{20.0, 601.3}, {400.0, 52.0}}
-                                    Other, 0x1174a03c0, {{20.0, 601.3}, {400.0, 52.0}}
-                                      Button, 0x1174a0500, {{20.0, 601.3}, {400.0, 52.0}}, label: 'Help'
-                                        Image, 0x1174a0640, {{41.3, 616.7}, {21.7, 21.7}}, identifier: 'questionmark.circle', label: 'questionmark.circle'
-                                        StaticText, 0x1174a0780, {{41.3, 616.7}, {74.0, 21.7}}, label: 'Help'
-                              Cell, 0x1174a08c0, {{20.0, 653.3}, {400.0, 52.0}}
-                                Other, 0x1174a0a00, {{20.0, 653.3}, {400.0, 52.0}}
-                                  Other, 0x1174a0b40, {{20.0, 653.3}, {400.0, 52.0}}
-                                Other, 0x1174a0c80, {{20.0, 653.3}, {400.0, 52.0}}
-                                  Other, 0x1174a0dc0, {{20.0, 653.3}, {400.0, 52.0}}
-                                    Other, 0x1174a0f00, {{20.0, 653.3}, {400.0, 52.0}}
-                                      Button, 0x1174a1040, {{20.0, 653.3}, {400.0, 52.0}}, label: 'Privacy'
-                                        Image, 0x1174a1180, {{44.3, 668.0}, {17.3, 23.0}}, identifier: 'hand.raised', label: 'Block'
-                                        StaticText, 0x1174a12c0, {{44.3, 668.0}, {91.3, 23.0}}, label: 'Privacy'
-                              Other, 0x1174a1400, {{80.0, 652.3}, {320.0, 1.0}}
-                              Cell, 0x1174a1540, {{20.0, 705.3}, {400.0, 52.0}}
-                                Other, 0x1174a1680, {{20.0, 705.3}, {400.0, 52.0}}
-                                  Other, 0x1174a17c0, {{20.0, 705.3}, {400.0, 52.0}}
-                                Other, 0x1174a1900, {{20.0, 705.3}, {400.0, 52.0}}
-                                  Other, 0x1174a1a40, {{20.0, 705.3}, {400.0, 52.0}}
-                                    Other, 0x1174a1b80, {{20.0, 705.3}, {400.0, 52.0}}
-                                      StaticText, 0x1174a1cc0, {{40.0, 721.2}, {57.0, 20.3}}, label: 'Version'
-                                      StaticText, 0x1174a1e00, {{291.3, 723.2}, {108.7, 18.0}}, label: 'rowel-ios/1.0 (1)'
-                              Other, 0x1174a1f40, {{80.0, 704.3}, {320.0, 1.0}}
-                              Other, 0x1174a2080, {{-20.0, 775.0}, {480.0, 1935.3}}
-                              Cell, 0x1174a21c0, {{20.0, 792.3}, {400.0, 52.0}}
-                                Other, 0x1174a2300, {{20.0, 792.3}, {400.0, 52.0}}
-                                  Other, 0x1174a2440, {{20.0, 792.3}, {400.0, 52.0}}
-                                Other, 0x1174a2580, {{20.0, 792.3}, {400.0, 52.0}}
-                                  Other, 0x1174a26c0, {{20.0, 792.3}, {400.0, 52.0}}
-                                    Other, 0x1174a2800, {{20.0, 792.3}, {400.0, 52.0}}
-                                      Button, 0x1174a2940, {{20.0, 792.3}, {400.0, 52.0}}, label: 'Start over as a new device'
-                              Cell, 0x1174a2a80, {{20.0, 844.3}, {400.0, 77.7}}
-                                Other, 0x1174a2bc0, {{20.0, 844.3}, {400.0, 77.7}}
-                                Other, 0x1174a2d00, {{20.0, 844.3}, {400.0, 77.7}}
-                                  Other, 0x1174a2e40, {{20.0, 844.3}, {400.0, 77.7}}
-                                    Other, 0x1174a2f80, {{20.0, 844.3}, {400.0, 77.7}}
-                                      StaticText, 0x1174a30c0, {{20.0, 844.3}, {400.0, 77.7}}, label: 'Throws away this iPhone’s key, so every Mac stops recognising it and you pair again from scratch. Only useful if the key itself is the problem — to remove one Mac, tap it above.'
-                              Other, 0x1174a3200, {{407.0, 136.0}, {30.0, 758.0}}, label: 'Vertical scroll bar, 3 pages', value: 100%
-                                Other, 0x1174a3340, {{434.0, 523.7}, {3.0, 367.3}}
-                              Other, 0x1174a3480, {{407.0, 136.0}, {30.0, 758.0}}, label: 'Vertical scroll bar, 3 pages', value: 100%
-                                Other, 0x1174a35c0, {{434.0, 523.7}, {3.0, 367.3}}
-                    Other, 0x1174a3700, {{0.0, 62.0}, {440.0, 894.0}}
-                      Other, 0x1174a3840, {{0.0, 62.0}, {440.0, 894.0}}
+ →Application, 0x105277700, pid: 45134, label: 'Rowel'
+    Window (Main), 0x105277980, {{0.0, 0.0}, {440.0, 956.0}}
+      Other, 0x105277ac0, {{0.0, 0.0}, {440.0, 956.0}}
+        Other, 0x105277c00, {{0.0, 0.0}, {440.0, 956.0}}
+          Other, 0x105277d40, {{-440.0, -956.0}, {1320.0, 2868.0}}
+          Other, 0x105277e80, {{0.0, 0.0}, {440.0, 956.0}}
+            Other, 0x114864000, {{0.0, 0.0}, {440.0, 956.0}}
+              Other, 0x114864140, {{0.0, 0.0}, {440.0, 956.0}}
+                NavigationBar, 0x114864280, {{0.0, 62.0}, {440.0, 114.0}}, identifier: '_TtGC7SwiftUI29PresentationHosting'
+                  Other, 0x1148643c0, {{24.0, 66.0}, {199.7, 36.0}}, label: 'Switch Mac'
+                    Other, 0x114864500, {{24.0, 66.0}, {199.7, 36.0}}
+                      Button, 0x114864640, {{24.0, 66.0}, {199.7, 36.0}}, label: 'Switch Mac'
+                        StaticText, 0x114864780, {{44.0, 75.0}, {94.7, 18.0}}, label: 'MacBook Pro'
+                        StaticText, 0x1148648c0, {{144.7, 77.3}, {27.3, 13.3}}, label: 'A0E5'
+                        Image, 0x114864a00, {{179.3, 78.0}, {16.3, 12.0}}, identifier: 'wifi', label: 'Direct over Wi-Fi'
+                        Image, 0x114864b40, {{204.7, 80.7}, {11.3, 6.7}}, identifier: 'chevron.down', label: 'Go Down'
+                  Other, 0x114864c80, {{380.0, 66.0}, {36.0, 36.0}}, identifier: 'gearshape', label: 'Settings'
+                    Other, 0x114864dc0, {{380.0, 66.0}, {36.0, 36.0}}
+                      Button, 0x114864f00, {{382.3, 66.0}, {31.3, 36.0}}, identifier: 'gearshape', label: 'Settings'
+                  SearchField, 0x114865040, {{20.0, 117.0}, {400.0, 44.0}}, label: 'Search conversations', placeholderValue: 'Search conversations'
+                    Image, 0x114865180, {{32.0, 129.3}, {20.3, 18.7}}, identifier: 'magnifyingglass', label: 'Search'
+                Other, 0x1148652c0, {{0.0, 0.0}, {440.0, 956.0}}
+                  Other, 0x114865400, {{0.0, 0.0}, {440.0, 956.0}}
+                    Other, 0x114865540, {{0.0, 0.0}, {440.0, 956.0}}
+                      Other, 0x114865680, {{0.0, 0.0}, {440.0, 956.0}}
+                        Image, 0x1148657c0, {{17.0, 194.7}, {12.3, 12.3}}, identifier: 'bolt.horizontal.circle', label: 'Disconnect'
+                        StaticText, 0x114865900, {{38.3, 185.0}, {326.3, 31.3}}, label: 'host.describe: fetch failed: connect EADDRNOTAVAIL 127.0.0.1:3082 - Local (0.0.0.0:0)'
+                        CollectionView, 0x114865a40, {{0.0, 225.3}, {440.0, 730.7}}, identifier: 'sessions.list'
+                          Other, 0x114865b80, {{0.0, -1686.7}, {440.0, 4232.3}}
+                          Cell, 0x114865cc0, {{0.0, 225.3}, {440.0, 81.7}}
+                            Other, 0x114865e00, {{0.0, 225.3}, {440.0, 81.7}}
+                              Other, 0x114865f40, {{0.0, 225.3}, {440.0, 81.7}}
+                                Other, 0x114866080, {{0.0, 225.3}, {440.0, 81.7}}
+                            Other, 0x1148661c0, {{0.0, 225.3}, {440.0, 81.7}}
+                              Other, 0x114866300, {{0.0, 225.3}, {440.0, 81.7}}
+                                Other, 0x114866440, {{0.0, 225.3}, {440.0, 81.7}}
+                                  Button, 0x114866580, {{0.0, 225.3}, {440.0, 81.7}}, label: 'Ship the currency fix, Needs you, /Users/Shared/code/checkout-api, ·, just now'
+                                    StaticText, 0x1148666c0, {{28.0, 243.3}, {156.3, 19.3}}, label: 'Ship the currency fix'
+                                    Image, 0x114866800, {{333.3, 247.7}, {8.3, 11.0}}, identifier: 'hand.raised.fill', label: 'Block'
+                                    StaticText, 0x114866940, {{347.3, 246.3}, {57.7, 13.3}}, label: 'Needs you'
+                                    StaticText, 0x114866a80, {{28.0, 272.2}, {211.0, 13.3}}, label: '/Users/Shared/code/checkout-api'
+                                    StaticText, 0x114866bc0, {{245.0, 268.7}, {4.7, 20.3}}, label: '·'
+                                    StaticText, 0x114866d00, {{255.7, 271.7}, {47.3, 14.3}}, label: 'just now'
+                          Cell, 0x114866e40, {{0.0, 307.0}, {440.0, 81.7}}
+                            Other, 0x114866f80, {{0.0, 307.0}, {440.0, 81.7}}
+                              Other, 0x1148670c0, {{0.0, 307.0}, {440.0, 81.7}}
+                                Other, 0x114867200, {{0.0, 307.0}, {440.0, 81.7}}
+                            Other, 0x114867340, {{0.0, 307.0}, {440.0, 81.7}}
+                              Other, 0x114867480, {{0.0, 307.0}, {440.0, 81.7}}
+                                Other, 0x1148675c0, {{0.0, 307.0}, {440.0, 81.7}}
+                                  Button, 0x114867700, {{0.0, 307.0}, {440.0, 81.7}}, label: 'Match the dashboard to this sketch, /Users/Shared/code/checkout-api, ·, 27m'
+                                    StaticText, 0x114867840, {{28.0, 325.0}, {267.0, 19.3}}, label: 'Match the dashboard to this sketch'
+                                    StaticText, 0x114867980, {{28.0, 353.8}, {211.0, 13.3}}, label: '/Users/Shared/code/checkout-api'
+                                    StaticText, 0x114867ac0, {{245.0, 350.3}, {4.7, 20.3}}, label: '·'
+                                    StaticText, 0x114867c00, {{255.7, 353.3}, {24.7, 14.3}}, label: '27m'
+                          Cell, 0x114867d40, {{0.0, 388.7}, {440.0, 81.7}}
+                            Other, 0x114867e80, {{0.0, 388.7}, {440.0, 81.7}}
+                              Other, 0x1148bc000, {{0.0, 388.7}, {440.0, 81.7}}
+                                Other, 0x1148bc140, {{0.0, 388.7}, {440.0, 81.7}}
+                            Other, 0x1148bc280, {{0.0, 388.7}, {440.0, 81.7}}
+                              Other, 0x1148bc3c0, {{0.0, 388.7}, {440.0, 81.7}}
+                                Other, 0x1148bc500, {{0.0, 388.7}, {440.0, 81.7}}
+                                  Button, 0x1148bc640, {{0.0, 388.7}, {440.0, 81.7}}, label: 'Build the checkout health dashboard, /Users/Shared/code/checkout-api, ·, 27m'
+                                    StaticText, 0x1148bc780, {{28.0, 406.7}, {277.0, 19.3}}, label: 'Build the checkout health dashboard'
+                                    StaticText, 0x1148bc8c0, {{28.0, 435.5}, {211.0, 13.3}}, label: '/Users/Shared/code/checkout-api'
+                                    StaticText, 0x1148bca00, {{245.0, 432.0}, {4.7, 20.3}}, label: '·'
+                                    StaticText, 0x1148bcb40, {{255.7, 435.0}, {24.7, 14.3}}, label: '27m'
+                          Cell, 0x1148bcc80, {{0.0, 470.3}, {440.0, 81.7}}
+                            Other, 0x1148bcdc0, {{0.0, 470.3}, {440.0, 81.7}}
+                              Other, 0x1148bcf00, {{0.0, 470.3}, {440.0, 81.7}}
+                                Other, 0x1148bd040, {{0.0, 470.3}, {440.0, 81.7}}
+                            Other, 0x1148bd180, {{0.0, 470.3}, {440.0, 81.7}}
+                              Other, 0x1148bd2c0, {{0.0, 470.3}, {440.0, 81.7}}
+                                Other, 0x1148bd400, {{0.0, 470.3}, {440.0, 81.7}}
+                                  Button, 0x1148bd540, {{0.0, 470.3}, {440.0, 81.7}}, label: 'Why does the webhook retry twice?, /Users/Shared/code/checkout-api, ·, 27m'
+                                    StaticText, 0x1148bd680, {{28.0, 488.3}, {270.0, 19.3}}, label: 'Why does the webhook retry twice?'
+                                    StaticText, 0x1148bd7c0, {{28.0, 517.2}, {211.0, 13.3}}, label: '/Users/Shared/code/checkout-api'
+                                    StaticText, 0x1148bd900, {{245.0, 513.7}, {4.7, 20.3}}, label: '·'
+                                    StaticText, 0x1148bda40, {{255.7, 516.7}, {24.7, 14.3}}, label: '27m'
+                          Cell, 0x1148bdb80, {{0.0, 552.0}, {440.0, 81.7}}
+                            Other, 0x1148bdcc0, {{0.0, 552.0}, {440.0, 81.7}}
+                              Other, 0x1148bde00, {{0.0, 552.0}, {440.0, 81.7}}
+                                Other, 0x1148bdf40, {{0.0, 552.0}, {440.0, 81.7}}
+                            Other, 0x1148be080, {{0.0, 552.0}, {440.0, 81.7}}
+                              Other, 0x1148be1c0, {{0.0, 552.0}, {440.0, 81.7}}
+                                Other, 0x1148be300, {{0.0, 552.0}, {440.0, 81.7}}
+                                  Button, 0x1148be440, {{0.0, 552.0}, {440.0, 81.7}}, label: 'Add CAD and AUD to the currency table, /Users/Shared/code/checkout-api, ·, 27m'
+                                    StaticText, 0x1148be580, {{28.0, 570.0}, {299.7, 19.3}}, label: 'Add CAD and AUD to the currency table'
+                                    StaticText, 0x1148be6c0, {{28.0, 598.8}, {211.0, 13.3}}, label: '/Users/Shared/code/checkout-api'
+                                    StaticText, 0x1148be800, {{245.0, 595.3}, {4.7, 20.3}}, label: '·'
+                                    StaticText, 0x1148be940, {{255.7, 598.3}, {24.7, 14.3}}, label: '27m'
+                          Other, 0x1148bea80, {{407.0, 253.3}, {30.0, 588.7}}, label: 'Vertical scroll bar, 1 page', value: 0%
+                            Other, 0x1148bebc0, {{434.0, 498.7}, {3.0, 340.3}}
+                          Other, 0x1148bed00, {{407.0, 253.3}, {30.0, 588.7}}, label: 'Vertical scroll bar, 1 page', value: 0%
+                            Other, 0x1148bee40, {{434.0, 498.7}, {3.0, 340.3}}
+                        Button, 0x1148bef80, {{368.0, 850.0}, {56.0, 56.0}}, identifier: 'square.and.pencil', label: 'New conversation in checkout-api', Disabled
+                Other, 0x1148bf0c0, {{0.0, 0.0}, {440.0, 956.0}}
+                  Other, 0x1148bf200, {{0.0, 0.0}, {440.0, 956.0}}
+      Other, 0x1148bf340, {{0.0, 0.0}, {440.0, 956.0}}
+        Other, 0x1148bf480, {{-440.0, -956.0}, {1320.0, 2868.0}}
+        Other, 0x1148bf5c0, {{0.0, 62.0}, {440.0, 894.0}}
+          Other, 0x1148bf700, {{0.0, 62.0}, {440.0, 894.0}}
+            Other, 0x1148bf840, {{0.0, 62.0}, {440.0, 894.0}}
+              Other, 0x1148bf980, {{0.0, 62.0}, {440.0, 894.0}}
+                Other, 0x1148bfac0, {{0.0, 62.0}, {440.0, 894.0}}
+                  Other, 0x1148bfc00, {{0.0, 62.0}, {440.0, 894.0}}
+                    NavigationBar, 0x1148bfd40, {{0.0, 82.0}, {440.0, 54.0}}, identifier: 'Settings'
+                      StaticText, 0x1148bfe80, {{186.7, 93.7}, {66.7, 20.7}}, label: 'Settings'
+                      Other, 0x1148c4000, {{351.7, 86.0}, {64.3, 36.0}}, label: 'Done'
+                        Other, 0x1148c4140, {{351.7, 86.0}, {64.3, 36.0}}
+                          Button, 0x1148c4280, {{351.7, 86.0}, {64.3, 36.0}}, label: 'Done'
+                    Other, 0x1148c43c0, {{0.0, 62.0}, {440.0, 894.0}}
+                      Other, 0x1148c4500, {{0.0, 62.0}, {440.0, 894.0}}
+                        Other, 0x1148c4640, {{0.0, 62.0}, {440.0, 894.0}}
+                          Other, 0x1148c4780, {{0.0, 62.0}, {440.0, 894.0}}
+                            CollectionView, 0x1148c48c0, {{0.0, 62.0}, {440.0, 894.0}}
+                              Other, 0x1148c4a00, {{-20.0, -25.7}, {480.0, 186.0}}
+                              Cell, 0x1148c4b40, {{20.0, 14.7}, {400.0, 52.0}}
+                                Other, 0x1148c4c80, {{20.0, 14.7}, {400.0, 52.0}}
+                                  Other, 0x1148c4dc0, {{20.0, 14.7}, {400.0, 52.0}}
+                                Other, 0x1148c4f00, {{20.0, 14.7}, {400.0, 52.0}}
+                                  Other, 0x1148c5040, {{20.0, 14.7}, {400.0, 52.0}}
+                                    Other, 0x1148c5180, {{20.0, 14.7}, {400.0, 52.0}}
+                                      Switch, 0x1148c52c0, {{20.0, 14.7}, {400.0, 52.0}}, label: 'Lock Rowel', value: 0
+                                        StaticText, 0x1148c5400, {{40.0, 30.5}, {86.0, 20.3}}, label: 'Lock Rowel'
+                                        Switch, 0x1148c5540, {{339.0, 26.7}, {63.0, 28.0}}, value: 0
+                              Other, 0x1148c5680, {{0.0, 62.0}, {440.0, 894.0}}
+                              Other, 0x1148c57c0, {{0.0, 62.0}, {440.0, 894.0}}
+                                Other, 0x1148c5900, {{0.0, 62.0}, {440.0, 128.8}}
+                                  Image, 0x1148c5a40, {{-120.0, -62.0}, {680.0, 248.0}}, identifier: 'AdditionalDimmingOverlay'
+                                  Other, 0x1148c5b80, {{0.0, 62.0}, {440.0, 64.0}}
+                                  Other, 0x1148c5cc0, {{0.0, 62.0}, {440.0, 128.8}}
+                                    Other, 0x1148c5e00, {{0.0, 62.0}, {440.0, 128.8}}
+                                  Other, 0x1148c5f40, {{0.0, 62.0}, {440.0, 128.8}}
+                                    Other, 0x1148c6080, {{0.0, 62.0}, {440.0, 128.8}}
+                                  Other, 0x1148c61c0, {{0.0, 62.0}, {440.0, 128.8}}
+                                    Other, 0x1148c6300, {{0.0, 62.0}, {440.0, 128.8}}
+                                    Other, 0x1148c6440, {{0.0, 62.0}, {440.0, 128.8}}
+                              Cell, 0x1148c6580, {{20.0, 66.7}, {400.0, 93.7}}
+                                Other, 0x1148c66c0, {{20.0, 66.7}, {400.0, 93.7}}
+                                Other, 0x1148c6800, {{20.0, 66.7}, {400.0, 93.7}}
+                                  Other, 0x1148c6940, {{20.0, 66.7}, {400.0, 93.7}}
+                                    Other, 0x1148c6a80, {{20.0, 66.7}, {400.0, 93.7}}
+                                      StaticText, 0x1148c6bc0, {{20.0, 66.7}, {400.0, 93.7}}, label: 'A paired iPhone can approve commands on your Mac, so an unlocked one in the wrong hands is a shell. Locking bounds how long that lasts — but it is not a substitute for running bridle revoke on the Mac if you lose this phone.'
+                              Other, 0x1148c6d00, {{-20.0, 160.3}, {480.0, 423.7}}
+                              Cell, 0x1148c6e40, {{20.0, 160.3}, {400.0, 40.3}}
+                                Other, 0x1148c6f80, {{20.0, 160.3}, {400.0, 40.3}}
+                                Other, 0x1148c70c0, {{20.0, 160.3}, {400.0, 40.3}}
+                                  Other, 0x1148c7200, {{20.0, 160.3}, {400.0, 40.3}}
+                                    Other, 0x1148c7340, {{20.0, 160.3}, {400.0, 40.3}}
+                                      StaticText, 0x1148c7480, {{20.0, 160.3}, {400.0, 40.3}}, label: 'Paired dsh'
+                              Cell, 0x1148c75c0, {{20.0, 200.7}, {400.0, 64.3}}
+                                Other, 0x1148c7700, {{20.0, 200.7}, {400.0, 64.3}}
+                                  Other, 0x1148c7840, {{20.0, 200.7}, {400.0, 64.3}}
+                                Other, 0x1148c7980, {{20.0, 200.7}, {400.0, 64.3}}
+                                  Other, 0x1148c7ac0, {{20.0, 200.7}, {400.0, 64.3}}
+                                    Other, 0x1148c7c00, {{20.0, 200.7}, {400.0, 64.3}}
+                                      Button, 0x1148c7d40, {{20.0, 200.7}, {400.0, 64.3}}, label: 'MacBook Pro, A0E5, A0E5-B480-D88A-B1C6, Connected'
+                                        StaticText, 0x1148c7e80, {{40.0, 215.7}, {93.0, 18.0}}, label: 'MacBook Pro'
+                                        StaticText, 0x1148dc000, {{139.0, 218.0}, {27.3, 13.3}}, label: 'A0E5'
+                                        StaticText, 0x1148dc140, {{40.0, 236.7}, {129.3, 13.3}}, label: 'A0E5-B480-D88A-B1C6'
+                                        StaticText, 0x1148dc280, {{316.0, 225.7}, {62.0, 14.3}}, label: 'Connected'
+                                        Image, 0x1148dc3c0, {{390.7, 227.0}, {7.0, 12.0}}, identifier: 'chevron.forward'
+                              Cell, 0x1148dc500, {{20.0, 265.0}, {400.0, 64.3}}
+                                Other, 0x1148dc640, {{20.0, 265.0}, {400.0, 64.3}}
+                                  Other, 0x1148dc780, {{20.0, 265.0}, {400.0, 64.3}}
+                                Other, 0x1148dc8c0, {{20.0, 265.0}, {400.0, 64.3}}
+                                  Other, 0x1148dca00, {{20.0, 265.0}, {400.0, 64.3}}
+                                    Other, 0x1148dcb40, {{20.0, 265.0}, {400.0, 64.3}}
+                                      Button, 0x1148dcc80, {{20.0, 265.0}, {400.0, 64.3}}, label: 'MacBook Pro, 04FA, 04FA-3B13-2AE8-91D6'
+                                        StaticText, 0x1148dcdc0, {{40.0, 280.0}, {93.0, 18.0}}, label: 'MacBook Pro'
+                                        StaticText, 0x1148dcf00, {{139.0, 282.3}, {27.3, 13.3}}, label: '04FA'
+                                        StaticText, 0x1148dd040, {{40.0, 301.0}, {129.3, 13.3}}, label: '04FA-3B13-2AE8-91D6'
+                                        Image, 0x1148dd180, {{390.7, 291.3}, {7.0, 12.0}}, identifier: 'chevron.forward'
+                              Other, 0x1148dd2c0, {{40.0, 264.0}, {360.0, 1.0}}
+                              Cell, 0x1148dd400, {{20.0, 329.3}, {400.0, 64.3}}
+                                Other, 0x1148dd540, {{20.0, 329.3}, {400.0, 64.3}}
+                                  Other, 0x1148dd680, {{20.0, 329.3}, {400.0, 64.3}}
+                                Other, 0x1148dd7c0, {{20.0, 329.3}, {400.0, 64.3}}
+                                  Other, 0x1148dd900, {{20.0, 329.3}, {400.0, 64.3}}
+                                    Other, 0x1148dda40, {{20.0, 329.3}, {400.0, 64.3}}
+                                      Button, 0x1148ddb80, {{20.0, 329.3}, {400.0, 64.3}}, label: 'MacBook Pro, C0D8, C0D8-C599-C3DB-6CA6'
+                                        StaticText, 0x1148ddcc0, {{40.0, 344.3}, {93.0, 18.0}}, label: 'MacBook Pro'
+                                        StaticText, 0x1148dde00, {{139.0, 346.7}, {27.3, 13.3}}, label: 'C0D8'
+                                        StaticText, 0x1148ddf40, {{40.0, 365.3}, {129.3, 13.3}}, label: 'C0D8-C599-C3DB-6CA6'
+                                        Image, 0x1148de080, {{390.7, 355.7}, {7.0, 12.0}}, identifier: 'chevron.forward'
+                              Other, 0x1148de1c0, {{40.0, 328.3}, {360.0, 1.0}}
+                              Cell, 0x1148de300, {{20.0, 393.7}, {400.0, 64.3}}
+                                Other, 0x1148de440, {{20.0, 393.7}, {400.0, 64.3}}
+                                  Other, 0x1148de580, {{20.0, 393.7}, {400.0, 64.3}}
+                                Other, 0x1148de6c0, {{20.0, 393.7}, {400.0, 64.3}}
+                                  Other, 0x1148de800, {{20.0, 393.7}, {400.0, 64.3}}
+                                    Other, 0x1148de940, {{20.0, 393.7}, {400.0, 64.3}}
+                                      Button, 0x1148dea80, {{20.0, 393.7}, {400.0, 64.3}}, label: 'MacBook Pro, ED19, ED19-CDA2-407C-2B36'
+                                        StaticText, 0x1148debc0, {{40.0, 408.7}, {93.0, 18.0}}, label: 'MacBook Pro'
+                                        StaticText, 0x1148ded00, {{139.0, 411.0}, {27.3, 13.3}}, label: 'ED19'
+                                        StaticText, 0x1148dee40, {{40.0, 429.7}, {129.3, 13.3}}, label: 'ED19-CDA2-407C-2B36'
+                                        Image, 0x1148def80, {{390.7, 420.0}, {7.0, 12.0}}, identifier: 'chevron.forward'
+                              Other, 0x1148df0c0, {{40.0, 392.7}, {360.0, 1.0}}
+                              Cell, 0x1148df200, {{20.0, 458.0}, {400.0, 64.3}}
+                                Other, 0x1148df340, {{20.0, 458.0}, {400.0, 64.3}}
+                                  Other, 0x1148df480, {{20.0, 458.0}, {400.0, 64.3}}
+                                Other, 0x1148df5c0, {{20.0, 458.0}, {400.0, 64.3}}
+                                  Other, 0x1148df700, {{20.0, 458.0}, {400.0, 64.3}}
+                                    Other, 0x1148df840, {{20.0, 458.0}, {400.0, 64.3}}
+                                      Button, 0x1148df980, {{20.0, 458.0}, {400.0, 64.3}}, label: 'MacBook Pro, D0F2, D0F2-17F5-7840-DABF'
+                                        StaticText, 0x1148dfac0, {{40.0, 473.0}, {93.0, 18.0}}, label: 'MacBook Pro'
+                                        StaticText, 0x1148dfc00, {{139.0, 475.3}, {27.3, 13.3}}, label: 'D0F2'
+                                        StaticText, 0x1148dfd40, {{40.0, 494.0}, {129.3, 13.3}}, label: 'D0F2-17F5-7840-DABF'
+                                        Image, 0x1148dfe80, {{390.7, 484.3}, {7.0, 12.0}}, identifier: 'chevron.forward'
+                              Other, 0x1148ec000, {{40.0, 457.0}, {360.0, 1.0}}
+                              Cell, 0x1148ec140, {{20.0, 522.3}, {400.0, 61.7}}
+                                Other, 0x1148ec280, {{20.0, 522.3}, {400.0, 61.7}}
+                                Other, 0x1148ec3c0, {{20.0, 522.3}, {400.0, 61.7}}
+                                  Other, 0x1148ec500, {{20.0, 522.3}, {400.0, 61.7}}
+                                    Other, 0x1148ec640, {{20.0, 522.3}, {400.0, 61.7}}
+                                      StaticText, 0x1148ec780, {{20.0, 522.3}, {400.0, 61.7}}, label: 'Each pairing is one dsh on one machine. Tap to rename it or see details. To stop that machine trusting this iPhone, run bridle revoke there — this end cannot do it for you.'
+                              Other, 0x1148ec8c0, {{-20.0, 584.0}, {480.0, 191.0}}
+                              Cell, 0x1148eca00, {{20.0, 601.3}, {400.0, 52.0}}
+                                Other, 0x1148ecb40, {{20.0, 601.3}, {400.0, 52.0}}
+                                  Other, 0x1148ecc80, {{20.0, 601.3}, {400.0, 52.0}}
+                                Other, 0x1148ecdc0, {{20.0, 601.3}, {400.0, 52.0}}
+                                  Other, 0x1148ecf00, {{20.0, 601.3}, {400.0, 52.0}}
+                                    Other, 0x1148ed040, {{20.0, 601.3}, {400.0, 52.0}}
+                                      Button, 0x1148ed180, {{20.0, 601.3}, {400.0, 52.0}}, label: 'Help'
+                                        Image, 0x1148ed2c0, {{41.3, 616.7}, {21.7, 21.7}}, identifier: 'questionmark.circle', label: 'questionmark.circle'
+                                        StaticText, 0x1148ed400, {{41.3, 616.7}, {74.0, 21.7}}, label: 'Help'
+                              Cell, 0x1148ed540, {{20.0, 653.3}, {400.0, 52.0}}
+                                Other, 0x1148ed680, {{20.0, 653.3}, {400.0, 52.0}}
+                                  Other, 0x1148ed7c0, {{20.0, 653.3}, {400.0, 52.0}}
+                                Other, 0x1148ed900, {{20.0, 653.3}, {400.0, 52.0}}
+                                  Other, 0x1148eda40, {{20.0, 653.3}, {400.0, 52.0}}
+                                    Other, 0x1148edb80, {{20.0, 653.3}, {400.0, 52.0}}
+                                      Button, 0x1148edcc0, {{20.0, 653.3}, {400.0, 52.0}}, label: 'Privacy'
+                                        Image, 0x1148ede00, {{44.3, 668.0}, {17.3, 23.0}}, identifier: 'hand.raised', label: 'Block'
+                                        StaticText, 0x1148edf40, {{44.3, 668.0}, {91.3, 23.0}}, label: 'Privacy'
+                              Other, 0x1148ee080, {{80.0, 652.3}, {320.0, 1.0}}
+                              Cell, 0x1148ee1c0, {{20.0, 705.3}, {400.0, 52.0}}
+                                Other, 0x1148ee300, {{20.0, 705.3}, {400.0, 52.0}}
+                                  Other, 0x1148ee440, {{20.0, 705.3}, {400.0, 52.0}}
+                                Other, 0x1148ee580, {{20.0, 705.3}, {400.0, 52.0}}
+                                  Other, 0x1148ee6c0, {{20.0, 705.3}, {400.0, 52.0}}
+                                    Other, 0x1148ee800, {{20.0, 705.3}, {400.0, 52.0}}
+                                      StaticText, 0x1148ee940, {{40.0, 721.2}, {57.0, 20.3}}, label: 'Version'
+                                      StaticText, 0x1148eea80, {{291.3, 723.2}, {108.7, 18.0}}, label: 'rowel-ios/1.0 (1)'
+                              Other, 0x1148eebc0, {{80.0, 704.3}, {320.0, 1.0}}
+                              Other, 0x1148eed00, {{-20.0, 775.0}, {480.0, 1935.3}}
+                              Cell, 0x1148eee40, {{20.0, 792.3}, {400.0, 52.0}}
+                                Other, 0x1148eef80, {{20.0, 792.3}, {400.0, 52.0}}
+                                  Other, 0x1148ef0c0, {{20.0, 792.3}, {400.0, 52.0}}
+                                Other, 0x1148ef200, {{20.0, 792.3}, {400.0, 52.0}}
+                                  Other, 0x1148ef340, {{20.0, 792.3}, {400.0, 52.0}}
+                                    Other, 0x1148ef480, {{20.0, 792.3}, {400.0, 52.0}}
+                                      Button, 0x1148ef5c0, {{20.0, 792.3}, {400.0, 52.0}}, label: 'Start over as a new device'
+                              Cell, 0x1148ef700, {{20.0, 844.3}, {400.0, 77.7}}
+                                Other, 0x1148ef840, {{20.0, 844.3}, {400.0, 77.7}}
+                                Other, 0x1148ef980, {{20.0, 844.3}, {400.0, 77.7}}
+                                  Other, 0x1148efac0, {{20.0, 844.3}, {400.0, 77.7}}
+                                    Other, 0x1148efc00, {{20.0, 844.3}, {400.0, 77.7}}
+                                      StaticText, 0x1148efd40, {{20.0, 844.3}, {400.0, 77.7}}, label: 'Throws away this iPhone’s key, so every Mac stops recognising it and you pair again from scratch. Only useful if the key itself is the problem — to remove one Mac, tap it above.'
+                              Other, 0x1148efe80, {{407.0, 136.0}, {30.0, 758.0}}, label: 'Vertical scroll bar, 3 pages', value: 100%
+                                Other, 0x1148f8000, {{434.0, 548.0}, {3.0, 343.0}}
+                              Other, 0x1148f8140, {{407.0, 136.0}, {30.0, 758.0}}, label: 'Vertical scroll bar, 3 pages', value: 100%
+                                Other, 0x1148f8280, {{434.0, 548.0}, {3.0, 343.0}}
+                    Other, 0x1148f83c0, {{0.0, 62.0}, {440.0, 894.0}}
+                      Other, 0x1148f8500, {{0.0, 62.0}, {440.0, 894.0}}
 Path to element:
- →Application, 0x107a27700, pid: 28127, label: 'Rowel'
+ →Application, 0x105277700, pid: 45134, label: 'Rowel'
 Query chain:
  →Find: Target Application 'ai.novabox.rowel'
   Output: {
-    Application, 0x1174a3980, pid: 28127, label: 'Rowel'
+    Application, 0x1148f8640, pid: 45134, label: 'Rowel'
   }
 )

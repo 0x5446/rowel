@@ -62,6 +62,28 @@ public final class WebSocketCarrier: Carrying, @unchecked Sendable {
         self.session = session
     }
 
+    /// Largest inbound frame this carrier will accept, in bytes.
+    ///
+    /// `URLSessionWebSocketTask` defaults to **one mebibyte** and fails the
+    /// receive on anything larger, so without this line the app quietly cannot
+    /// read the bigger half of its own protocol. The relay's ceiling is 32 MiB
+    /// (`RUNTIME_MAX_FRAME_BYTES`, itself the Workers runtime's limit) and the
+    /// Bridle refuses to send past it, so a frame that arrives here has already
+    /// been judged carriable by everything upstream; the only thing this
+    /// default achieved was rejecting it at the last hop.
+    ///
+    /// What it cost: an image attachment of any real size never loaded — a
+    /// 1.7 MB sketch drew the grey placeholder forever, including in a
+    /// screenshot published to the App Store — and a history page over the
+    /// limit failed with `fetch failed` and no cause, which went unexplained
+    /// for days because every layer that logs was under its own ceiling and
+    /// had nothing to report.
+    static let maxFrameBytes = 32 * 1024 * 1024
+
+    /// What the underlying task will actually accept — read back, so a test can
+    /// tell a configured ceiling from a constant nobody assigned.
+    var ceiling: Int { task.maximumMessageSize }
+
     /// Dial one address.
     ///
     /// The task starts immediately and the TCP/TLS handshake overlaps with the
@@ -76,6 +98,7 @@ public final class WebSocketCarrier: Carrying, @unchecked Sendable {
         var request = URLRequest(url: url)
         request.timeoutInterval = timeout
         let task = session.webSocketTask(with: request)
+        task.maximumMessageSize = maxFrameBytes
         task.resume()
         return WebSocketCarrier(task: task, session: session)
     }

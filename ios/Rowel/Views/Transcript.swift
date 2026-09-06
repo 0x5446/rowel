@@ -112,6 +112,11 @@ struct AttachmentThumb: View {
             }
         }
         .frame(width: Self.side, height: Self.side)
+        // Distinguishable from the placeholder to anything reading the screen —
+        // VoiceOver included, which otherwise announces both states as the same
+        // unnamed image.
+        .accessibilityIdentifier((inline ?? loader?.thumbnail(image.id)) == nil
+                                 ? "attachment.placeholder" : "attachment.loaded")
         .background(Palette.well)
         .clipShape(RoundedRectangle(cornerRadius: Metrics.smallRadius, style: .continuous))
         .task(id: image.id) {

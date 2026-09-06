@@ -39,7 +39,12 @@ root="$(cd .. && pwd)"
 home="${ROWEL_SHOTS_HOME:-$HOME/rowel-shots}"
 port="${ROWEL_SHOTS_PORT:-3082}"
 device="${ROWEL_SHOTS_DEVICE:-iPhone 17 Pro Max}"
-sample="$HOME/code/checkout-api"
+# Under /Users/Shared, not under anybody's home. The path is *visible in the
+# product*: the session list, the conversation header and the transcript all
+# print the working directory, so a fixture under $HOME publishes the
+# operator's username in every screenshot and every frame of the demo video —
+# which it did, six times over, on the store listing.
+sample="/Users/Shared/code/checkout-api"
 out="$root/marketing/video/raw"
 
 
