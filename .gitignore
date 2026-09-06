@@ -56,3 +56,5 @@ marketing/video/raw/
 # of the repository — they are the images most likely to hold something
 # private and least likely to be looked at before a commit.
 marketing/diagnostics/
+# Review demo videos: hosted for App Review, too large to belong in history.
+site/public/review/
