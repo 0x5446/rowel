@@ -6,6 +6,7 @@ import SwiftUI
 struct RowelApp: App {
     @State private var model = AppModel()
     @State private var lock = AppLock()
+    @State private var health = Health()
     // The one thing SwiftUI cannot see: `didRegisterForRemoteNotifications` is
     // an UIApplicationDelegate callback with no SwiftUI equivalent, and it is
     // how iOS hands back the token that lets a machine reach this phone when
@@ -18,6 +19,7 @@ struct RowelApp: App {
             RootView()
                 .environment(model)
                 .environment(lock)
+                .environment(health)
                 .tint(Palette.accent)
                 .onOpenURL { url in
                     // A pairing link opened from Messages, Mail, or the Mac's
@@ -42,6 +44,7 @@ struct RowelApp: App {
                     #endif
                     model.restoreLastConnection()
                     model.refreshPush()
+                    health.start()
                 }
         }
         .onChange(of: scenePhase) { _, phase in

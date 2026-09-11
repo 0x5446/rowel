@@ -23,12 +23,15 @@ struct DiagnosticsView: View {
     let session: MachineSession
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(Health.self) private var health: Health?
     @State private var copied = false
+
+    private var reports: [HealthReport] { health?.reports ?? [] }
 
     var body: some View {
         NavigationStack {
             Group {
-                if session.notes.isEmpty {
+                if session.notes.isEmpty && reports.isEmpty {
                     Placeholder(
                         icon: "waveform.path",
                         title: "Nothing yet",
@@ -37,14 +40,30 @@ struct DiagnosticsView: View {
                 } else {
                     ScrollViewReader { scroller in
                         List {
-                            Section {
-                                ForEach(session.notes) { note in
-                                    NoteRow(note: note).id(note.id)
+                            if !reports.isEmpty {
+                                Section {
+                                    ForEach(reports) { report in
+                                        ReportRow(report: report)
+                                    }
+                                    .onDelete { offsets in
+                                        for index in offsets { health?.remove(reports[index]) }
+                                    }
+                                } header: {
+                                    Text("Hangs and crashes")
+                                } footer: {
+                                    Text("iOS records these itself and hands them to Rowel on a later launch — call stacks and the reason, never anything from a conversation. Nothing is sent anywhere; share one to put it in a bug report.")
                                 }
-                            } header: {
-                                Text("Connection")
-                            } footer: {
-                                Text("Addresses, verdicts, and timings only — never a key, a folder, or anything from a conversation. Kept in memory, so it is gone when Rowel closes.")
+                            }
+                            if !session.notes.isEmpty {
+                                Section {
+                                    ForEach(session.notes) { note in
+                                        NoteRow(note: note).id(note.id)
+                                    }
+                                } header: {
+                                    Text("Connection")
+                                } footer: {
+                                    Text("Addresses, verdicts, and timings only — never a key, a folder, or anything from a conversation. Kept in memory, so it is gone when Rowel closes.")
+                                }
                             }
                         }
                         .listStyle(.plain)
@@ -114,5 +133,28 @@ private struct NoteRow: View {
         case .ok: return Palette.accent
         case .fail: return Palette.warn
         }
+    }
+}
+
+/// One diagnostic payload: when it arrived, what it holds, and a way out.
+private struct ReportRow: View {
+    let report: HealthReport
+
+    var body: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(report.headline)
+                    .font(.subheadline.weight(.medium))
+                Text("Received \(report.receivedAt.formatted(date: .abbreviated, time: .shortened))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            ShareLink(item: report.url) {
+                Image(systemName: "square.and.arrow.up")
+            }
+            .buttonStyle(.borderless)
+        }
+        .accessibilityElement(children: .combine)
     }
 }
