@@ -136,3 +136,78 @@ test('a connection that stays up long enough earns the floor back', { timeout: 3
   assert.ok(retries[1] >= 2, `the second redial waited ${String(retries[1])}s; the backoff never grew, so the reset below proves nothing`)
   assert.equal(retries[2], 1, `after outliving the stability bar the redial waited ${String(retries[2])}s instead of returning to the floor`)
 })
+
+/**
+ * A Relay that registers everyone and then stops answering anything.
+ *
+ * `autoPong: false` is the whole point: the socket stays open at the TCP level
+ * and the server simply never replies, which is what a Mac that changed
+ * networks under a live connection looks like from this end.
+ * @returns the stub's url, connection count, and closer.
+ */
+async function muteRelay() {
+  const server = new WebSocketServer({ host: '127.0.0.1', port: 0, autoPong: false })
+  await new Promise((resolve) => server.on('listening', resolve))
+  let connections = 0
+  server.on('connection', (socket) => {
+    connections += 1
+    socket.send(JSON.stringify({ t: 'challenge', nonce: `n${String(connections)}` }))
+    socket.on('message', (data) => {
+      let message
+      try {
+        message = JSON.parse(String(data))
+      } catch {
+        return
+      }
+      if (message.t !== 'register') return
+      socket.send(JSON.stringify({ t: 'registered', device: message.device }))
+      // And from here, nothing. No pongs, no close, no error.
+    })
+  })
+  return {
+    url: `http://127.0.0.1:${String(server.address().port)}`,
+    count: () => connections,
+    close: () => new Promise((resolve) => server.close(resolve)),
+  }
+}
+
+test('a relay that stops answering is noticed instead of believed', { timeout: 30_000 }, async (t) => {
+  // The failure this covers is silent on both ends. The Relay drops the
+  // machine from its directory, every phone that dials gets 4404 "that machine
+  // is offline", and this client keeps pinging a dead flow and publishing
+  // `online` — so `bridle status` says the machine is up while nothing can
+  // reach it, and only a restart clears it.
+  const relay = await muteRelay()
+  const machine = core(relay.url)
+  await machine.start()
+  const lines = []
+  const states = []
+  const client = new RelayClient(machine, {
+    version: 'test/0',
+    log: (line) => lines.push(line),
+    onState: (state) => states.push(state),
+    keepaliveMs: 100,
+    silenceMs: 300,
+  })
+  t.after(async () => {
+    client.stop()
+    machine.stop()
+    await relay.close()
+  })
+
+  client.start()
+  await until(() => states.includes('online'), 10_000, 'the first registration')
+  await until(() => relay.count() >= 2, 10_000, 'a redial after the relay went quiet')
+
+  assert.ok(
+    lines.some((line) => line.includes('went quiet')),
+    `nothing reported the silence; the log said: ${lines.join(' / ')}`,
+  )
+  // Sampling `connectionState` here would race the redial that already
+  // succeeded; what matters is that `online` was withdrawn at all.
+  const first = states.indexOf('online')
+  assert.ok(
+    states.slice(first).includes('offline'),
+    `the client never left \`online\` while the relay was not answering: ${states.join(' → ')}`,
+  )
+})

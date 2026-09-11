@@ -44,6 +44,23 @@ const STABLE_MS = RETRY_MAX_MS * 2
 /** Carrier-level keepalive, well under the usual 60s idle timeout of a proxy. */
 const KEEPALIVE_MS = 20_000
 
+/**
+ * How long the Relay may say nothing at all before its socket is presumed dead.
+ *
+ * Pinging without ever reading the answer is not a keepalive, it is a habit.
+ * A Mac that changes networks — hotspot to Wi-Fi, or a sleep and a wake — keeps
+ * a socket object whose TCP flow is already gone: no RST arrives, no `close`
+ * event fires, `ping()` writes into a buffer nobody drains, and this client
+ * goes on publishing `online` forever. The Relay meanwhile lost the socket, so
+ * every phone that dials is turned away with 4404 "that machine is offline"
+ * while `bridle status` and `runtime.json` insist the machine is up. Nothing
+ * anywhere reports a fault, and only a manual restart clears it.
+ *
+ * Three keepalives' worth of silence, because the pong is the only thing the
+ * Relay sends an idle Bridle and one lost round trip is not evidence.
+ */
+const SILENCE_LIMIT_MS = KEEPALIVE_MS * 3
+
 /** How long the Relay has to answer the registration handshake. */
 const REGISTER_TIMEOUT_MS = 15_000
 
@@ -68,6 +85,10 @@ export interface RelayClientOptions {
   onState?: (state: RelayState, detail?: string) => void
   /** Override for {@link STABLE_MS}, so a test does not wait a minute. */
   stableMs?: number
+  /** Override for {@link KEEPALIVE_MS}, so a test does not wait twenty seconds. */
+  keepaliveMs?: number
+  /** Override for {@link SILENCE_LIMIT_MS}, so a test does not wait a minute. */
+  silenceMs?: number
 }
 
 /** Holds one Relay socket and the tunnels multiplexed over it. */
@@ -159,12 +180,35 @@ export class RelayClient {
         if (!registered) settle('relay did not complete registration')
       }, REGISTER_TIMEOUT_MS)
 
+      // Any inbound byte counts, control frames included: the question is
+      // whether this socket still carries traffic, not what the traffic said.
+      let lastHeard = Date.now()
+      const heard = (): void => { lastHeard = Date.now() }
+
       socket.on('open', () => {
-        this.keepalive = setInterval(() => { socket.ping() }, KEEPALIVE_MS)
+        heard()
+        const every = this.options.keepaliveMs ?? KEEPALIVE_MS
+        const limit = this.options.silenceMs ?? SILENCE_LIMIT_MS
+        this.keepalive = setInterval(() => {
+          const silence = Date.now() - lastHeard
+          if (silence > limit) {
+            // `terminate`, not `close`: a close frame to a dead flow waits for
+            // a reply that is never coming, and the point of noticing is to
+            // redial now.
+            socket.terminate()
+            settle(`relay went quiet for ${String(Math.round(silence / 1000))}s`)
+            return
+          }
+          socket.ping()
+        }, every)
         this.keepalive.unref()
       })
 
+      socket.on('pong', heard)
+      socket.on('ping', heard)
+
       socket.on('message', (data: WebSocket.RawData, isBinary: boolean) => {
+        heard()
         if (!isBinary) {
           const control = parseControl(data)
           if (control === undefined) return
