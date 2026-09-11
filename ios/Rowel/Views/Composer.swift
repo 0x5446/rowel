@@ -22,7 +22,7 @@ struct Composer: View {
     @State private var picked: [PhotosPickerItem] = []
     @State private var images: [PromptImage] = []
     @State private var loadingImages = false
-    @FocusState private var focused: Bool
+    @State private var focused = false
 
     var body: some View {
         VStack(spacing: Metrics.tight) {
@@ -49,15 +49,29 @@ struct Composer: View {
                 }
                 .accessibilityLabel("Attach a photo")
 
-                TextField(prompt, text: $text, axis: .vertical)
-                    .font(.system(size: 16))
-                    .lineLimit(1...6)
-                    .focused($focused)
-                    // The placeholder is deliberately not stable — it states why
-                    // sending is unusual right now — so tests and VoiceOver need
-                    // something that is.
-                    .accessibilityIdentifier("composer.field")
-                    .accessibilityLabel("Message")
+                // Not `TextField(axis: .vertical)`: that measures the whole
+                // string on every keystroke and froze the app on a pasted log.
+                // See GrowingField for the numbers.
+                // The placeholder is deliberately not stable — it states why
+                // sending is unusual right now — so tests and VoiceOver get the
+                // fixed name and label instead.
+                GrowingField(
+                    text: $text, focused: $focused, maxLines: 6,
+                    identifier: "composer.field", label: "Message"
+                )
+                    .overlay(alignment: .topLeading) {
+                        // Drawn here rather than inside the text view: a label
+                        // constrained inside a UITextView is a subview of a
+                        // scroll view, and resolving it costs the whole-document
+                        // layout this view exists to avoid.
+                        if text.isEmpty {
+                            Text(prompt)
+                                .font(.system(size: 16))
+                                .foregroundStyle(.secondary)
+                                .allowsHitTesting(false)
+                                .accessibilityHidden(true)
+                        }
+                    }
                     .padding(.horizontal, Metrics.gap)
                     .padding(.vertical, 8)
                     .background(Palette.well, in: RoundedRectangle(cornerRadius: 19, style: .continuous))
