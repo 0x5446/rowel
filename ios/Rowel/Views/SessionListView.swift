@@ -389,6 +389,11 @@ struct SessionListView: View {
                 home: session.machineInfo?.cwd
             )
         }
+        // A group header is a button in the same collection view, and its title
+        // is a folder name — so "the first button" and "the first thing that
+        // looks like a path" both pick headers as often as rows. Tests need one
+        // name that only a conversation ever carries.
+        .accessibilityIdentifier("session.row")
         .listRowInsets(EdgeInsets(top: 6, leading: Metrics.gutter, bottom: 6, trailing: Metrics.gutter))
         .listRowBackground(Palette.paper)
         .listRowSeparator(.hidden)

@@ -69,7 +69,7 @@ final class FlowTests: XCTestCase {
         let list = app.collectionViews.firstMatch
         XCTAssertTrue(list.waitForExistence(timeout: remote), "the session list never appeared")
         XCTAssertTrue(
-            app.buttons["New conversation"].waitForExistence(timeout: remote),
+            composeButton.waitForExistence(timeout: remote),
             "the compose button is missing, so there is no way to start anything"
         )
     }
@@ -115,7 +115,10 @@ final class FlowTests: XCTestCase {
         row.tap()
 
         // The composer is the frame of the screen; it must be there immediately.
-        let composer = app.textFields["composer.field"]
+        // `textViews`, not `textFields`: it is a UITextView, because a growing
+        // SwiftUI TextField measures the whole string on every keystroke. See
+        // GrowingField.
+        let composer = app.textViews["composer.field"]
         XCTAssertTrue(composer.waitForExistence(timeout: remote), "the composer never appeared")
 
         // And then something has to be in the transcript. A conversation with a
@@ -129,11 +132,11 @@ final class FlowTests: XCTestCase {
     func testBackReturnsToTheList() throws {
         try launchPaired()
         try firstConversationRow().tap()
-        XCTAssertTrue(app.textFields["composer.field"].waitForExistence(timeout: remote))
+        XCTAssertTrue(app.textViews["composer.field"].waitForExistence(timeout: remote))
 
         app.navigationBars.buttons.element(boundBy: 0).tap()
         XCTAssertTrue(
-            app.buttons["New conversation"].waitForExistence(timeout: 10),
+            composeButton.waitForExistence(timeout: 10),
             "the compose button is the marker that we are back on the list"
         )
     }
@@ -161,7 +164,7 @@ final class FlowTests: XCTestCase {
     /// asking someone to type an absolute path on a phone is not an option.
     func testComposeOffersTheMachinesFolders() throws {
         try launchPaired()
-        app.buttons["New conversation"].tap()
+        composeButton.tap()
 
         let picker = app.navigationBars.firstMatch
         XCTAssertTrue(picker.waitForExistence(timeout: remote))
@@ -192,13 +195,40 @@ final class FlowTests: XCTestCase {
     }
 
     /// The first row of the session list, once the machine has answered.
+    /// The compose button.
+    ///
+    /// Not an exact match on "New conversation": once anything has been started
+    /// the label becomes "New conversation in <folder>", so the exact name only
+    /// ever held on a device that had never been used. It failed here for a
+    /// reason that had nothing to do with what each test was checking.
+    private var composeButton: XCUIElement {
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'New conversation'")).firstMatch
+    }
+
     private func firstConversationRow() throws -> XCUIElement {
-        let rows = app.collectionViews.buttons
+        // Not "the first button in the list": the list is grouped by workspace,
+        // and a group header is a button too. Taking element zero picked the
+        // header and tapping it folded the group away instead of opening
+        // anything, which then failed on the next assertion — somewhere else
+        // entirely.
+        let rows = app.collectionViews.buttons.matching(identifier: "session.row")
+        let anyButton = app.collectionViews.buttons
         let appeared = NSPredicate(format: "count > 0")
-        expectation(for: appeared, evaluatedWith: rows, handler: nil)
+        expectation(for: appeared, evaluatedWith: anyButton, handler: nil)
         waitForExpectations(timeout: remote)
+
+        // Groups remember whether they are folded and all of them may be shut,
+        // in which case there is no row to tap until one is opened.
+        if rows.count == 0 {
+            let header = anyButton.element(boundBy: 0)
+            guard header.exists else {
+                throw XCTSkip("the machine reported no conversations, so there is nothing to open")
+            }
+            header.tap()
+        }
+
         let row = rows.element(boundBy: 0)
-        guard row.exists else {
+        guard row.waitForExistence(timeout: remote) else {
             throw XCTSkip("the machine reported no conversations, so there is nothing to open")
         }
         return row
