@@ -32,10 +32,11 @@ npm run test:ios       # iOS：xcodegen 生成工程后跑 xcodebuild test（等
      -only-testing:RowelTests/<某个类> test
    ```
 
-3. **共享工作区里不动 git 状态**：不要 `git stash` / `git reset` / `git add` 别人的树。别人的暂存是别人的意图。要整理提交、暂存、合并、回退，先开自己的 worktree：
+3. **共享工作区里不动别人的 git 状态**：不要 `git stash` / `git reset` / `git add` 别人的树——别人的暂存是别人的意图。**提交自己的改动不算在内**：`git commit -- <你的路径>` 只提交列出的路径，不会把别人的暂存内容带进去（这个文件自己的两次提交就是这么做的），想更彻底就去自己的 worktree：
 
    ```bash
-   git worktree add /tmp/rowel-wt-<你的会话> -b <你的分支>
+   git commit -m "..." -- ios/Rowel/Views/Foo.swift        # 只提交这些路径，别人的暂存不动
+   git worktree add /tmp/rowel-wt-<你的会话> -b <你的分支>   # 或者整摊搬出去做
    ```
 
 4. **要改别人正在改的文件，先开 worktree 并说一声。** 同一个工作区里并发编辑靠运气，不靠约定。
