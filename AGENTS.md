@@ -7,10 +7,10 @@
 ```bash
 npm test              # protocol / bridle / dsh-plugin / relay 的 TS 编译 + 单测 + docs 一致性
 npm run check:docs     # 只查文档与代码是否一致
-cd ios && ./run-tests.sh   # iOS：xcodegen 生成工程后跑 xcodebuild test
+npm run test:ios       # iOS：xcodegen 生成工程后跑 xcodebuild test（等价于 cd ios && ./run-tests.sh）
 ```
 
-`ios/run-tests.sh` 认 `ROWEL_SIM` 环境变量指定模拟器；不设时它按 `tail -1` 挑最新的一台 iPhone——**所有人都会挑中同一台**。
+`ios/run-tests.sh` 认两个环境变量：`ROWEL_SIM` 指定模拟器，`ROWEL_DERIVED` 指定 DerivedData 与结果包的落点。两个都不设时它按 `tail -1` 挑最新的一台 iPhone（**所有人都会挑中同一台**），并把结果写到 `ios/build/Rowel.xcresult`、用 xcodebuild 默认的 DerivedData。
 
 ## 多会话并发（重要）
 
@@ -19,16 +19,17 @@ cd ios && ./run-tests.sh   # iOS：xcodegen 生成工程后跑 xcodebuild test
 1. **模拟器一人一台。** 跑 iOS 测试时显式指定自己的设备，不要用未设 `ROWEL_SIM` 时的默认值：
 
    ```bash
-   ROWEL_SIM="iPhone 17e" cd ios && ./run-tests.sh
+   cd ios && ROWEL_SIM="iPhone 17e" ROWEL_DERIVED=/tmp/rowel-derived-<你的会话> ./run-tests.sh
    ```
 
-2. **DerivedData 与结果包放私有目录**，不要写共享的 `ios/build`，也不要依赖默认的 `~/Library/Developer/Xcode/DerivedData`（同名 scheme 会互相覆盖）：
+2. **DerivedData 与结果包放私有目录**，不要写共享的 `ios/build`，也不要依赖默认的 `~/Library/Developer/Xcode/DerivedData`（同名 scheme 会互相覆盖）。上面的 `ROWEL_DERIVED` 就是干这个的；要跑单独一类用例、直连 xcodebuild 时照抄同样的两个路径：
 
    ```bash
    xcodebuild -project ios/Rowel.xcodeproj -scheme Rowel \
      -destination "platform=iOS Simulator,name=$ROWEL_SIM" \
      -derivedDataPath /tmp/rowel-derived-<你的会话> \
-     -resultBundlePath /tmp/rowel-derived-<你的会话>/Rowel.xcresult test
+     -resultBundlePath /tmp/rowel-derived-<你的会话>/Rowel.xcresult \
+     -only-testing:RowelTests/<某个类> test
    ```
 
 3. **共享工作区里不动 git 状态**：不要 `git stash` / `git reset` / `git add` 别人的树。别人的暂存是别人的意图。要整理提交、暂存、合并、回退，先开自己的 worktree：
