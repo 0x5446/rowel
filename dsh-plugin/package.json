@@ -24,7 +24,7 @@
     "test": "node --test tests/*.test.js"
   },
   "dependencies": {
-    "@rowel/bridle": "0.1.2"
+    "@rowel/bridle": "*"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

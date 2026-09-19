@@ -18,9 +18,9 @@
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
-    "@rowel/bridle": "0.1.2",
-    "@rowel/protocol": "0.1.2",
-    "@rowel/relay": "0.1.2",
+    "@rowel/bridle": "*",
+    "@rowel/protocol": "*",
+    "@rowel/relay": "*",
     "ws": "^8.18.0"
   },
   "devDependencies": {

@@ -273,6 +273,26 @@ for (const key of projectionKeys('### 5.3 尚未折叠的键', 'prose')) {
   }
 }
 
+// --- Internal dependencies carry no version at all ------------------------------
+//
+// Nothing in this repository is published — `install.sh` builds from a tag — so a
+// version written on an internal dependency is a number nothing can keep true and
+// nothing notices going stale. 0.1.3 and 0.1.4 both shipped with `"0.1.2"` still
+// spelled into four manifests; the first thing to read that pin literally was
+// `npm ci`, which went to the registry for it, found nothing, and left every
+// workflow that installs red for two weeks. The pin is the bug, so the invariant
+// is that there is no pin: `*` resolves to the workspace sitting right there.
+{
+  for (const name of ['bridle', 'dsh-plugin', 'relay', 'e2e']) {
+    const deps = JSON.parse(read(`${name}/package.json`)).dependencies ?? {}
+    for (const [dep, spec] of Object.entries(deps)) {
+      if (!dep.startsWith('@rowel/')) continue
+      expect(spec === '*',
+        `${name}/package.json 里 ${dep} 写的是 "${spec}"：仓库里的包不发布，内部依赖一律写 "*"，否则发版时它会留在旧版本上（npm ci 会照它去注册表找一个不存在的版本）`)
+    }
+  }
+}
+
 // --- Report ------------------------------------------------------------------
 
 if (problems.length === 0) {
