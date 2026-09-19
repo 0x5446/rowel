@@ -863,12 +863,37 @@ public final class MachineSession {
     /// the grouping is a convenience and can be attempted afterwards, where
     /// failing means an ungrouped conversation rather than one in the wrong
     /// place.
+    ///
+    /// A folder nothing stands for is claimed on the way, so that there is
+    /// something to file the conversation into. The machine's ledger is written
+    /// only when a conversation is filed into a workspace, and nothing on the
+    /// wire backfills it: a conversation started before its folder had a
+    /// workspace is missing from the Mac's sidebar for good. That is the state
+    /// this app used to leave behind, one folder at a time — a conversation the
+    /// phone seats correctly by working directory and the Mac calls ungrouped.
+    /// Claiming at the moment the conversation starts closes it at the source,
+    /// and it spends nothing the person has not already decided: they chose this
+    /// folder for this conversation. What it costs is a section on the Mac that
+    /// nobody made there by hand — a row in a list, removable, with nothing on
+    /// disk behind it.
     private func joinWorkspace(_ sessionId: String, folder: String?) async {
-        guard case .joins(let workspaceId, _) = WorkspacePlacement.resolve(
-            path: folder,
-            workspaces: workspaces,
-            grouping: canGroup
-        ) else { return }
+        switch placement(for: folder) {
+        case .joins(let workspaceId, _):
+            await file(sessionId, into: workspaceId)
+        case .ungrouped:
+            guard let folder, let made = try? await harness.createWorkspace(path: folder) else { return }
+            adopt(made.workspace)
+            await file(sessionId, into: made.workspace.id)
+        case .unknown:
+            // The machine has never said it groups, or the folder is the Mac's
+            // own default — which cannot be named from here. Either way there is
+            // nothing to join and nothing to make.
+            break
+        }
+    }
+
+    /// Write a conversation into its workspace's ledger, best effort.
+    private func file(_ sessionId: String, into workspaceId: String) async {
         do {
             try await harness.fileSession(sessionId, into: workspaceId)
             await refreshWorkspaces()
@@ -924,6 +949,24 @@ public final class MachineSession {
 
     // MARK: - Workspaces
 
+    /// Take the machine's word for a workspace it has just answered with.
+    ///
+    /// A successful write is also the machine saying it groups, which is what
+    /// `canGroup` records. Applied locally rather than waited on because the
+    /// board reads this list, and a conversation filed into a workspace the app
+    /// does not hold yet would sit in the leftovers for a round trip.
+    private func adopt(_ workspace: Workspace) {
+        canGroup = true
+        if let index = workspaces.firstIndex(where: { $0.id == workspace.id }) {
+            workspaces[index] = workspace
+        } else {
+            // The machine prepends, and matching that keeps the two in step
+            // until the next read — which is only cosmetic here, since the
+            // sections are ordered by activity rather than by this list.
+            workspaces.insert(workspace, at: 0)
+        }
+    }
+
     /// Claim a folder as a workspace.
     ///
     /// Nothing is applied before the machine answers, unlike the rest of the
@@ -943,15 +986,7 @@ public final class MachineSession {
     public func createWorkspace(path: String) async -> String? {
         do {
             let made = try await harness.createWorkspace(path: path)
-            canGroup = true
-            if let index = workspaces.firstIndex(where: { $0.id == made.workspace.id }) {
-                workspaces[index] = made.workspace
-            } else {
-                // The machine prepends, and matching that keeps the two in step
-                // until the next read — which is only cosmetic here, since the
-                // sections are ordered by activity rather than by this list.
-                workspaces.insert(made.workspace, at: 0)
-            }
+            adopt(made.workspace)
             return nil
         } catch {
             return (error as? LocalizedError)?.errorDescription

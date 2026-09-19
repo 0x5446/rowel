@@ -27,6 +27,19 @@ the same decision.
   that says "still loading" was set one Task later — so every conversation
   opened by flashing "Nothing here yet" before its contents arrived.
 
+- **A conversation started from the phone is now in the Mac's sidebar under its
+  folder, not under Ungrouped.** The phone seats conversations by working
+  directory — dsh's own rule, and the reason the two screens read the same — but
+  the Mac's sidebar reads dsh's workspace ledger, which is written only when a
+  conversation is created *into* a workspace and is never backfilled. A
+  conversation started in a folder that had no workspace yet was therefore
+  missing from the Mac for good. Starting a conversation now claims its folder
+  first, so the ledger write has something to name. What it costs is a section
+  on the Mac nobody made there by hand — a row in a list, removable, with
+  nothing on disk behind it. Conversations already stranded that way stay
+  stranded: nothing on the wire backfills them. `WorkspaceWriteTests` pins the
+  claim-then-join sequence and both refusals.
+
 ## 0.1.4 — 2026-09-01
 
 - **A machine that was plainly running could report itself offline to the

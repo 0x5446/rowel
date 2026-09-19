@@ -343,13 +343,86 @@ final class WorkspaceWriteTests: XCTestCase {
         XCTAssertNil(session.problem)
     }
 
-    func testStartingInAnUnclaimedFolderMakesOnlyOneCall() async {
+    /// A folder nothing stands for is claimed as the conversation starts, so
+    /// that there is something to file it into. Without this the conversation
+    /// sits in a folder no workspace names, the ledger write has nowhere to go,
+    /// and the Mac's sidebar — which reads the ledger and nothing else — calls
+    /// it ungrouped for the rest of its life.
+    func testStartingInAnUnclaimedFolderClaimsItThenJoins() async {
         let session = await loaded()
         await stub.answer("session.create", .object(["sessionId": .string("fresh")]))
+        await stub.answer("workspace.create", .object([
+            "created": .bool(true),
+            "workspace": workspaceRow("w2", path: "/code/two", title: "two"),
+        ]))
+        // What the machine holds by the time the filing lands: it has the new
+        // workspace now, and names the conversation in it.
+        await stub.answer("workspace.list", .object([
+            "items": .array([
+                workspaceRow("w1", path: "/code/one", title: "One", sessions: ["s1"]),
+                workspaceRow("w2", path: "/code/two", title: "two", sessions: ["fresh"]),
+            ]),
+            "archivedSessionIds": .array([]),
+        ]))
 
-        _ = await session.createSession(cwd: "/code/two")
+        let id = await session.createSession(cwd: "/code/two")
+
+        let claims = await stub.payloads("workspace.create")
+        XCTAssertEqual(claims, [.object(["path": .string("/code/two")])],
+                       "the folder the person chose, and nothing else")
+
+        let sent = await stub.payloads("session.create")
+        XCTAssertEqual(id, "fresh")
+        XCTAssertEqual(sent.count, 2)
+        XCTAssertEqual(sent.first, .object(["cwd": .string("/code/two")]),
+                       "the folder still goes out as cwd, never as workspaceId")
+        XCTAssertEqual(sent.last, .object([
+            "sessionId": .string("fresh"),
+            "workspaceId": .string("w2"),
+        ]), "and the conversation is filed into the workspace just made for it")
+        XCTAssertNil(session.problem)
+
+        let board = SessionBoard(sessions: session.sessions, workspaces: session.workspaces)
+        XCTAssertEqual(board.groups.first { $0.id == "w2" }?.sessions.map(\.id), ["fresh", "stray"],
+                       "the phone and the Mac now say the same thing about where this conversation lives, "
+                       + "and the new workspace seats the folder's other conversations too")
+    }
+
+    /// A machine that will not make the workspace is not an event. The
+    /// conversation exists, in the folder the person chose, and the board seats
+    /// it by working directory regardless — the same silence a refused join
+    /// gets, for the same reason.
+    func testAFolderTheMachineWontClaimStillStartsTheConversation() async {
+        let session = await loaded()
+        await stub.answer("session.create", .object(["sessionId": .string("fresh")]))
+        await stub.fail("workspace.create", code: "workspace-invalid-path",
+                        message: "cannot create a workspace at \"/code/two\": not a directory")
+
+        let id = await session.createSession(cwd: "/code/two")
+
         let attempts = await stub.count("session.create")
+        XCTAssertEqual(id, "fresh")
+        XCTAssertEqual(attempts, 1, "nothing to file into, so nothing is filed")
+        XCTAssertEqual(session.workspaces.map(\.id), ["w1"],
+                       "a workspace the machine refused is not on the phone either")
+        XCTAssertNil(session.problem)
+    }
 
+    /// The other half of the same guard: a machine that has never answered
+    /// `workspace.list` is never asked to make one. It may be too old to have
+    /// the call at all, and nothing here can tell a machine that cannot group
+    /// from one that simply has not answered yet.
+    func testAMachineThatHasNotSaidItGroupsIsNeverAskedToMakeOne() async {
+        await stub.fail("workspace.list", message: "dsh answered HTTP 404: not found")
+        await stub.answer("session.create", .object(["sessionId": .string("fresh")]))
+        let session = machine()
+
+        let id = await session.createSession(cwd: "/code/two")
+
+        let claims = await stub.count("workspace.create")
+        let attempts = await stub.count("session.create")
+        XCTAssertEqual(id, "fresh")
+        XCTAssertEqual(claims, 0)
         XCTAssertEqual(attempts, 1)
         XCTAssertNil(session.problem)
     }
