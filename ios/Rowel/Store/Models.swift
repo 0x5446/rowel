@@ -856,10 +856,12 @@ public struct ContextBreakdown: Equatable, Sendable {
 
 /// How much the agent is allowed to touch, and what else it could be set to.
 ///
-/// Arrives per session in the `permissions` projection, but it is a *machine*
-/// setting — changing it changes it everywhere. The UI has to say so, because
-/// "read only" that quietly applied to every other conversation would be a
-/// nasty surprise in the other direction too.
+/// Arrives per session in the `permissions` projection, and it really is
+/// per session: the machine folds it from that session's own log, so switching
+/// one conversation leaves every other one where it was. Two different things
+/// wear this shape — a session's current mode, and the mode new conversations
+/// start in (read from the machine's settings, and the only one that is
+/// machine-wide).
 public struct PermissionChoice: Equatable, Sendable {
     public struct Option: Identifiable, Equatable, Sendable {
         public var id: String { value }
@@ -879,6 +881,15 @@ public struct PermissionChoice: Equatable, Sendable {
         }
     }
 
+    /// The presets that can be switched to. `custom` is excluded, and is not a
+    /// preset: the machine adds it to `options` when a session's sandbox and
+    /// approval settings match no preset — a session composed that way, or one
+    /// whose knobs were set individually — so it is a state to display and
+    /// never a name to send back. `/permission custom` is refused.
+    public var choices: [Option] {
+        options.filter { $0.value != "custom" }
+    }
+
     /// The label to show for a raw value. The machine sends the raw string as
     /// the name too, so this is where `danger-full-access` becomes something
     /// worth reading on a phone.
@@ -887,6 +898,7 @@ public struct PermissionChoice: Equatable, Sendable {
         case "read-only": return "Read only"
         case "workspace-write": return "Workspace write"
         case "danger-full-access": return "Full access"
+        case "custom": return "Custom"
         default: return value
         }
     }
@@ -897,6 +909,7 @@ public struct PermissionChoice: Equatable, Sendable {
         case "read-only": return "Look, don’t touch. Every write asks first."
         case "workspace-write": return "Edit inside the working folder without asking. Anything outside it still asks."
         case "danger-full-access": return "No sandbox and no questions. Everything your account can do, it can do."
+        case "custom": return "This conversation’s sandbox and approval settings match none of the presets, so there is no name for them."
         default: return ""
         }
     }

@@ -673,7 +673,7 @@ UI          6（XCUITest，真机或模拟器，连真 Bridle）
 | 中断跑飞的任务 | ✓ | ✓ | 支持 |
 | 换模型 | ✓ | ✓ 且能设新会话默认 | **更好** |
 | 新建会话并选目录 | ✓ | ✓ | 支持 |
-| **切换访问模式** | ✓ | ✗ | **缺口** |
+| **切换访问模式** | ✓ | ✓ 会话级，Session ▸ Access | 支持 |
 | **斜杠命令** | ✓ | ✗ | **缺口** |
 | **看/干预 subagent** | ✓ | ✗ 当前被整个过滤掉 | **缺口** |
 | **失败诊断（trace）** | ✓ 甘特图 | ✗ | 缺口，形态要重做（§13） |
@@ -683,7 +683,7 @@ UI          6（XCUITest，真机或模拟器，连真 Bridle）
 | 工作区增删改 | ✓ | ✗ | **明确放弃**（§17） |
 | 插件管理、改设置、写 API key | ✓ | ✗ | **明确放弃**（§17） |
 
-**首发门槛**：加粗的四个缺口里，**访问模式、斜杠命令、subagent 必须补齐**——它们是"离开电脑后完成一次完整任务"的必要条件。trace 不是，它是诊断而非操作。
+**首发门槛**：加粗的四个缺口里，**斜杠命令、subagent 必须补齐**——它们是"离开电脑后完成一次完整任务"的必要条件。trace 不是，它是诊断而非操作。访问模式已经补齐，而且补的方式值得记下来：切换一个会话的模式走的是 dsh 的 `/permission` 命令（`commands/execute`，参数 `{agentId, line}`），**不是** `settings.update {ns: permission}`——后者只改新会话的默认值，改不动已经在跑的会话，早期正因为只试了这条路径才误判成"会话创建后不可改"。
 
 **我们已经更好的地方**（这才是产品理由，不是功能对等）：
 
@@ -749,8 +749,8 @@ UI          6（XCUITest，真机或模拟器，连真 Bridle）
 | 调一个新的 dsh 方法 | `Harness.swift` 加函数 + 调用它的视图 | 几十行 |
 | 显示一个新 projection | `Conversation.applyProjection` 一个 case + 视图 | 几十行 |
 | 支持一种新工具卡片 | `callPresentation`/`resultPresentation` + `ToolCardView` | 上百行 |
-| 访问模式切换 | `permissions` projection + 输入框菜单 | 上百行 |
-| 斜杠命令 | `skill.list` + 输入框选择器（命令是文本，dsh 服务端解析） | 上百行 |
+| 访问模式切换 | `permissions` projection（读）+ `commands/execute` 跑 `/permission`（写）+ Session 面板 | 已做 |
+| 斜杠命令 | `commands/list` 列命令 + `commands/execute` 执行（**不是** `session.prompt`：斜杠开头的文本会被当成消息发给模型） | 上百行 |
 | subagent | `subagent.*` 四个方法 + 取消列表过滤 | 数百行 |
 | 推送 | §10 六处 | 一天，卡付费账号 |
 | 定时任务 | §11 三处 | 一到两天，依赖推送 |

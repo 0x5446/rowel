@@ -277,6 +277,43 @@ public struct Harness: Sendable {
         try await transport.call("session.cancel", .object(["sessionId": .string(sessionId)]))
     }
 
+    /// Run one slash command against a session. Nothing reaches the model.
+    ///
+    /// `commands/execute`, because a `session.prompt` carrying the command line
+    /// does **not** run a command: measured on a scratch session, a prompt whose
+    /// text was `/permission` turned up in the log as an ordinary `user/message`
+    /// and started a turn, with the model left to work out what the words meant.
+    /// Command dispatch is the client's job in dsh — the browser's composer
+    /// recognises the leading slash and calls this same method — so the second
+    /// reason this is the right call is what it answers for a name the machine
+    /// does not have: `undefined`, before anything is admitted, which lets the
+    /// caller say "this Mac cannot do that" instead of guessing.
+    ///
+    /// A Typert remote method, so its arguments live under one `args` object —
+    /// the same envelope as `pluginInventory/list`, and for the same reason.
+    ///
+    /// - Returns: what the command said, or nil when the machine has no such
+    ///   command (an older dsh, or a plugin that is not mounted).
+    public func command(sessionId: String, line: String) async throws -> String? {
+        let value = try await transport.call("commands/execute", .object([
+            "args": .object([
+                "agentId": .string(sessionId),
+                "line": .string(line),
+                "images": .array([]),
+            ]),
+        ]))
+        guard let result = value["result"] else { return nil }
+        let said = result["text"]?.stringValue
+        if result["kind"]?.stringValue == "error" {
+            // The command ran and refused, which is a different outcome from
+            // not being there at all. Its own words name the reason — an
+            // unknown preset lists the ones the machine has — so they go
+            // through untouched.
+            throw CallError(code: "command-error", message: said ?? "The Mac refused that command.")
+        }
+        return said ?? ""
+    }
+
     /// Branch a conversation, keeping its history up to now.
     ///
     /// - Returns: the new session's id.
@@ -327,8 +364,11 @@ public struct Harness: Sendable {
     /// in between — which on this machine is most likely the person sitting at
     /// it, and losing their change would be the worse outcome.
     ///
-    /// This is a machine-wide setting. `permission` is one namespace and it has
-    /// one value; there is no per-session variant to reach for.
+    /// A machine-wide default, and only that: `permission` is one namespace with
+    /// one value, and the value is the mode a conversation that does not exist
+    /// yet will start in. Changing a conversation that is already running is
+    /// `command(sessionId:line:)` with `/permission` — a different call against
+    /// a different thing, and the one this doc comment used to deny existed.
     public func setPermission(_ preset: String) async throws {
         let described = try await transport.call("settings.describe", .emptyObject)
         let revision = (described["namespaces"]?.arrayValue ?? [])

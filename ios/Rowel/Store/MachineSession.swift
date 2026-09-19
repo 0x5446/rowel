@@ -759,6 +759,34 @@ public final class MachineSession {
         }
     }
 
+    /// Change how much *this* conversation's agent may touch.
+    ///
+    /// The session-scoped counterpart of `setPermission`, and a different dsh
+    /// path: the machine's `/permission` command appends `permission/preset`
+    /// plus whichever knobs that preset changes to **this session's own log**,
+    /// so the conversation runs differently from here on while every other one
+    /// is left where it was. That is the whole reason the command exists — the
+    /// machine-wide default cannot reach a conversation that already started.
+    ///
+    /// Nothing is applied locally. The command moves the session's `permissions`
+    /// projection, which pushes to this app like any other projection, and
+    /// letting that be the only source of truth means the checkmark cannot
+    /// disagree with the machine about what the agent is allowed to do.
+    ///
+    /// - Returns: nil on success, otherwise what to tell the person.
+    public func setSessionPermission(sessionId: String, preset: String) async -> String? {
+        do {
+            let ran = try await harness.command(sessionId: sessionId, line: "/permission \(preset)")
+            guard ran != nil else {
+                return "This Mac’s dsh has no /permission command, so a running conversation cannot be changed here."
+            }
+            return nil
+        } catch {
+            return (error as? LocalizedError)?.errorDescription
+                ?? "The Mac would not change this conversation’s access mode."
+        }
+    }
+
     /// Start a conversation and return its id.
     /// Choose what new conversations start on. `nil` hands the choice back to
     /// the machine.

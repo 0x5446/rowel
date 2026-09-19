@@ -11,10 +11,9 @@
 /// getting expensive* — the context bar and the token counts.
 ///
 /// The access mode lives here too, and it is the one control on the screen. It
-/// is deliberately last and deliberately loud: it is a **machine-wide** setting
-/// wearing a per-conversation badge, and someone who sets "read only" here to
-/// calm down one runaway session would otherwise be surprised by every other
-/// conversation later.
+/// is deliberately last, because it is the setting that decides what the agent
+/// may do to the files on the other end of the connection. That one does need
+/// the machine — everything else on this screen is the last thing it said.
 
 import SwiftUI
 
@@ -22,6 +21,17 @@ struct SessionInfoView: View {
     @Environment(MachineSession.self) private var session
     @Environment(\.dismiss) private var dismiss
     let sessionId: String
+
+    /// Whether the full-access confirmation is up. A flag rather than the preset
+    /// it is about, because the dialog that asks is only ever about one of them
+    /// — and because the binding is cleared as the sheet dismisses, so a value
+    /// read from state inside the button's action is a value that may already be
+    /// gone.
+    @State private var confirmingFullAccess = false
+    /// The preset being sent right now, so the row can say it is working rather
+    /// than looking like a tap that missed.
+    @State private var switching: String?
+    @State private var accessError: String?
 
     // `conversation(_:)` rather than a dictionary read: the sheet can be
     // opened on a session whose history has not been fetched, and this is
@@ -44,6 +54,18 @@ struct SessionInfoView: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") { dismiss() }
                 }
+            }
+            .confirmationDialog(
+                "Give this conversation full access?",
+                isPresented: $confirmingFullAccess,
+                titleVisibility: .visible
+            ) {
+                Button("Turn on full access", role: .destructive) {
+                    send("danger-full-access")
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("No sandbox and no approval prompts for this conversation: everything your account can do on that Mac, it can do without asking. Only do this if you trust what it has been asked to run.")
             }
         }
     }
@@ -95,8 +117,9 @@ struct SessionInfoView: View {
     private var work: some View {
         if let stats = conversation?.stats {
             Section("Work") {
-                // Which agent this conversation runs as — fixed at creation,
-                // like the access mode, so it is stated rather than offered.
+                // Which agent this conversation runs as. Stated rather than
+                // offered: the app never established a way to switch it, and a
+                // row that looks like a control is worse than a fact.
                 if let preset = summary?.agentPreset {
                     Row("Agent", session.presets.first { $0.id == preset }?.name ?? preset)
                 }
@@ -146,46 +169,110 @@ struct SessionInfoView: View {
 
     // MARK: - Access
 
-    /// What this conversation is allowed to touch. **Read-only, and that is the
-    /// finding rather than a shortcut.**
+    /// What this conversation is allowed to touch, and the control that changes
+    /// it.
     ///
-    /// This was a three-way picker, and it did not work: tapping an option
-    /// changed nothing on screen and the person reported it as a dead control.
-    /// It was worse than dead. The only write available is
-    /// `settings.update {ns: permission, patch: {defaultPreset}}` — the clue is
-    /// in the field name — and measuring it settles what that means: after
+    /// This section has been wrong twice, in opposite directions, so the finding
+    /// is worth writing down properly. It began as a three-way picker that did
+    /// nothing: tapping an option changed nothing on screen and the person
+    /// reported it as a dead control. It then became a read-only badge with a
+    /// note saying a session's mode is fixed at creation, and that note was the
+    /// mistake. The measurement behind it was real but too narrow — after
     /// changing the machine default to `read-only` and running another turn, an
-    /// existing session's `permissions` projection still read `workspace-write`.
-    /// **A session's access mode is fixed when the session is created.**
+    /// existing session's `permissions` projection still read `workspace-write`
+    /// — because the only write this app had was
+    /// `settings.update {ns: permission, patch: {defaultPreset}}`, and
+    /// `defaultPreset` is exactly what its name says: the mode *new*
+    /// conversations start in. Nothing about a running session is fixed.
     ///
-    /// So the picker was offering to change something that cannot be changed,
-    /// and the reason it looked broken is that it was honest by accident: the
-    /// checkmark follows the projection, and the projection never moved. Had it
-    /// updated locally the way the model picker used to, it would have shown a
-    /// mode this conversation was not running under — which is the worse
-    /// failure, because this particular lie is about what the agent may do to
-    /// someone's files.
-    ///
-    /// The control moved to Settings, where it is labelled as what it is: the
-    /// mode new conversations start in.
+    /// The mode of a conversation is changed by the machine's `/permission`
+    /// command, which appends `permission/preset` — and the sandbox and approval
+    /// knobs that preset bundles — to **that session's own log**. So it is per
+    /// session, it applies as the session runs, and the projection moves. That
+    /// last part is what makes a picker honest here: the checkmark follows the
+    /// machine, so it cannot claim a mode this conversation is not running
+    /// under, which for this particular setting is the failure that matters.
     @ViewBuilder
     private var access: some View {
         if let permissions = conversation?.permissions {
             Section {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(PermissionChoice.label(for: permissions.current))
-                        .font(.system(size: 15, weight: .semibold))
-                    Text(PermissionChoice.detail(for: permissions.current))
+                ForEach(permissions.choices) { option in
+                    row(option, current: permissions.current)
+                }
+                // A session composed outside the presets has a mode with no name
+                // to check and nothing to switch to, so it is stated instead.
+                if permissions.current == "custom" {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(PermissionChoice.label(for: "custom"))
+                            .font(.system(size: 15, weight: .semibold))
+                        Text(PermissionChoice.detail(for: "custom"))
+                            .font(.system(size: 12.5))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.vertical, 2)
+                }
+                if let accessError {
+                    Text(accessError)
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(Palette.warn)
+                }
+            } header: {
+                Text("Access")
+            } footer: {
+                Text("Applies to this conversation only — every other one keeps the mode it is running under. Settings ▸ New conversations sets what the next conversation starts in.")
+            }
+        }
+    }
+
+    /// One preset, as a row that can be chosen.
+    private func row(_ option: PermissionChoice.Option, current: String) -> some View {
+        Button {
+            guard option.value != current else { return }
+            accessError = nil
+            // The one that removes the guard rails gets asked about first; the
+            // two that tighten them do not.
+            if option.value == "danger-full-access" {
+                confirmingFullAccess = true
+            } else {
+                send(option.value)
+            }
+        } label: {
+            HStack(alignment: .top, spacing: Metrics.gap) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(PermissionChoice.label(for: option.value))
+                        .font(.system(size: 15, weight: .medium))
+                    Text(PermissionChoice.detail(for: option.value))
                         .font(.system(size: 12.5))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                .padding(.vertical, 2)
-            } header: {
-                Text("Access")
-            } footer: {
-                Text("Fixed when this conversation started and cannot be changed now — the Mac only lets the mode be chosen for new ones. Settings ▸ New conversations sets that. To run this work under a different mode, start a conversation.")
+                Spacer(minLength: Metrics.gap)
+                if switching == option.value {
+                    ProgressView().controlSize(.small)
+                } else if option.value == current {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(Palette.accent)
+                }
             }
+        }
+        .foregroundStyle(.primary)
+        .disabled(switching != nil)
+    }
+
+    /// Ask the machine to switch this conversation, and say so if it refuses.
+    ///
+    /// The badge is not moved here. The machine's answer is the projection, and
+    /// it arrives within a round trip; a checkmark placed by this screen could
+    /// survive a refusal that never got that far.
+    private func send(_ preset: String) {
+        confirmingFullAccess = false
+        switching = preset
+        Task {
+            let failure = await session.setSessionPermission(sessionId: sessionId, preset: preset)
+            switching = nil
+            accessError = failure
         }
     }
 

@@ -277,7 +277,7 @@ projection 是 agent 算好的派生状态，两条路到达：
 | `sessionStats` | `stats = SessionStats(value)`。`ttftMs` 是**总和**、`ttftSteps` 是次数，平均值要自己除；`ttftSteps == 0` 时返回 nil 而不是 0 |
 | `tokenUsage` | `tokens = TokenUsage(value)`。`cacheHitRate` 在没有任何输入时返回 nil——"还没请求过"和"每次都没命中"是两件事，用 0% 表达前者是错的 |
 | `contextBreakdown` | `contextBreakdown = ContextBreakdown(value)`（system / tools / messages 三段） |
-| `permissions` | `permissions = PermissionChoice(value)`（`options[]` + `currentValue`）。**这是机器级设置**，不是会话级的，改它会影响那台机器上的全部会话 |
+| `permissions` | `permissions = PermissionChoice(value)`（`options[]` + `currentValue`）。**是会话级的**：机器从该会话自己的日志（`permission/preset` + `sandbox/mode` + `approval/policy`）折叠出来，改一个会话不影响别的。机器级的是另一个东西——settings 里 `permission.defaultPreset`，只决定新会话的起点，两者共用一个取值词表。`options` 里的 `custom` 只在当前旋钮不匹配任何 preset 时出现，是显示状态、不是可切换目标，`PermissionChoice.choices` 把它过滤掉 |
 | 其他 | 忽略 |
 
 ### 5.3 尚未折叠的键

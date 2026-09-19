@@ -101,6 +101,26 @@ final class SessionStatsFoldTests: XCTestCase {
         XCTAssertEqual(PermissionChoice.label(for: "danger-full-access"), "Full access")
     }
 
+    func testCustomIsAStateRatherThanAChoice() {
+        // The machine appends `custom` to `options` when a session's knobs match
+        // no preset. It is what the session *is*, not something to switch to —
+        // `/permission custom` is refused — so it must never reach the picker as
+        // a target.
+        let c = conversation()
+        c.applyProjection(key: "permissions", value: json("""
+        {"options":[{"value":"read-only","name":"read-only"},
+                    {"value":"workspace-write","name":"workspace-write"},
+                    {"value":"custom","name":"custom"}],
+         "currentValue":"custom"}
+        """), seq: 1)
+
+        XCTAssertEqual(c.permissions?.current, "custom")
+        XCTAssertEqual(c.permissions?.choices.map(\.value), ["read-only", "workspace-write"])
+        XCTAssertEqual(PermissionChoice.label(for: "custom"), "Custom")
+        XCTAssertFalse(PermissionChoice.detail(for: "custom").isEmpty,
+                       "a mode with no preset still has to be explained on screen")
+    }
+
     func testAStaleFrameCannotUndoANewerOne() {
         let c = conversation()
         c.applyProjection(key: "sessionStats", value: json("{\"turns\":9}"), seq: 20)

@@ -44,13 +44,11 @@ struct SettingsView: View {
                         .foregroundStyle(.primary)
 
                         // Beside the default model because it is the same kind
-                        // of thing and was in the wrong place: it used to sit in
-                        // the session panel looking like a switch for *that*
-                        // conversation. A session's access mode is fixed when it
-                        // is created — measured, not assumed — so the only
-                        // truthful place for this control is next to the other
-                        // choice that only applies to conversations not started
-                        // yet.
+                        // of thing: this sets what a conversation that does not
+                        // exist yet will start as. Changing one that is already
+                        // running is a different act with a different dsh call
+                        // (`/permission` on that session), and it lives where
+                        // that conversation is — Session ▸ Access.
                         if let permissions = session.accessDefault {
                             Picker("New conversations can", selection: Binding(
                                 get: { pendingAccess ?? permissions.current },
@@ -77,7 +75,7 @@ struct SettingsView: View {
                     } header: {
                         Text("New conversations")
                     } footer: {
-                        Text("dsh routes a new conversation to whichever provider is configured first, so naming one here means it starts on the model you meant. Access works the same way — it is chosen when a conversation begins and cannot be changed afterwards, so this sets it for the next one, on this Mac, for every client.")
+                        Text("dsh routes a new conversation to whichever provider is configured first, so naming one here means it starts on the model you meant. Access is the mode the next conversation begins in, on this Mac, for every client. A conversation that is already running keeps whatever it has — that one is changed from its own Session ▸ Access.")
                     }
                 }
 

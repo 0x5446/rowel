@@ -9,6 +9,19 @@ the same decision.
 
 ## Unreleased
 
+- **A running conversation's access mode can now be changed from the phone.**
+  Session ▸ Access was a badge that said the mode is fixed when a conversation
+  starts, and that was wrong — it was measured through the only write the app
+  had, `settings.update {ns: permission, patch: {defaultPreset}}`, which sets the
+  mode *new* conversations begin in and by design leaves a running one alone. The
+  mode of a conversation is changed by the Mac's `/permission` command, which
+  writes to that one session's log, so the three presets are now a picker: read
+  only, workspace write, and full access, that last one behind a confirmation
+  because it drops the sandbox *and* the approval prompts. Only this conversation
+  moves — every other one keeps what it was running under — and the checkmark
+  follows the Mac's own `permissions` projection rather than a local guess, so it
+  cannot claim a mode the agent is not actually running under.
+
 - **Opening a conversation no longer says it is empty first.** The view was
   handed a conversation with no messages and no reason given, because the flag
   that says "still loading" was set one Task later — so every conversation

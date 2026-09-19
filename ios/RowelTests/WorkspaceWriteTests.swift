@@ -493,15 +493,18 @@ final class ModelSelectionTests: XCTestCase {
     }
 }
 
-/// The access mode, which is a machine setting wearing a per-session badge.
+/// The machine's default access mode: what a conversation that does not exist
+/// yet will start as.
 ///
-/// It was drawn as a three-way picker inside the session panel and reported as
-/// a dead control. It was worse than dead: the only write available is the
-/// machine's `defaultPreset`, and an existing session keeps whatever it was
-/// created with — measured by changing the default and running another turn,
-/// after which the session's projection had not moved. So the picker offered to
-/// change something unchangeable, and the reason it looked broken is that the
-/// checkmark honestly followed a projection that never changes.
+/// This is the settings path (`settings.update {ns: permission, patch:
+/// {defaultPreset}}`) and it is deliberately the *only* thing those writes
+/// touch. It was drawn as a three-way picker inside the session panel and
+/// reported as a dead control, because an existing session's `permissions`
+/// projection does not move when the default changes — measured by changing the
+/// default and running another turn. The conclusion drawn at the time, that a
+/// session's mode is fixed at creation, was wrong: the mode of a running
+/// conversation is changed by `/permission`, which is a different dsh call and
+/// is covered by `SessionAccessTests` below.
 @MainActor
 final class AccessDefaultTests: XCTestCase {
     private var suite: UserDefaults!
@@ -594,6 +597,141 @@ final class AccessDefaultTests: XCTestCase {
 
         XCTAssertEqual(failure, "Someone changed it first.")
         XCTAssertEqual(machine.accessDefault?.current, "workspace-write")
+    }
+}
+
+// MARK: - One conversation's access mode
+
+/// Switching a running conversation, which is a different dsh call from the
+/// machine default above and was believed to be impossible for a while.
+///
+/// The command is `/permission <preset>`, run through `commands/execute` rather
+/// than typed into a prompt: a prompt carrying a `/`-prefixed line is not a
+/// command at all — measured, it lands in the log as an ordinary user message
+/// and starts a turn — so sending the words to the model is the failure this
+/// route avoids. The payload shape asserted here is the one a real dsh accepted.
+@MainActor
+final class SessionAccessTests: XCTestCase {
+    private var suite: UserDefaults!
+    private var suiteName: String!
+    private var stub: StubTransport!
+
+    override func setUp() {
+        super.setUp()
+        suiteName = "rowel.session.access.tests.\(UUID().uuidString)"
+        suite = UserDefaults(suiteName: suiteName)
+        stub = StubTransport()
+    }
+
+    override func tearDown() {
+        suite.removePersistentDomain(forName: suiteName)
+        super.tearDown()
+    }
+
+    /// What the machine answers when it ran the command.
+    private func ran(_ text: String) -> JSONValue {
+        .object([
+            "commandId": .string("cmd-1"),
+            "result": .object(["kind": .string("success"), "text": .string(text)]),
+        ])
+    }
+
+    private func projection(_ current: String) -> JSONValue {
+        .object([
+            "options": .array(["read-only", "workspace-write", "danger-full-access"].map {
+                .object(["value": .string($0), "name": .string($0)])
+            }),
+            "currentValue": .string(current),
+        ])
+    }
+
+    private func session() -> MachineSession {
+        let bundle = PairingBundle(
+            relay: "https://relay.invalid", device: "device-1", key: "", token: "", name: "Test Mac"
+        )
+        return MachineSession(
+            machine: PairedMachine(bundle: bundle),
+            identity: .generate(),
+            deviceName: "Test iPhone",
+            clientVersion: "rowel-tests/1",
+            pairingToken: nil,
+            notifier: Notifier(center: nil),
+            defaults: suite,
+            transport: stub
+        )
+    }
+
+    func testTheSwitchIsThePermissionCommandForThatSession() async {
+        await stub.answer("commands/execute", ran("preset read-only"))
+        let machine = session()
+
+        let failure = await machine.setSessionPermission(sessionId: "s1", preset: "read-only")
+
+        XCTAssertNil(failure)
+        let sent = await stub.payloads("commands/execute").last
+        XCTAssertEqual(sent?.path("args", "agentId")?.stringValue, "s1")
+        XCTAssertEqual(sent?.path("args", "line")?.stringValue, "/permission read-only")
+        // A typert remote wants its arguments under exactly one `args` object,
+        // and it wants the image list present even when empty — an absent key is
+        // a strict-schema failure, not a default.
+        XCTAssertEqual(sent?.path("args", "images")?.arrayValue?.isEmpty, true)
+    }
+
+    func testTheModeComesFromTheProjectionNotFromTheWrite() async {
+        // The design decision worth pinning: this app never places the
+        // checkmark itself. If it did, a session whose switch had not actually
+        // taken effect would still show the new mode — and this particular lie
+        // is about what the agent may do to someone's files.
+        await stub.answer("commands/execute", ran("preset read-only"))
+        let machine = session()
+        let conversation = machine.conversation("s1")
+        conversation.applyProjection(key: "permissions", value: projection("workspace-write"), seq: 4)
+
+        _ = await machine.setSessionPermission(sessionId: "s1", preset: "read-only")
+
+        XCTAssertEqual(conversation.permissions?.current, "workspace-write",
+                       "the screen moved on its own, before the machine said so")
+
+        conversation.applyProjection(key: "permissions", value: projection("read-only"), seq: 6)
+        XCTAssertEqual(conversation.permissions?.current, "read-only")
+    }
+
+    func testAMacWithoutTheCommandSaysSoRatherThanPretending() async {
+        // An older dsh has no `/permission`, and `commands/execute` answers a
+        // bare `undefined` for a name it does not have. Reported as success
+        // that would leave the person believing a mode had changed.
+        let machine = session()
+
+        let failure = await machine.setSessionPermission(sessionId: "s1", preset: "read-only")
+
+        XCTAssertEqual(
+            failure,
+            "This Mac’s dsh has no /permission command, so a running conversation cannot be changed here."
+        )
+    }
+
+    func testTheMachinesOwnWordsComeThroughWhenItRefuses() async {
+        // The command exists and refused. Its message names the presets it does
+        // have, which is more useful than anything this app could invent.
+        let said = "unknown preset \"nonsense\" (available: read-only, workspace-write, danger-full-access)"
+        await stub.answer("commands/execute", .object([
+            "commandId": .string("cmd-2"),
+            "result": .object(["kind": .string("error"), "text": .string(said)]),
+        ]))
+        let machine = session()
+
+        let failure = await machine.setSessionPermission(sessionId: "s1", preset: "nonsense")
+
+        XCTAssertEqual(failure, said)
+    }
+
+    func testATunnelThatCannotCarryItSaysSo() async {
+        await stub.fail("commands/execute", message: "the Mac is unreachable")
+        let machine = session()
+
+        let failure = await machine.setSessionPermission(sessionId: "s1", preset: "read-only")
+
+        XCTAssertEqual(failure, "the Mac is unreachable")
     }
 }
 
