@@ -47,4 +47,5 @@ npm run test:ios       # iOS：xcodegen 生成工程后跑 xcodebuild test（等
 ## iOS 测试的一点环境事实
 
 - 沙箱更严的 agent 环境里，`xcodebuild` 可能因为 Swift 宏插件服务写不了工作区外而失败（报 `swift-plugin-server produced malformed response`，随后的一堆「requires conformance to Observable」都是它的连带错误）。这是权限问题，不是代码问题。
-- `MainThreadStarvationTests` 会挂载真实的 `ConversationView` 灌 200 chunk/s，很吃内存。它和别的重测试同一个进程连跑时可能被系统杀掉，单独跑是稳的。
+- **测试跑到一半被杀，先怀疑撞车，别先怀疑内存。** 症状是 `Unable to initialize test bundle` / `Failed to create a bundle instance … Check that the bundle exists on disk`，或者干脆 SIGKILL。成因是被测的那份 app bundle **在测试途中被换掉了**：另一个会话把同一个 scheme 编进了同一份 DerivedData（默认按 scheme 名共用，所以**模拟器不同也照样撞**），或者两个会话在共用同一台模拟器。两次实测都是这个特征而非 OOM——19:33 死在 `InterruptLayoutTests` 起步处，12:49 死在 `MainThreadStarvationTests`。先按第 1、2 条排除，再去看代码。
+- `MainThreadStarvationTests` 会挂载真实的 `ConversationView` 灌 200 chunk/s，是这套里最吃资源的一个；单独跑是稳的（10/10）。它在整套连跑里失败时，按上一条先排除撞车。
