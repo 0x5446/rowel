@@ -71,6 +71,13 @@ struct QuestionCard: View {
     let request: QuestionRequest
     let onAnswer: ([String: QuestionAnswer]) -> Void
 
+    /// How much of a card the questions may take before they scroll.
+    ///
+    /// Sized so the whole card — capped questions, the Send button, the card's
+    /// own padding — stays inside the band above the composer
+    /// (`ConversationView.bandCeiling`), on the smallest phone the app supports.
+    static let questionsCeiling: CGFloat = 260
+
     @State private var selections: [String: Set<String>] = [:]
     @State private var custom: [String: String] = [:]
     @State private var writing: String?
@@ -81,8 +88,17 @@ struct QuestionCard: View {
             if request.items.count == 1, let item = request.items[0].isPlanReview ? request.items[0] : nil {
                 plan(item)
             } else {
-                ForEach(request.items) { item in
-                    question(item)
+                // The questions scroll; the Send button below them does not. The
+                // card is as tall as the questions it was asked — three of them
+                // with described options is taller than a phone — and a Send
+                // button that scrolls away with the last option is a card that
+                // cannot be answered without hunting for the button first.
+                CappedScroll(ceiling: QuestionCard.questionsCeiling) {
+                    VStack(alignment: .leading, spacing: Metrics.gap) {
+                        ForEach(request.items) { item in
+                            question(item)
+                        }
+                    }
                 }
                 Button("Send") { submit() }
                     .buttonStyle(PrimaryButtonStyle())
@@ -122,11 +138,13 @@ struct QuestionCard: View {
                     .font(.system(size: 15, weight: .semibold))
             }
             if let detail = item.detail, !detail.isEmpty {
-                ScrollView {
+                // Same reason as the questions above, and the same treatment:
+                // the verdict buttons are the point of the card, and a plan is
+                // always longer than the room left for it.
+                CappedScroll(ceiling: QuestionCard.questionsCeiling) {
                     MarkdownText(source: detail, size: 14)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(maxHeight: 320)
             } else {
                 Text(item.question)
                     .font(.system(size: 14))

@@ -421,4 +421,22 @@ final class ReasoningTailTests: XCTestCase {
         // The common case early in a turn: no newline has arrived yet.
         XCTAssertEqual(AssistantBlock.tail(of: "The user is asking about"), "The user is asking about")
     }
+
+    func testALongBlockIsReadFromItsEnd() {
+        // A hundred kilobytes of thinking, then the line being written. The
+        // window is what keeps this off the main thread's back: reading the
+        // whole block is what the row used to do, per render.
+        let body = Array(repeating: "a line of reasoning that goes on for a while", count: 2_500)
+            .joined(separator: "\n")
+        XCTAssertGreaterThan(body.utf8.count, AssistantBlock.tailWindow)
+        XCTAssertEqual(AssistantBlock.tail(of: body + "\nNow the newest line."), "Now the newest line.")
+
+        // A single line longer than the window is shown from its end — the end
+        // the one-line truncation keeps anyway.
+        let long = String(repeating: "x", count: AssistantBlock.tailWindow * 2)
+        XCTAssertEqual(
+            AssistantBlock.tail(of: "older\n" + long),
+            String(long.suffix(AssistantBlock.tailWindow))
+        )
+    }
 }

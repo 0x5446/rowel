@@ -219,15 +219,25 @@ struct AssistantBlock: View {
     /// as prose with paragraph breaks, and a delta that lands just after a
     /// newline would otherwise blank the row for a moment and make it flicker.
     ///
+    /// Only the end of the block is read. This runs on every render while a step
+    /// streams, a long thinking block is a hundred kilobytes, and the one line it
+    /// produces is always in the last few hundred characters of it — four
+    /// kilobytes of window is a frame's worth of work rather than a tenth of one.
+    /// The one thing the window changes: a single line longer than it is shown
+    /// from its end, which is the end the truncation keeps anyway.
+    ///
     /// - Parameter reasoning: everything folded so far.
     /// - Returns: one line, whitespace trimmed, empty when there is nothing yet.
     static func tail(of reasoning: String) -> String {
-        for line in reasoning.split(whereSeparator: \.isNewline).reversed() {
+        for line in reasoning.suffix(Self.tailWindow).split(whereSeparator: \.isNewline).reversed() {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if !trimmed.isEmpty { return trimmed }
         }
         return ""
     }
+
+    /// How much of the end of a reasoning block `tail(of:)` reads.
+    static let tailWindow = 4096
 }
 
 // MARK: - Notice

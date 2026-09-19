@@ -108,6 +108,52 @@ public struct Card<Content: View>: View {
     }
 }
 
+/// A run of content that scrolls only once it would be taller than `ceiling`.
+///
+/// For the two places where content of unknown length has to share the screen
+/// with something that must stay reachable: the questions in a question card,
+/// and the interrupt band above the composer. Sized to its content until that
+/// exceeds the ceiling, so a short one looks like nothing was wrapped around it
+/// at all.
+///
+/// The height is measured from the inside rather than asked for from the
+/// outside. A scroll view hands its content the height the content wants, so
+/// the preference below is the natural height whatever the frame turns out to
+/// be — and nothing here has to assume whether a `ScrollView` asked for a
+/// bounded height would have taken it or not.
+public struct CappedScroll<Content: View>: View {
+    var ceiling: CGFloat
+    @ViewBuilder var content: Content
+    @State private var height: CGFloat = 0
+
+    public init(ceiling: CGFloat, @ViewBuilder content: () -> Content) {
+        self.ceiling = ceiling
+        self.content = content()
+    }
+
+    public var body: some View {
+        ScrollView {
+            content
+                .background(GeometryReader { inner in
+                    Color.clear.preference(key: ContentHeight.self, value: inner.size.height)
+                })
+        }
+        // So a short card neither rubber-bands nor claims the room it does not
+        // need.
+        .scrollBounceBehavior(.basedOnSize)
+        .frame(height: min(max(height, 1), ceiling))
+        .onPreferenceChange(ContentHeight.self) { height = $0 }
+    }
+}
+
+/// How tall a `CappedScroll`'s content is, reported from inside it.
+private struct ContentHeight: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 /// The three dots that mean the agent is thinking. Deliberately quiet: a spinner
 /// implies a wait with an end, and a turn can run for minutes.
 public struct Thinking: View {

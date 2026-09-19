@@ -188,6 +188,9 @@ public final class MachineSession {
     }
 
     public func stop() {
+        // Text that already arrived is folded before the door closes, so
+        // stopping on a stream costs the transcript nothing.
+        flushHeld()
         pump?.cancel()
         pump = nil
         Task { [tunnel] in await tunnel.stop() }
@@ -297,8 +300,16 @@ public final class MachineSession {
         switch type {
         case "session/event":
             guard let event = payload["event"] else { return }
-            let conversation = existing(sessionId)
-            conversation?.apply(event: event, view: payload["view"])
+            // Streamed chunks are held and folded together — see `hold`. Anything
+            // else applies at once, and only after the chunks before it: the fold
+            // reads events in order, and the message that ends a step must not
+            // overtake the chunks that built it.
+            if event["type"]?.stringValue == "assistant/chunk" {
+                hold(event, view: payload["view"], sessionId: sessionId)
+                return
+            }
+            flushHeld()
+            existing(sessionId)?.apply(event: event, view: payload["view"])
             touch(sessionId, event: event)
         case "approval/requested":
             let request = ApprovalRequest(
@@ -336,6 +347,59 @@ public final class MachineSession {
         default:
             // `session/subscribed`, `session/jobs`, and anything a plugin adds.
             break
+        }
+    }
+
+    // MARK: - Streaming
+
+    /// Streamed chunks waiting for the next flush, in arrival order.
+    private var held: [(event: JSONValue, view: JSONValue?, sessionId: String)] = []
+    /// The flush already scheduled, if any. One at a time, so the cadence is the
+    /// interval rather than the arrival rate.
+    private var flushing: Task<Void, Never>?
+
+    /// How long streamed chunks are held before being folded together.
+    ///
+    /// One frame at 30 Hz. Short enough that text still reads as continuous,
+    /// long enough that the transcript changes at a rate a screen can show.
+    private static let flushInterval = Duration.milliseconds(33)
+
+    /// Hold one streamed chunk until the next flush.
+    ///
+    /// A model emits chunks far faster than a screen refreshes — two hundred a
+    /// second is ordinary, and the harness in the field reports was doing
+    /// exactly that. Folded one at a time, each chunk is a change to the
+    /// observable transcript, and `@Observable` turns each change into a SwiftUI
+    /// update pass: the streaming bubble is re-parsed and re-laid-out for every
+    /// token. Measured on the starvation rig (condition K: 200 chunks a second
+    /// into a 190 KB open bubble) that cost 42% of all frames, and a TestFlight
+    /// build was killed by iOS for spending more than its ten-second scene-update
+    /// allowance inside `AttributeGraph`.
+    ///
+    /// Holding them for one frame changes nothing about the result: the fold is
+    /// order-preserving and `Conversation.apply(event:)` is additive, so a batch
+    /// folded at once is the same transcript as the chunks folded one by one.
+    private func hold(_ event: JSONValue, view: JSONValue?, sessionId: String) {
+        held.append((event: event, view: view, sessionId: sessionId))
+        guard flushing == nil else { return }
+        flushing = Task { [weak self] in
+            try? await Task.sleep(for: MachineSession.flushInterval)
+            guard !Task.isCancelled else { return }
+            self?.flushHeld()
+        }
+    }
+
+    /// Fold everything held, now. Also called before any event that is not a
+    /// chunk, so a stream can never be applied out of order.
+    private func flushHeld() {
+        flushing?.cancel()
+        flushing = nil
+        guard !held.isEmpty else { return }
+        let batch = held
+        held = []
+        for entry in batch {
+            // No `touch`: it answers to `user/message`, and a chunk is never one.
+            existing(entry.sessionId)?.apply(event: entry.event, view: entry.view)
         }
     }
 

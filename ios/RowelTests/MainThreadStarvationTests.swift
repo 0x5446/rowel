@@ -194,8 +194,9 @@ final class MainThreadStarvationTests: XCTestCase {
     private let deltaHz = 35.0
     private let reasoningDeltas = 90
     private let textDeltas = 85
-    /// Measurement window: the 5 s of injection plus a tail for trailing work.
-    private let measureSeconds = 6.0
+    /// Measurement window: however long the injection takes, plus a tail for
+    /// trailing work. Derived rather than fixed, because the rate is now one of
+    /// the things a condition can vary.
 
     /// How big the open streaming bubble is when the stream starts. The field
     /// symptom came from a 178-step session; how much of it the current
@@ -263,6 +264,18 @@ final class MainThreadStarvationTests: XCTestCase {
         runExperiment(condition: "I", mountView: false, initiallyAtBottom: false, scale: .giant)
     }
 
+    // K: the same giant bubble as G/H, but injected at the rate the field
+    // symptom's harness actually streams — about two hundred tokens a second,
+    // not the thirty-five every other condition uses. If G and H looked calm it
+    // was only because they were starved of deltas, and the field symptom is
+    // "send a message and the screen stops answering".
+    func testK_giantStreamAtWireRate() {
+        runExperiment(
+            condition: "K", mountView: true, initiallyAtBottom: true, scale: .giant,
+            hz: 200, reasoningCount: 360, textCount: 240
+        )
+    }
+
     // J: not an A/B condition — a cost attribution. `MarkdownText` runs
     // `Markdown.parse` over the *entire* accumulated source on every render,
     // and every text delta is a render. This measures that parse alone, off
@@ -313,8 +326,13 @@ final class MainThreadStarvationTests: XCTestCase {
     // MARK: Runner
 
     private func runExperiment(
-        condition: String, mountView: Bool, initiallyAtBottom: Bool, scale: BubbleScale
+        condition: String, mountView: Bool, initiallyAtBottom: Bool, scale: BubbleScale,
+        hz: Double? = nil, reasoningCount: Int? = nil, textCount: Int? = nil
     ) {
+        let deltaHz = hz ?? self.deltaHz
+        let reasoningDeltas = reasoningCount ?? self.reasoningDeltas
+        let textDeltas = textCount ?? self.textDeltas
+        let measureSeconds = Double(reasoningDeltas + textDeltas) / deltaHz + 1.0
         let session = makeSession()
         let conversation = session.conversation(sessionId)
         var seq = 1

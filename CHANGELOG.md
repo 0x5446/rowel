@@ -22,6 +22,39 @@ the same decision.
   follows the Mac's own `permissions` projection rather than a local guess, so it
   cannot claim a mode the agent is not actually running under.
 
+- **A fast reply no longer freezes the screen.** The harness streams chunks far
+  faster than a screen refreshes — two hundred a second is ordinary, and the
+  field report that produced the diagnostic came from exactly that rate. Each
+  chunk was folded into the transcript on its own, and every change to the
+  transcript is a SwiftUI update pass: the bubble being written was re-parsed and
+  re-laid-out once per token. A TestFlight build was killed by iOS for spending
+  more than its ten-second scene-update allowance on the main thread inside
+  `AttributeGraph`, and the person holding the phone saw a screen that would not
+  scroll and a button that would not take a tap. Chunks are now held for one
+  frame and folded together — the transcript ends up identical, because the fold
+  is order-preserving and additive — following the tail is the scroll view's own
+  bottom anchor rather than a `scrollTo` per chunk (which was the other half of
+  the same cost: each call made the lazy stack lay itself out to the end again),
+  and the live line under "Thinking…" reads the end of the reasoning block rather
+  than all of it. Measured on the starvation rig at the rate the harness actually
+  streams (condition K, 200 chunks a second into a 190 KB open bubble): frames
+  delivered went from 58% to 83%, and the worst stall from 314 ms to 183 ms.
+
+- **A question card taller than the screen no longer hides its own Send
+  button, or its first question.** The card sits in a band above the composer —
+  an approval, a question, the queue — and that band was a plain stack: nothing
+  in it had a height cap and nothing in it could scroll. Three questions with
+  ten described options is taller than a phone, so the column overflowed at both
+  ends. The first options slid under the navigation bar where no drag could
+  reach them, and the composer and the card's Send button were pushed past the
+  bottom edge into the strip iOS keeps for the home gesture — where a tap is
+  the system's, not the button's, which is why Send looked dead rather than
+  merely low. The band now measures itself, takes at most half the screen, and
+  scrolls inside when its content needs more, and a question card keeps its
+  questions in a scroll region with the Send button pinned below them.
+  `InterruptLayoutTests` renders the real screen and fails if an accent-coloured
+  button is ever drawn inside the bottom inset again.
+
 - **Opening a conversation no longer says it is empty first.** The view was
   handed a conversation with no messages and no reason given, because the flag
   that says "still loading" was set one Task later — so every conversation
