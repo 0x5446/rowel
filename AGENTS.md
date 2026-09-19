@@ -45,6 +45,26 @@ npm run test:ios       # iOS：xcodegen 生成工程后跑 xcodebuild test（等
 
 6. **冲突怎么收**：先协商，谈定之后**由一方解完**，另一方不重复动。解完把结论写进提交信息或上面那份认领表，别让下一个会话重新推一遍。
 
+## 当两个人的改动纠缠在同一个文件里
+
+一个文件里混着两个会话的 hunk 时，`git commit -- <路径>` 拆不开：它是文件级的，会把别人的 hunk 一起提交。
+可行的是**临时索引**——它绕开共享索引，只把你挑出来的 hunk 交上去，别人的暂存与工作区一字节不动。
+（2026-09-19 实测可行：一个文件里 6 个 hunk 分属两个会话，筛出 3 个提交，共享索引与工作区均未变。）
+
+```bash
+export GIT_INDEX_FILE=/tmp/rowel-index-<你的会话>
+git read-tree HEAD                                    # 从当前 HEAD 起步，别用共享索引
+git diff HEAD -- path/to/File.swift > /tmp/all.patch   # 再按标记筛出属于你的 hunk
+git apply --cached /tmp/yours.patch                    # 只把你的那半放进临时索引
+git diff --cached --stat                               # 核对：只有你的文件与 hunk
+git commit -m "..."                                    # 落在当前分支上
+unset GIT_INDEX_FILE
+```
+
+判据只有内容层面的算数：你的提交里**不出现**别人的标记；提交后共享暂存区里**不出现**你的 hunk（不重复）、
+别人的 hunk **都还在**（不遗漏）。别用「提交前后共享索引 tree 同值」当判据——多人同时动手的树上，
+它变了不代表你动了别人的，没变也不代表那一瞬间没人在动。
+
 ## iOS 测试的一点环境事实
 
 - 沙箱更严的 agent 环境里，`xcodebuild` 可能因为 Swift 宏插件服务写不了工作区外而失败（报 `swift-plugin-server produced malformed response`，随后的一堆「requires conformance to Observable」都是它的连带错误）。这是权限问题，不是代码问题。
