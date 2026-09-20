@@ -259,6 +259,11 @@ struct SessionInfoView: View {
         }
         .foregroundStyle(.primary)
         .disabled(switching != nil)
+        .accessibilityIdentifier("access.\(option.value)")
+        // The checkmark is a picture, and a picture is not a state. Whoever is
+        // not reading the screen — VoiceOver, or the UI test in
+        // `RowelUITests/AccessMode.swift` — needs the current row to say so.
+        .accessibilityAddTraits(option.value == current ? .isSelected : [])
     }
 
     /// Ask the machine to switch this conversation, and say so if it refuses.
