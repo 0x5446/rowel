@@ -92,7 +92,11 @@ final class OpeningPosition: XCTestCase {
             )
             return
         }
-        XCTSkip("no conversation in the list had earlier pages to check")
+        // Thrown, not constructed. As a bare expression this was a discarded
+        // value: the test returned normally, Xcode reported success, and a run
+        // that checked nothing looked exactly like a run that checked and
+        // passed. That is the worst failure a test can have.
+        throw XCTSkip("no conversation in the list had earlier pages to check")
     }
 
     // MARK: - Helpers
