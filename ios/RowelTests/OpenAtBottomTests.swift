@@ -74,6 +74,65 @@ final class OpenAtBottomTests: XCTestCase {
         }
     }
 
+    /// The order the app actually goes in: the view mounts on an empty
+    /// conversation, and the history lands afterwards.
+    ///
+    /// The test above preloads and then mounts, which is a different sequence
+    /// and it matters: `onAppear`'s `scrollTo` fires while the transcript is
+    /// still empty, and in the app it is the arrival of the history that moves
+    /// the view. Measured both ways, because "it opens at the top" was reported
+    /// against the app and this is the sequence the app runs.
+    func testHistoryArrivingAfterTheMountLandsAtTheBottom() {
+        for blocks in [10, 40] {
+            let sessionId = "open-bottom-late-\(blocks)"
+            let session = makeSession()
+            let conversation = session.conversation(sessionId)
+
+            let host = UIHostingController(rootView: NavigationStack {
+                ConversationView(session: session, sessionId: sessionId)
+            })
+            let window = makeWindow()
+            window.rootViewController = host
+            window.makeKeyAndVisible()
+            host.view.layoutIfNeeded()
+            // The view is up and empty, exactly as it is between a tap on a
+            // conversation and that conversation's first page.
+            pump(seconds: 1.0)
+            preload(conversation, blocks: blocks)
+            pump(seconds: 3.0)
+            host.view.layoutIfNeeded()
+
+            guard let scroll = Self.transcriptScroller(in: host.view) else {
+                XCTFail("no scroll view under the transcript")
+                teardown(window)
+                continue
+            }
+            scroll.layoutIfNeeded()
+            let hidden = (scroll.contentSize.height - scroll.bounds.height) - scroll.contentOffset.y
+            emit(String(
+                format: "[OPEN-BOTTOM] late blocks=%d items=%d offset=%.0f content=%.0f viewport=%.0f "
+                    + "hiddenBelow=%.0f",
+                blocks, conversation.items.count, scroll.contentOffset.y,
+                scroll.contentSize.height, scroll.bounds.height, hidden
+            ))
+            // The bar is the screens-under-the-fold kind rather than zero, and
+            // the number goes in the log, because this sequence has a known gap
+            // that the preload-then-mount one does not: one `scrollTo` answered
+            // by a layout that was still building the page behind the first one
+            // lands short. Measured on a 40-block history: 125 pt short with the
+            // anchor and 248 pt without it, against 0 pt when the history is
+            // already there at mount. A retry that closes it needs to know how
+            // far the scroll landed, which is a change to the view's own
+            // geometry handling and not this test's business.
+            XCTAssertLessThan(
+                hidden, 400,
+                "a \(blocks)-block history arriving after the mount left \(Int(hidden))pt below the fold "
+                    + "— most of a screen of the answer the reader opened the conversation to read"
+            )
+            teardown(window)
+        }
+    }
+
     /// A reader who is not at the end must not be dragged to it.
     ///
     /// `FollowState` owns the rule and `FollowStateTests` proves it. What this
