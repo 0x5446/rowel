@@ -48,7 +48,7 @@ final class StreamFollowsTests: XCTestCase {
     private let endTolerance: CGFloat = 100
 
     func testWhileFollowingTheEndIsOnScreen() {
-        let (session, conversation) = mount(following: true)
+        let (_, conversation) = mount(following: true)
         guard let scroll = transcript() else { return XCTFail("no transcript scroll view; the measurement is void") }
         XCTAssertTrue(atEnd(scroll), "a conversation opened while following should open at its end")
         XCTAssertTrue(scroll.contentSize.height > scroll.bounds.height + 40, "the transcript must be long enough to scroll")
