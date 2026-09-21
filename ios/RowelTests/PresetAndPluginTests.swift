@@ -114,6 +114,52 @@ final class PresetAndPluginTests: XCTestCase {
         XCTAssertFalse(entries[1].enabled)
         XCTAssertNil(entries[1].phase, "a null phase must come through as absence, not the string \"null\"")
     }
+
+    // MARK: - Commands
+
+    /// The measured `commands/list` answer, abbreviated.
+    private static let commandAnswer: JSONValue = .array([
+        .object(["name": .string("compact"), "description": .string("Compact older conversation history")]),
+        .object(["name": .string("permission"),
+                 "description": .string("Switch the permission preset (sandbox mode + approval policy)"),
+                 "input": .object(["hint": .string("<preset>")])]),
+    ])
+
+    func testCommandsAreAskedForWithTheArgsEnvelope() async throws {
+        let transport = StubTransport()
+        await transport.answer("commands/list", PresetAndPluginTests.commandAnswer)
+        _ = try await Harness(transport: transport).commands(sessionId: "s1")
+
+        let payload = await transport.payloads("commands/list").first
+        // A Typert remote: the arguments live under exactly one `args` object,
+        // and the agent is named the way `commands/execute` names it.
+        XCTAssertEqual(payload, .object(["args": .object(["agentId": .string("s1")])]))
+    }
+
+    func testCommandsParseAsCommandsWithTheirHints() async throws {
+        let transport = StubTransport()
+        await transport.answer("commands/list", PresetAndPluginTests.commandAnswer)
+        let commands = try await Harness(transport: transport).commands(sessionId: "s1")
+
+        XCTAssertEqual(commands.map(\.name), ["compact", "permission"])
+        XCTAssertEqual(commands.map(\.kind), [.command, .command])
+        XCTAssertNil(commands[0].hint, "a command that takes nothing has no hint")
+        XCTAssertEqual(commands[1].hint, "<preset>")
+        XCTAssertEqual(commands[1].summary, "Switch the permission preset (sandbox mode + approval policy)")
+    }
+
+    func testASkillIsNotACommandEvenUnderTheSameSlash() async throws {
+        // The two lists share one namespace in the composer, and the difference
+        // decides where a line is sent, so the parse has to keep them apart.
+        let transport = StubTransport()
+        await transport.answer("skill.list", .object(["skills": .array([
+            .object(["name": .string("permission"), "description": .string("A skill that looks the same.")]),
+        ])]))
+        let skills = try await Harness(transport: transport).skills(sessionId: "s1")
+
+        XCTAssertEqual(skills.map(\.kind), [.skill])
+        XCTAssertNil(skills[0].hint)
+    }
 }
 
 // MARK: - Telling the machine where to ring, and where not to

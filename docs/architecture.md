@@ -613,7 +613,7 @@ prologue = "rowel-tunnel"        ← 稳定的协议族标识，永不变
 e2e         27（起真 Relay + 真 Bridle + 脚本手机）
               对真 dsh：配对、真实模型回复、重连重放、各种拒绝、版本协商
               对假 agent：审批与提问的完整往返（见下）
-UI          6（XCUITest，真机或模拟器，连真 Bridle）
+UI          7（XCUITest，真机或模拟器，连真 Bridle）
               证明：点了真的有反应
 ```
 
@@ -752,7 +752,7 @@ UI          6（XCUITest，真机或模拟器，连真 Bridle）
 | 显示一个新 projection | `Conversation.applyProjection` 一个 case + 视图 | 几十行 |
 | 支持一种新工具卡片 | `callPresentation`/`resultPresentation` + `ToolCardView` | 上百行 |
 | 访问模式切换 | `permissions` projection（读）+ `commands/execute` 跑 `/permission`（写）+ Session 面板 | 已做 |
-| 斜杠命令 | `commands/list` 列命令 + `commands/execute` 执行（**不是** `session.prompt`：斜杠开头的文本会被当成消息发给模型） | 上百行 |
+| 斜杠命令 | 已做：`commands/list` 进输入框菜单 + 命中命令走 `commands/execute`（**不是** `session.prompt`——斜杠开头的文本会被当成消息发给模型），结果由 `command/run|done` 折叠成一行 |
 | subagent | `subagent.*` 四个方法 + 取消列表过滤 | 数百行 |
 | 推送 | §10 六处 | 一天，卡付费账号 |
 | 定时任务 | §11 三处 | 一到两天，依赖推送 |

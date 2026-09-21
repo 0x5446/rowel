@@ -209,6 +209,23 @@ todos = data.todos[] 中每个有 content 且 status ∈ {pending, in_progress, 
 modelName = data.header.config.model ?? 保持原值
 ```
 
+### 3.10 `command/run` 与 `command/done`
+
+斜杠命令由客户端发起（`commands/execute`），机器把它的生命周期原样记进会话日志：`command/run` 在
+handler 之前、`command/done` 在结算之后，两者都不包在 turn 里。所以命令的结果不用等回包，它自己会
+沿着重放路径回来。
+
+```
+command/run:  running[data.commandId] = "/" + data.name + data.args      （记着，不画）
+command/done: line = running.removeValue(forKey: data.commandId)
+              text = [line, data.text].compactMap{}.filter{ !empty }.joined(" — ")
+              text 非空 → 追加一条 notice（kind = data.kind == "error" ? .failure : .info）
+```
+
+**为什么要配对**：`command/done` 只有 `commandId` 和结果，没有产生它的那行字。不配对的话屏幕上只有
+"preset read-only"，看不出是谁要求的。浏览器端跑的命令、或事后翻页加载进来的日志没有 `command/run`
+可配，这时只显示结果那半句——那也是这个会话自己的记录，总比没有强。
+
 ---
 
 ## 4. 分页

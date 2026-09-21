@@ -545,9 +545,19 @@ public final class MachineSession {
         conversation.subagentsKnown = found.available
     }
 
+    /// What the composer offers after a slash: the session's skills, and the
+    /// commands the machine will run for it.
+    ///
+    /// Two calls, and each is allowed to fail on its own. They are separate
+    /// mechanisms with separate ages — a dsh too old for `commands/list` still
+    /// has skills, and losing the commands costs a menu entry, not a session.
+    /// Both are fetched once per open: neither list changes mid-sentence, and a
+    /// request per keystroke would.
     private func loadCommands(_ conversation: Conversation) async {
-        guard let found = try? await harness.skills(sessionId: conversation.sessionId) else { return }
-        conversation.commands = found
+        async let skills = try? harness.skills(sessionId: conversation.sessionId)
+        async let commands = try? harness.commands(sessionId: conversation.sessionId)
+        if let found = await skills { conversation.skills = found }
+        if let found = await commands { conversation.machineCommands = found }
     }
 
     private func existing(_ sessionId: String) -> Conversation? {
@@ -727,6 +737,20 @@ public final class MachineSession {
     ///   a turn straight away, which was worth checking rather than assuming.
     public func send(sessionId: String, text: String, images: [PromptImage] = [], steer: Bool = false) async {
         let conversation = conversation(sessionId)
+        // A command is not a message. `/permission read-only` typed here has to
+        // reach `commands/execute`; sent as a prompt it would land in the log as
+        // ordinary words and start a turn with the model guessing what they
+        // meant. Only names the machine listed take this path, so a message that
+        // merely starts with a slash still goes where it always did.
+        //
+        // `steer` is deliberately not consulted: it is about the turn already
+        // running, and a command does not touch that turn — dsh runs it directly,
+        // which is the whole reason `/permission` works mid-answer. Honouring the
+        // flag here would turn the command back into words.
+        if images.isEmpty, let line = conversation.machineLine(for: text) {
+            await runCommand(line, sessionId: sessionId, conversation: conversation)
+            return
+        }
         // Where the optimistic copy goes depends on where the message is
         // actually going. A steer, or a send to an idle session, is claimed
         // immediately — the transcript is the truth about it. A queued send to
@@ -754,6 +778,36 @@ public final class MachineSession {
         } catch {
             conversation.dropPending(id: pendingId)
             problem = (error as? LocalizedError)?.errorDescription ?? "That message didn’t send."
+        }
+    }
+
+    /// Run a slash command against one session.
+    ///
+    /// No bubble goes up for this, and that is not an omission: the machine logs
+    /// the command itself (`command/run`, then `command/done`) and the
+    /// transcript draws the outcome from those events, so an optimistic copy
+    /// here would be a second, worse account of the same act.
+    ///
+    /// A refusal is shown where the words were typed rather than in the banner
+    /// over the app: the machine's own text names the reason — an unknown preset
+    /// lists the ones it has — and this is a reply to one message, not a fault of
+    /// the session.
+    private func runCommand(_ line: String, sessionId: String, conversation: Conversation) async {
+        do {
+            let ran = try await harness.command(sessionId: sessionId, line: line)
+            guard ran != nil else {
+                // The machine was asked for its commands and listed this one, so
+                // a name it does not know now means something changed underneath
+                // — a plugin unmounted. Said plainly, and the words are not sent
+                // to the model as a consolation: they are a command, and a model
+                // reading "/permission read-only" is exactly the wrong outcome.
+                let name = line.dropFirst().prefix { !$0.isWhitespace }
+                conversation.note("This Mac no longer has a /\(name) command.", kind: .failure)
+                return
+            }
+        } catch {
+            let said = (error as? LocalizedError)?.errorDescription ?? "That command didn’t run."
+            conversation.note(said, kind: .failure)
         }
     }
 

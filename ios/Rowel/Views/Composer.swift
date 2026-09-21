@@ -12,9 +12,10 @@ struct Composer: View {
     let running: Bool
     let planning: Bool
     let enabled: Bool
-    /// Slash commands this session offers. Empty is fine and common — a machine
-    /// with no skills installed, or a list that has not arrived yet.
-    var commands: [SkillCommand] = []
+    /// What this session offers after a slash: its skills and the commands the
+    /// machine will run for it. Empty is fine and common — a machine with
+    /// nothing installed, or a list that has not arrived yet.
+    var commands: [SlashCommand] = []
     let onSend: (String, [PromptImage]) -> Void
     let onStop: () -> Void
 
@@ -23,6 +24,8 @@ struct Composer: View {
     @State private var images: [PromptImage] = []
     @State private var loadingImages = false
     @State private var focused = false
+    /// Why the draft was not sent, when the reason is about the draft itself.
+    @State private var refusal: String?
 
     var body: some View {
         VStack(spacing: Metrics.tight) {
@@ -36,6 +39,14 @@ struct Composer: View {
                     text = "/\(command.name) "
                 }
                 .padding(.horizontal, -Metrics.gutter)
+            }
+            if let refusal {
+                Text(refusal)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(Palette.warn)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("composer.refusal")
             }
             if !images.isEmpty || loadingImages {
                 attachments
@@ -84,6 +95,9 @@ struct Composer: View {
         .padding(.bottom, Metrics.tight)
         .background(.bar)
         .task(id: picked.count) { await loadPicked() }
+        // The line is about a draft that no longer exists once the person touches
+        // the field again, and a warning that outlives its cause is noise.
+        .onChange(of: text) { refusal = nil }
     }
 
     private var prompt: String {
@@ -153,6 +167,16 @@ struct Composer: View {
     private func send() {
         let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !body.isEmpty || !images.isEmpty else { return }
+        // A command takes no attachments, and nothing here can un-attach one
+        // after the fact. So the draft stays put and the line says why: refusing
+        // is the only option that neither drops the photo nor hands the command
+        // to the model as words. dsh's own composer refuses the same way, with
+        // the same reason.
+        if let why = draftRefusal(text: body, hasImages: !images.isEmpty, among: commands) {
+            refusal = why
+            return
+        }
+        refusal = nil
         onSend(body, images)
         text = ""
         images = []

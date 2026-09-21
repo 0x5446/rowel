@@ -808,6 +808,173 @@ final class SessionAccessTests: XCTestCase {
     }
 }
 
+// MARK: - Slash commands typed into the composer
+
+/// `/permission read-only` typed in the composer has to reach the machine's
+/// command path; everything else beginning with a slash has to keep going to the
+/// model as a message.
+///
+/// Both mistakes are silent. A command sent as a prompt is handed to the model
+/// as words — measured, it lands in the log as an ordinary `user/message` and
+/// starts a turn — and a message mistaken for a command is never delivered to
+/// anyone. So what is asserted here is which call was made, not what it looked
+/// like on screen.
+@MainActor
+final class CommandSendTests: XCTestCase {
+    private var suite: UserDefaults!
+    private var suiteName: String!
+    private var stub: StubTransport!
+
+    override func setUp() {
+        super.setUp()
+        suiteName = "rowel.command.send.tests.\(UUID().uuidString)"
+        suite = UserDefaults(suiteName: suiteName)
+        stub = StubTransport()
+    }
+
+    override func tearDown() {
+        suite.removePersistentDomain(forName: suiteName)
+        super.tearDown()
+    }
+
+    private func session() -> MachineSession {
+        let bundle = PairingBundle(
+            relay: "https://relay.invalid", device: "device-1", key: "", token: "", name: "Test Mac"
+        )
+        return MachineSession(
+            machine: PairedMachine(bundle: bundle),
+            identity: .generate(),
+            deviceName: "Test iPhone",
+            clientVersion: "rowel-tests/1",
+            pairingToken: nil,
+            notifier: Notifier(center: nil),
+            defaults: suite,
+            transport: stub
+        )
+    }
+
+    private var permission: SlashCommand {
+        SlashCommand(command: .object([
+            "name": .string("permission"),
+            "description": .string("Switch the permission preset"),
+            "input": .object(["hint": .string("<preset>")]),
+        ]))!
+    }
+
+    private func notices(_ conversation: Conversation) -> [Notice] {
+        conversation.items.compactMap { if case .notice(let n) = $0 { return n } else { return nil } }
+    }
+
+    func testAListedCommandIsRunRatherThanSentToTheModel() async {
+        await stub.answer("commands/execute", .object([
+            "commandId": .string("cmd-1"),
+            "result": .object(["kind": .string("success"), "text": .string("preset read-only")]),
+        ]))
+        let machine = session()
+        let conversation = machine.conversation("s1")
+        conversation.machineCommands = [permission]
+
+        await machine.send(sessionId: "s1", text: "/permission read-only")
+
+        let ran = await stub.count("commands/execute")
+        let prompted = await stub.count("session.prompt")
+        XCTAssertEqual(ran, 1)
+        XCTAssertEqual(prompted, 0, "a command sent as a prompt is words the model has to guess at")
+        let sent = await stub.payloads("commands/execute").last
+        XCTAssertEqual(sent?.path("args", "line")?.stringValue, "/permission read-only")
+        XCTAssertEqual(sent?.path("args", "agentId")?.stringValue, "s1")
+        // No bubble goes up: the machine logs the command itself and the
+        // transcript draws the outcome from those events, so an optimistic copy
+        // would be a second and worse account of the same act.
+        XCTAssertTrue(conversation.items.isEmpty)
+    }
+
+    func testAnUnlistedSlashLineStillReachesTheModel() async {
+        let machine = session()
+        let conversation = machine.conversation("s1")
+        conversation.machineCommands = [permission]
+
+        await machine.send(sessionId: "s1", text: "/tmp is full")
+
+        let ran = await stub.count("commands/execute")
+        let prompted = await stub.count("session.prompt")
+        XCTAssertEqual(prompted, 1, "a message that merely starts with a slash is still a message")
+        XCTAssertEqual(ran, 0)
+    }
+
+    func testASkillIsStillAMessage() async {
+        // The two lists share one slash. A skill is text the model reads, so it
+        // must not be routed to the machine even though the composer offers it.
+        let machine = session()
+        let conversation = machine.conversation("s1")
+        conversation.machineCommands = [permission]
+        conversation.skills = [SlashCommand(.object([
+            "name": .string("bro"), "description": .string("Re-explain simply."),
+        ]))!]
+
+        await machine.send(sessionId: "s1", text: "/bro")
+
+        let prompted = await stub.count("session.prompt")
+        let ran = await stub.count("commands/execute")
+        XCTAssertEqual(prompted, 1)
+        XCTAssertEqual(ran, 0)
+    }
+
+    func testARefusalIsLeftWhereTheWordsWereTyped() async {
+        let said = "unknown preset \"nonsense\" (available: read-only, workspace-write, danger-full-access)"
+        await stub.answer("commands/execute", .object([
+            "commandId": .string("cmd-2"),
+            "result": .object(["kind": .string("error"), "text": .string(said)]),
+        ]))
+        let machine = session()
+        let conversation = machine.conversation("s1")
+        conversation.machineCommands = [permission]
+
+        await machine.send(sessionId: "s1", text: "/permission nonsense")
+
+        // The machine's own words, in the transcript, and nothing sent to the
+        // model as a consolation.
+        XCTAssertEqual(notices(conversation).map(\.text), [said])
+        XCTAssertEqual(notices(conversation).first?.kind, .failure)
+        let prompted = await stub.count("session.prompt")
+        XCTAssertEqual(prompted, 0)
+    }
+
+    func testACommandTheMachineNoLongerHasSaysSoRatherThanTryingTheModel() async {
+        // `commands/execute` answers a bare `undefined` for a name it does not
+        // know — a plugin unmounted between the listing and the send. The words
+        // are still a command, so they are not handed to the model.
+        let machine = session()
+        let conversation = machine.conversation("s1")
+        conversation.machineCommands = [permission]
+
+        await machine.send(sessionId: "s1", text: "/permission read-only")
+
+        XCTAssertEqual(notices(conversation).map(\.text), ["This Mac no longer has a /permission command."])
+        let prompted = await stub.count("session.prompt")
+        XCTAssertEqual(prompted, 0)
+    }
+
+    func testACommandStillRunsWhileATurnIsGoing() async {
+        // A command is not part of the turn: dsh runs it directly. It must not be
+        // queued behind the model, which is where a steered prompt would put it.
+        await stub.answer("commands/execute", .object([
+            "commandId": .string("cmd-3"),
+            "result": .object(["kind": .string("success"), "text": .string("preset read-only")]),
+        ]))
+        let machine = session()
+        let conversation = machine.conversation("s1")
+        conversation.machineCommands = [permission]
+
+        await machine.send(sessionId: "s1", text: "/permission read-only", steer: true)
+
+        let prompted = await stub.count("session.prompt")
+        let ran = await stub.count("commands/execute")
+        XCTAssertEqual(ran, 1)
+        XCTAssertEqual(prompted, 0)
+    }
+}
+
 // MARK: - Archiving
 
 /// Archiving is optimistic, which is only safe if the undo is real — and this

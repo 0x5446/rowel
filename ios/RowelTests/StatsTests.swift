@@ -187,7 +187,7 @@ final class CommandPrefixTests: XCTestCase {
     }
 
     func testSummaryTakesTheFirstSentence() {
-        let command = SkillCommand(.object([
+        let command = SlashCommand(.object([
             "name": .string("bro"),
             "description": .string("Re-explain the previous message simply. Use /bro to get a plain version."),
         ]))
@@ -197,7 +197,7 @@ final class CommandPrefixTests: XCTestCase {
     }
 
     func testSummaryHandlesAChineseFullStop() {
-        let command = SkillCommand(.object([
+        let command = SlashCommand(.object([
             "name": .string("agently-mail"),
             "description": .string("通过命令行操作邮件：发送、回复、转发。当用户需要邮件操作时使用。"),
         ]))
@@ -205,7 +205,194 @@ final class CommandPrefixTests: XCTestCase {
     }
 
     func testANamelessEntryIsDropped() {
-        XCTAssertNil(SkillCommand(.object(["description": .string("no name")])))
+        XCTAssertNil(SlashCommand(.object(["description": .string("no name")])))
+    }
+}
+
+/// Which slash lines the machine runs, and which stay messages.
+///
+/// This is the decision that keeps the composer honest: a command sent as a
+/// prompt is handed to the model as words (measured — it lands in the log as an
+/// ordinary user message), and a message mistaken for a command never reaches
+/// anyone. Both mistakes are silent, so the table is the test.
+@MainActor
+final class MachineCommandRoutingTests: XCTestCase {
+    private func conversation() -> Conversation {
+        Conversation(sessionId: "s1", title: "t", cwd: "/tmp")
+    }
+
+    private func withCommands() -> Conversation {
+        let c = conversation()
+        c.machineCommands = [
+            SlashCommand(command: .object([
+                "name": .string("permission"),
+                "description": .string("Switch the permission preset"),
+                "input": .object(["hint": .string("<preset>")]),
+            ])),
+            SlashCommand(command: .object([
+                "name": .string("compact"),
+                "description": .string("Compact older conversation history"),
+            ])),
+        ].compactMap { $0 }
+        c.skills = [SlashCommand(.object([
+            "name": .string("bro"),
+            "description": .string("Re-explain the previous message simply."),
+        ]))].compactMap { $0 }
+        return c
+    }
+
+    func testAListedCommandIsRunWithItsArguments() {
+        XCTAssertEqual(withCommands().machineLine(for: "/permission read-only"), "/permission read-only")
+        XCTAssertEqual(withCommands().machineLine(for: "/compact"), "/compact")
+        // Trailing whitespace is the keyboard's, not the command's.
+        XCTAssertEqual(withCommands().machineLine(for: "  /compact  "), "/compact")
+    }
+
+    func testASkillIsStillAMessage() {
+        // A skill is text the model reads. Routing it to `commands/execute`
+        // would turn the one mechanism that works today into a refusal.
+        XCTAssertNil(withCommands().machineLine(for: "/bro"))
+        XCTAssertNil(withCommands().machineLine(for: "/bro explain this"))
+    }
+
+    func testAnUnlistedSlashLineIsStillAMessage() {
+        let c = withCommands()
+        // A path, a sentence, a name the machine never offered: all of these
+        // went to the model before commands were routable and must keep going.
+        XCTAssertNil(c.machineLine(for: "/tmp is full"))
+        XCTAssertNil(c.machineLine(for: "/permissions are odd"))
+        XCTAssertNil(c.machineLine(for: "look at /etc/hosts"))
+        XCTAssertNil(c.machineLine(for: ""))
+    }
+
+    func testAMissingNameIsNotAMatch() {
+        // `permission` is listed; `permission-please` is not, and a prefix is not
+        // a command. Without the exact comparison, every long word starting with
+        // a command name would be swallowed.
+        XCTAssertNil(withCommands().machineLine(for: "/permission-please"))
+    }
+
+    func testAMachineThatListsNothingRoutesNothing() {
+        // An older dsh has no `commands/list`. Everything stays a message, which
+        // is exactly what the app did before this existed.
+        XCTAssertNil(conversation().machineLine(for: "/permission read-only"))
+    }
+
+    func testASkillUnderTheSameSlashIsNotACommand() {
+        // The composer offers both lists under one slash, and only one of them is
+        // run by the machine. A list where the same name exists as a skill must
+        // not route.
+        let named = machineCommand(in: "/permission read-only", among: [
+            SlashCommand(.object(["name": .string("permission"), "description": .string("a skill")]))!,
+        ])
+        XCTAssertNil(named)
+    }
+
+    func testTheCommandIsFoundWithOrWithoutArguments() {
+        let commands = withCommands().machineCommands
+        XCTAssertEqual(machineCommand(in: "/permission", among: commands)?.name, "permission")
+        XCTAssertEqual(machineCommand(in: "/permission read-only", among: commands)?.name, "permission")
+        XCTAssertEqual(machineCommand(in: "/compact", among: commands)?.name, "compact")
+        XCTAssertNil(machineCommand(in: "/", among: commands), "a bare slash names nothing yet")
+    }
+}
+
+/// What the composer refuses before anything leaves the phone.
+@MainActor
+final class DraftRefusalTests: XCTestCase {
+    private let permission = SlashCommand(command: .object([
+        "name": .string("permission"),
+        "description": .string("Switch the permission preset"),
+    ]))!
+
+    func testACommandCarryingAPhotoIsRefused() {
+        // A command declares no image input, and there is no way to un-attach a
+        // photo after it has been sent. Sending it as a message instead would
+        // hand the model the command line as words, which is the failure this
+        // whole path exists to avoid.
+        let why = draftRefusal(text: "/permission read-only", hasImages: true, among: [permission])
+        XCTAssertEqual(why, "A /permission command cannot carry a photo. Remove the picture and send it again.")
+    }
+
+    func testEverythingElseWithAPhotoIsSent() {
+        // A skill is text and reads a photo like any other message.
+        let skill = SlashCommand(.object(["name": .string("bro"), "description": .string("simpler")]))!
+        XCTAssertNil(draftRefusal(text: "/bro explain this", hasImages: true, among: [skill, permission]))
+        XCTAssertNil(draftRefusal(text: "look at this", hasImages: true, among: [permission]))
+        XCTAssertNil(draftRefusal(text: "/tmp is full", hasImages: true, among: [permission]))
+    }
+
+    func testACommandWithNoPhotoIsSent() {
+        XCTAssertNil(draftRefusal(text: "/permission read-only", hasImages: false, among: [permission]))
+    }
+}
+
+/// What a command leaves behind in the transcript.
+@MainActor
+final class CommandOutcomeTests: XCTestCase {
+    private func conversation() -> Conversation {
+        Conversation(sessionId: "s1", title: "t", cwd: "/tmp")
+    }
+
+    private func event(_ seq: Int, _ type: String, _ data: JSONValue) -> JSONValue {
+        .object(["type": .string(type), "seq": .number(Double(seq)), "data": data])
+    }
+
+    private func notices(_ c: Conversation) -> [Notice] {
+        c.items.compactMap { if case .notice(let n) = $0 { return n } else { return nil } }
+    }
+
+    func testTheOutcomeIsPairedWithTheLineThatProducedIt() {
+        let c = conversation()
+        c.apply(event: event(1, "command/run", .object([
+            "commandId": .string("cmd-1"),
+            "name": .string("permission"),
+            "args": .string(" read-only"),
+        ])), view: nil)
+        c.apply(event: event(2, "command/done", .object([
+            "commandId": .string("cmd-1"),
+            "kind": .string("success"),
+            "text": .string("preset read-only"),
+        ])), view: nil)
+
+        // The done event carries an id and an outcome, never the words: without
+        // the pairing the transcript says "preset read-only" and nothing about
+        // what was asked.
+        XCTAssertEqual(notices(c).map(\.text), ["/permission read-only — preset read-only"])
+        XCTAssertEqual(notices(c).first?.kind, .info)
+    }
+
+    func testARefusalIsALineThePersonCanRead() {
+        let c = conversation()
+        c.apply(event: event(1, "command/run", .object([
+            "commandId": .string("cmd-2"),
+            "name": .string("permission"),
+            "args": .string(" nonsense"),
+        ])), view: nil)
+        c.apply(event: event(2, "command/done", .object([
+            "commandId": .string("cmd-2"),
+            "kind": .string("error"),
+            "text": .string("unknown preset \"nonsense\" (available: read-only, workspace-write)"),
+        ])), view: nil)
+
+        XCTAssertEqual(notices(c).first?.kind, .failure)
+        XCTAssertEqual(
+            notices(c).first?.text,
+            "/permission nonsense — unknown preset \"nonsense\" (available: read-only, workspace-write)"
+        )
+    }
+
+    func testAnOutcomeWhoseRunWasNeverSeenStillGetsALine() {
+        // A command run from the browser, or a transcript page loaded after the
+        // fact, arrives as a done event with no run before it.
+        let c = conversation()
+        c.apply(event: event(1, "command/done", .object([
+            "commandId": .string("cmd-3"),
+            "kind": .string("success"),
+            "text": .string("preset read-only"),
+        ])), view: nil)
+
+        XCTAssertEqual(notices(c).map(\.text), ["preset read-only"])
     }
 }
 

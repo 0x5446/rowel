@@ -354,7 +354,7 @@ struct ConversationView: View {
                 running: conversation.running,
                 planning: conversation.planning,
                 enabled: session.harnessReachable,
-                commands: conversation.commands,
+                commands: conversation.slashCommands,
                 onSend: { text, images in
                     follow.reachedEnd()
                     Task { await session.send(sessionId: sessionId, text: text, images: images) }

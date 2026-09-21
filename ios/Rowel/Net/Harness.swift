@@ -442,13 +442,32 @@ public struct Harness: Sendable {
         return (children, value["parentAvailable"]?.boolValue ?? false)
     }
 
-    /// The slash commands available in a session.
+    /// The skills available in a session.
     ///
     /// Per session rather than per machine: skills can be scoped, and asking
     /// the machine in general would offer names that turn out not to work here.
-    public func skills(sessionId: String) async throws -> [SkillCommand] {
+    public func skills(sessionId: String) async throws -> [SlashCommand] {
         let value = try await transport.call("skill.list", .object(["sessionId": .string(sessionId)]))
-        return (value["skills"]?.arrayValue ?? []).compactMap(SkillCommand.init)
+        return (value["skills"]?.arrayValue ?? []).compactMap { SlashCommand($0) }
+    }
+
+    /// The commands the machine will run for a session: `/permission`,
+    /// `/compact`, `/goal`, and whatever a mounted plugin registers.
+    ///
+    /// A different list from `skills`, from a different method, because they are
+    /// different mechanisms: a skill is text the model reads, a command is
+    /// something the machine executes (`commands/execute`). The composer offers
+    /// both under one slash, and needs to know which is which before it sends.
+    ///
+    /// A Typert remote, so the arguments live under one `args` object — the same
+    /// envelope as `pluginInventory/list` and `commands/execute`. An older dsh
+    /// has no such method: the call fails and the composer simply offers skills,
+    /// which is what it did before.
+    public func commands(sessionId: String) async throws -> [SlashCommand] {
+        let value = try await transport.call("commands/list", .object([
+            "args": .object(["agentId": .string(sessionId)]),
+        ]))
+        return (value.arrayValue ?? []).compactMap(SlashCommand.init(command:))
     }
 
     // MARK: - Models

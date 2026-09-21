@@ -44,9 +44,36 @@ public final class Conversation {
     public private(set) var contextBreakdown: ContextBreakdown?
     /// How much the agent may touch, and what else it could be set to.
     public private(set) var permissions: PermissionChoice?
-    /// Slash commands this session offers. Fetched once; skills do not
-    /// appear mid-sentence, and a request per keystroke would.
-    public var commands: [SkillCommand] = []
+    /// Skills this session offers, from `skill.list`. Fetched once; skills do
+    /// not appear mid-sentence, and a request per keystroke would.
+    public var skills: [SlashCommand] = []
+    /// Commands the *machine* will run for this session, from `commands/list`.
+    ///
+    /// Kept apart from the skills because sending them is a different act: a
+    /// skill is text the model reads, a command is handed to `commands/execute`.
+    /// `machineLine(for:)` is the whole of that decision.
+    public var machineCommands: [SlashCommand] = []
+
+    /// Everything the composer offers after a slash, commands first.
+    ///
+    /// Commands first because they are the ones with a right answer — a skill
+    /// name is a word the model may or may not know, while `/permission` with no
+    /// argument prints what it is currently set to.
+    public var slashCommands: [SlashCommand] { machineCommands + skills }
+
+    /// The command line to run on the machine, when `text` names one.
+    ///
+    /// Only a name the machine listed counts, and `machineCommand(in:among:)` is
+    /// where that is decided — the composer asks the same question before it
+    /// sends. Everything else that starts with a slash — a path, a sentence, a
+    /// skill — has to keep going to the model as a message, which is what the app
+    /// did before commands were routable and what a stray `/tmp is full` still
+    /// needs. An older dsh that lists no commands therefore routes nothing, and
+    /// loses nothing.
+    public func machineLine(for text: String) -> String? {
+        guard machineCommand(in: text, among: machineCommands) != nil else { return nil }
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
     /// Children this session spawned, and whether the machine could say.
     public var subagents: [SubagentChild] = []
     public var subagentsKnown = false
@@ -75,6 +102,9 @@ public final class Conversation {
     private var toolIndex: [String: Int] = [:]
     /// Event sequences already folded.
     private var seen: Set<Int> = []
+    /// Command lines that have started and not yet finished, by the machine's
+    /// command id — the join between `command/run` and `command/done`.
+    private var runningCommands: [String: String] = [:]
     /// Projection watermarks, so an out-of-order projection frame cannot go backwards.
     private var projectionSeq: [String: Int] = [:]
     /// Optimistic bubbles, by id, holding the text they were shown with.
@@ -212,6 +242,33 @@ public final class Conversation {
                 if let detail, !detail.isEmpty {
                     append(.notice(Notice(id: "n\(seq)", kind: .failure, text: detail, at: at)))
                 }
+            }
+        case "command/run":
+            // Remembered rather than drawn: `command/done` follows within the
+            // round trip and is the half with something to say. The pairing is
+            // what makes that half readable — the done event carries an id and
+            // an outcome, not the words that produced them.
+            if let id = data["commandId"]?.stringValue {
+                let name = data["name"]?.stringValue ?? ""
+                let args = data["args"]?.stringValue ?? ""
+                runningCommands[id] = "/\(name)\(args)"
+            }
+        case "command/done":
+            let id = data["commandId"]?.stringValue ?? ""
+            let line = runningCommands.removeValue(forKey: id)
+            let said = data["text"]?.stringValue ?? ""
+            // A command that was run from the browser, or from a log page
+            // loaded after the fact, has no `command/run` here to pair with. The
+            // outcome is still worth a line — it is the session's own record of
+            // what happened — so it goes out on its own.
+            let text = [line, said].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " — ")
+            if !text.isEmpty {
+                append(.notice(Notice(
+                    id: "cmd-\(seq)",
+                    kind: data["kind"]?.stringValue == "error" ? .failure : .info,
+                    text: text,
+                    at: at
+                )))
             }
         case "user/message":
             appendUserMessage(data, seq: seq, at: at)

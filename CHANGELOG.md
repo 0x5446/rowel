@@ -9,6 +9,22 @@ the same decision.
 
 ## Unreleased
 
+- **A command typed into the message field is now run, instead of being handed
+  to the agent as words.** The composer has always offered skills under a slash,
+  and for a skill that is the whole mechanism: it is text, and the model reads
+  it. A *command* is not text — `/permission`, `/compact`, `/goal`, `/plan` and
+  `/export` are things the Mac runs — and a `session.prompt` carrying a slash
+  line lands in the log as an ordinary user message and starts a turn. So typing
+  `/permission read-only` used to send those words to the model, which quietly
+  did nothing. The list now comes from the machine's own `commands/list`, so it
+  also says what a command takes (`/permission <preset>`); a line naming one of
+  them goes to the command path; and the machine's answer appears in the
+  transcript as its own line — `/permission read-only — preset read-only`.
+  Everything else still goes to the model, including a path, a sentence, a
+  skill, and a command name the Mac does not list. A command with a photo
+  attached is refused with a line saying so: a command takes no attachments, and
+  nothing can un-attach one once it has been sent.
+
 - **A running conversation's access mode can now be changed from the phone.**
   Session ▸ Access was a badge that said the mode is fixed when a conversation
   starts, and that was wrong — it was measured through the only write the app
