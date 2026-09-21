@@ -181,7 +181,17 @@ switch (command) {
     break
   }
   case 'ratings': {
-    const declaration = await call('GET', `/v1/apps/${APP_ID}/ageRatingDeclaration`)
+    // The declaration hangs off the app *info*, not the app. Apple moved it, and
+    // `/v1/apps/<id>/ageRatingDeclaration` now answers 404 PATH_ERROR — "The
+    // relationship 'ageRatingDeclaration' does not exist" — which reads like a
+    // missing questionnaire rather than a moved one.
+    const infos = await call('GET', `/v1/apps/${APP_ID}/appInfos`)
+    const info = infos.data[0]
+    if (info === undefined) {
+      process.stderr.write('asc: this app has no app info to read a rating from\n')
+      process.exit(1)
+    }
+    const declaration = await call('GET', `/v1/appInfos/${info.id}/ageRatingDeclaration`)
     process.stdout.write(`${declaration.data.id}\n${JSON.stringify(declaration.data.attributes, null, 2)}\n`)
     break
   }

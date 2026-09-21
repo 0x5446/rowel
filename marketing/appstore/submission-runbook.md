@@ -34,7 +34,13 @@ key), `ios/ExportOptions.plist` method `app-store-connect`.
    Submit. Usually instant.
 2. Team Keys tab → **Generate API Key**:
    - Name: `rowel-release` (reference only)
-   - Access: **App Manager** (enough for upload + submit; don't mint Admin)
+   - Access: **Admin**. App Manager is enough to upload and to submit, but not
+     to *export*: `xcodebuild -exportArchive` provisions the distribution
+     certificate through cloud signing and the App Manager key stops at
+     `Cloud signing permission error` + `No signing certificate "iOS
+     Distribution" found` (measured 2026-09-21: same team, same machine, same
+     archive — only the key's role differed). This account carries both
+     `rowel-release` (App Manager) and `rowel-release-admin` (Admin).
 3. Record three things:
    - **Issuer ID** (UUID at the top of the Keys page)
    - **Key ID** (10 chars, on the key's row)
@@ -91,9 +97,13 @@ export ASC_KEY_ID=<Key ID>
 export ASC_ISSUER_ID=<Issuer ID>
 export ASC_KEY_PATH=~/.appstoreconnect/private_keys/AuthKey_<Key ID>.p8
 
-# Dry run first: archive + export only, catches signing issues locally.
-# NOTE: first run auto-creates an Apple Distribution certificate on the
-# account (via -allowProvisioningUpdates) — expected, one-time.
+# Dry run first: archive + export only, catches signing issues locally. It
+# needs the key above to be exported: --no-upload does not upload, but the
+# *export* is exactly the step that provisions the distribution certificate
+# through cloud signing, so without a key the run can only reach the archive
+# and then stops at "No Accounts". The first run that carries a key creates
+# an Apple Distribution certificate on the account (via
+# -allowProvisioningUpdates) — expected, one-time.
 ./ios/release.sh --no-upload
 
 # Real thing: archive → export → altool validate → altool upload.

@@ -10,13 +10,22 @@
 #
 # Usage:
 #   ios/release.sh                 archive, export, upload
-#   ios/release.sh --no-upload     archive and export only, leave the .ipa
+#   ios/release.sh --no-upload     archive and export only, leave the .ipa.
+#                                  Give it the key as well, or the export cannot
+#                                  sign itself and the run stops there.
 #
 # Environment:
-#   ROWEL_TEAM_ID        the paid team's 10-character id. NOT the Personal Team.
+#   ROWEL_TEAM_ID        the 10-character id of the team the app ships under.
+#                        Check it on developer.apple.com → Account → Membership
+#                        details rather than assuming the paid program uses a
+#                        different id from the old personal team: on this
+#                        account it does not.
 #   ASC_KEY_ID           the App Store Connect key id, from the key's row.
 #   ASC_ISSUER_ID        the issuer id, shown once above the key list.
 #   ASC_KEY_PATH         path to the AuthKey_<id>.p8. Downloadable exactly once.
+#                        The key's role must be Admin: the export provisions the
+#                        distribution certificate through cloud signing, and an
+#                        App Manager key is refused there.
 #   ROWEL_BUILD          build number to stamp. Defaults to the commit count,
 #                        which rises monotonically and needs no bookkeeping.
 #
@@ -40,12 +49,25 @@ missing() {
   exit 1
 }
 
-: "${ROWEL_TEAM_ID:?release: \$ROWEL_TEAM_ID is not set. It is the paid team, not the Personal Team.}"
-if [ "$UPLOAD" = 1 ]; then
+: "${ROWEL_TEAM_ID:?release: \$ROWEL_TEAM_ID is not set. It is the 10-character id of the team the app ships under — check Membership details; on this account the paid program kept the id the personal team had.}"
+
+# Take the key whenever it is offered, `--no-upload` included. The export is the
+# step that needs it most: `-allowProvisioningUpdates` creates the distribution
+# certificate through cloud signing, and with no key that step stops at
+# "No Accounts" plus "No signing certificate \"iOS Distribution\" found" on a
+# machine with no Apple ID signed into Xcode — so a keyless `--no-upload` run
+# could never validate an export, only an archive. Only *insist* on the key when
+# there is an upload to authorise; a `--no-upload` run given no key behaves
+# exactly as it always did.
+HAVE_KEY=0
+if [ -n "${ASC_KEY_ID:-}" ] || [ -n "${ASC_ISSUER_ID:-}" ] || [ -n "${ASC_KEY_PATH:-}" ]; then
+  HAVE_KEY=1
   [ -n "${ASC_KEY_ID:-}" ]     || missing ASC_KEY_ID
   [ -n "${ASC_ISSUER_ID:-}" ]  || missing ASC_ISSUER_ID
   [ -n "${ASC_KEY_PATH:-}" ]   || missing ASC_KEY_PATH
   [ -f "$ASC_KEY_PATH" ]       || { echo "release: no key file at $ASC_KEY_PATH" >&2; exit 1; }
+elif [ "$UPLOAD" = 1 ]; then
+  missing ASC_KEY_ID
 fi
 
 # A build number App Store Connect will accept is one it has not seen. The
@@ -64,7 +86,7 @@ rm -rf "$ARCHIVE" "$EXPORT"
 # like a missing profile and is really a missing login. Passing the key here
 # means a machine that has never opened Xcode can still archive.
 AUTH=()
-if [ "$UPLOAD" = 1 ]; then
+if [ "$HAVE_KEY" = 1 ]; then
   AUTH=(
     -authenticationKeyPath "$ASC_KEY_PATH"
     -authenticationKeyID "$ASC_KEY_ID"
