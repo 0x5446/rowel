@@ -341,7 +341,15 @@ ROWEL_TEAM_ID=<你的 Team ID> xcodegen generate
 
 **一个决策卡三件事**：TestFlight、推送、上架的共同前置都是这 $99。
 
-付费会员是**另一个 team**，不是把个人 team 升级。个人 team 会继续以免费身份存在，`AVKUVD4FPN` 就是它——`isFreeProvisioningTeam: true`。所以 `ROWEL_TEAM_ID` 在付费之后要换成新的那个 10 位 id，用旧的会一路签到导出才报错。
+付费会员**可能是另一个 team，也可能就是原来那个**，取决于用哪个 Apple ID 入会。本仓库这个账号属于后者：会员 2026-08-19 激活后 team id **没有变**，`AVKUVD4FPN` 同时是付费 team 和个人 team。（2026-09-21 实测更正：本段原先写死「付费会员是另一个 team……`AVKUVD4FPN` 就是它（免费那个）」，与本账号事实相反。）
+
+`ROWEL_TEAM_ID` 要填哪个，用下面三条**事实**核对，别照抄任何一段文字：
+
+- **Store 分发 profile 的 `application-identifier` 前缀就是 team id**：本机 `~/Library/Developer/Xcode/UserData/Provisioning Profiles/` 里那份 `iOS Team Store Provisioning Profile: ai.novabox.rowel` 写的是 `AVKUVD4FPN.ai.novabox.rowel`——**免费 team 发不出 Store 分发 profile**，所以这个 id 是付费的；
+- `xcodebuild archive` 出来的归档：`codesign -dv --verbose=2 <…>/Rowel.app` 里的 `TeamIdentifier`；
+- developer.apple.com → Account → **Membership details** 上的 Team ID。
+
+只有当你用**另一个 Apple ID** 入会（那种情况下确实是另一个 team），`ROWEL_TEAM_ID` 才要换成新的 10 位 id；填错的症状是**一路签到导出才报错**。
 
 ### 用 API key 发布，不要用 Xcode 登录
 
@@ -355,6 +363,19 @@ ios/release.sh
 ```
 
 key 在 App Store Connect → Users and Access → Integrations 生成，`.p8` **只能下载一次**。选 API key 而不是在 Xcode 里登 Apple ID，是因为 key 不需要有人在键盘前回双因素验证码，重装机器也不失效，还能单独吊销。
+
+**这把 key 的权限要 Admin，App Manager 不够。** 归档之后的导出（`xcodebuild -exportArchive`）要能通过云签名（cloud signing）建出分发证书，用 App Manager 的 key 会停在这里：
+
+```
+error: exportArchive Cloud signing permission error
+error: exportArchive No signing certificate "iOS Distribution" found
+```
+
+（2026-09-21 实测：同一个团队、同一台从未登录过 Xcode 的机器、同一个归档，`rowel-release`（App Manager）失败，换成 `rowel-release-admin`（Admin）立刻 `EXPORT SUCCEEDED`。所以"App Manager 就够"只对**上传与提交**成立，对**导出**不成立。）
+
+**`--no-upload` 只能验到一半，别把它当"没问题的证明"。** 这个模式按设计**不传 key**，于是在本机没有分发证书时会直接 `error: exportArchive No Accounts`——它跳过的恰恰是最容易出问题的那一步。它能证明的是：Release 配置能归档、`DEVELOPMENT_TEAM` 认得这个 team、构建号戳记与 `git rev-list --count HEAD` 一致。上传前真正的校验是脚本里那道 `altool --validate-app`（成功时日志里是 `VERIFY SUCCEEDED`）。
+
+判断成败也要看日志标记（`** ARCHIVE SUCCEEDED **` / `** EXPORT FAILED **` / `VERIFY SUCCEEDED` / `UPLOAD SUCCEEDED`），不要只看退出码——把脚本接进管道时，退出码会变成管道末尾那个命令的。
 
 `.gitignore` 拦了 `*.p8`、`*.mobileprovision`、`*.certSigningRequest`。
 
