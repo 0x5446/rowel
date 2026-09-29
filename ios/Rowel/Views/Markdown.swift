@@ -39,7 +39,7 @@ enum MarkdownAlignment: Equatable {
 }
 
 /// One parsed block.
-enum MarkdownBlock: Identifiable, Equatable {
+enum MarkdownBlock: Equatable {
     case paragraph(String)
     case heading(level: Int, text: String)
     case bullet(items: [String], ordered: Bool)
@@ -50,18 +50,6 @@ enum MarkdownBlock: Identifiable, Equatable {
     /// and that is most of what an agent puts in a table.
     case table(header: [String], rows: [[String]], alignments: [MarkdownAlignment])
     case rule
-
-    var id: String {
-        switch self {
-        case .paragraph(let text): return "p\(text.hashValue)"
-        case .heading(let level, let text): return "h\(level)\(text.hashValue)"
-        case .bullet(let items, let ordered): return "l\(ordered)\(items.joined().hashValue)"
-        case .quote(let text): return "q\(text.hashValue)"
-        case .code(let language, let text): return "c\(language ?? "")\(text.hashValue)"
-        case .table(let header, let rows, _): return "t\(header.joined().hashValue)\(rows.count)"
-        case .rule: return "rule"
-        }
-    }
 }
 
 enum Markdown {
@@ -241,28 +229,73 @@ enum Markdown {
     /// - Parameter source: the full text so far.
     /// - Returns: the settled prefix (possibly empty) and the live tail.
     static func settle(_ source: String) -> (settled: String, live: String) {
-        let lines = source.components(separatedBy: "\n")
+        // Ranges into `source` rather than a copy of every line: this runs on
+        // every render of a streaming bubble, which can be a few hundred
+        // kilobytes, and splitting it into strings cost more than parsing the
+        // block that is actually changing.
+        let lines = lineRanges(source)
         var fence: String?
         var lastBlank = -1
         var boundary = -1
-        for (index, line) in lines.enumerated() {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
+        for (index, range) in lines.enumerated() {
+            let lead = source[contentStart(source, range)..<range.upperBound].unicodeScalars
             if let marker = fence {
-                if trimmed.hasPrefix(marker) { fence = nil }
-            } else if trimmed.isEmpty {
+                if lead.starts(with: marker.unicodeScalars) { fence = nil }
+            } else if lead.isEmpty {
                 lastBlank = index
             } else {
                 if lastBlank >= 0 { boundary = lastBlank }
-                if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") {
-                    fence = String(trimmed.prefix(3))
+                if lead.starts(with: "```".unicodeScalars) || lead.starts(with: "~~~".unicodeScalars) {
+                    fence = String(String.UnicodeScalarView(lead.prefix(3)))
                 }
             }
         }
         guard boundary > 0 else { return ("", source) }
+        // The newline before the blank line and the one after it belong to
+        // neither half, exactly as joining the lines on either side would give.
         return (
-            lines[..<boundary].joined(separator: "\n"),
-            lines[(boundary + 1)...].joined(separator: "\n")
+            String(source[source.startIndex..<lines[boundary - 1].upperBound]),
+            String(source[lines[boundary + 1].lowerBound...])
         )
+    }
+
+    /// Where a line's content begins, past the whitespace `trimmingCharacters(in:
+    /// .whitespaces)` would remove. ASCII first — a space, a tab, or anything
+    /// else below 0x80 settles it in a byte comparison — and the Unicode set
+    /// only for the rare line that starts with something wider.
+    private static func contentStart(_ source: String, _ range: Range<String.Index>) -> String.Index {
+        let utf8 = source.utf8
+        var index = range.lowerBound
+        while index < range.upperBound {
+            let byte = utf8[index]
+            if byte == UInt8(ascii: " ") || byte == UInt8(ascii: "\t") {
+                index = utf8.index(after: index)
+                continue
+            }
+            if byte < 0x80 { return index }
+            let rest = source[index..<range.upperBound].unicodeScalars
+            return rest.firstIndex { !CharacterSet.whitespaces.contains($0) } ?? range.upperBound
+        }
+        return index
+    }
+
+    /// Where each line of `source` lies, split at every `\n` the way
+    /// `components(separatedBy:)` splits it — which is how `parse` reads lines,
+    /// and the two must agree on where a line ends.
+    static func lineRanges(_ source: String) -> [Range<String.Index>] {
+        var ranges: [Range<String.Index>] = []
+        let utf8 = source.utf8
+        var start = utf8.startIndex
+        var index = utf8.startIndex
+        while index != utf8.endIndex {
+            if utf8[index] == UInt8(ascii: "\n") {
+                ranges.append(start..<index)
+                start = utf8.index(after: index)
+            }
+            index = utf8.index(after: index)
+        }
+        ranges.append(start..<utf8.endIndex)
+        return ranges
     }
 
     /// Inline emphasis, code, and links, via the system parser. A source string
@@ -313,7 +346,12 @@ private struct MarkdownBlocks: View, Equatable {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Metrics.tight) {
-            ForEach(Markdown.parse(source)) { block in
+            // By position, not by `MarkdownBlock.id`. That id hashes the content,
+            // so two identical blocks — two `---` rules, which agents write all
+            // the time — collided, and the block being streamed got a new
+            // identity on every delta and was torn down and rebuilt instead of
+            // updated. Within one source the position is the identity.
+            ForEach(Array(Markdown.parse(source).enumerated()), id: \.offset) { _, block in
                 switch block {
                 case .paragraph(let text):
                     Text(Markdown.inline(text))
@@ -364,9 +402,21 @@ private struct MarkdownBlocks: View, Equatable {
 
 /// Fenced code. Scrolls sideways rather than wrapping, because wrapped code is
 /// harder to read than code you have to push.
+///
+/// Drawn in slices of `sliceLines` lines, each its own `Text` behind an
+/// equality check. One `Text` for the whole block was laid out whole on every
+/// change, and an agent writing a file into a block changes it thirty times a
+/// second: at 60 KB that layout took about a second, so the screen delivered
+/// three frames a second for as long as the file was being written (condition
+/// L in `MainThreadStarvationTests`). Sliced, an append re-lays out the last
+/// slice and skips the rest. The price is that a selection stays within one
+/// slice.
 struct CodeBlock: View {
     let language: String?
     let text: String
+
+    /// Lines per separately drawn slice.
+    static let sliceLines = 40
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -378,14 +428,45 @@ struct CodeBlock: View {
                     .padding(.top, 7)
             }
             ScrollView(.horizontal, showsIndicators: false) {
-                Text(text)
-                    .font(.code(12.5))
-                    .textSelection(.enabled)
-                    .padding(Metrics.gap)
+                let slices = CodeBlock.slices(text)
+                Group {
+                    // Most blocks are a few lines; they skip the slicing
+                    // machinery, which costs more than it saves at that size.
+                    if slices.count == 1 {
+                        CodeSlice(text: text)
+                    } else {
+                        VStack(alignment: .leading, spacing: 0) {
+                            ForEach(Array(slices.enumerated()), id: \.offset) { _, slice in
+                                CodeSlice(text: slice).equatable()
+                            }
+                        }
+                    }
+                }
+                .padding(Metrics.gap)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Palette.well, in: RoundedRectangle(cornerRadius: Metrics.smallRadius, style: .continuous))
+    }
+
+    /// Cut `text` into runs of `sliceLines` lines. Lossless: joining the slices
+    /// with newlines gives back `text` exactly.
+    static func slices(_ text: String) -> [String] {
+        let lines = Markdown.lineRanges(text)
+        return stride(from: 0, to: lines.count, by: sliceLines).map { start in
+            String(text[lines[start].lowerBound..<lines[min(start + sliceLines, lines.count) - 1].upperBound])
+        }
+    }
+}
+
+/// One slice of a `CodeBlock`. Equatable so an unchanged slice is skipped.
+private struct CodeSlice: View, Equatable {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.code(12.5))
+            .textSelection(.enabled)
     }
 }
 

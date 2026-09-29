@@ -626,4 +626,15 @@ final class ReasoningTailTests: XCTestCase {
             String(long.suffix(AssistantBlock.tailWindow))
         )
     }
+
+    /// An opened thinking block that is still streaming shows its end, not all
+    /// of it; a finished one shows everything.
+    func testAnOpenedReasoningBlockShowsItsEndWhileStreaming() {
+        let reasoning = (0..<2_000).map { "thought \($0)" }.joined(separator: "\n")
+        let live = AssistantBlock.expanded(reasoning, streaming: true)
+        XCTAssertLessThan(live.utf8.count, AssistantBlock.expandedWindow + 100)
+        XCTAssertTrue(live.hasSuffix("thought 1999"))
+        XCTAssertEqual(AssistantBlock.expanded(reasoning, streaming: false), reasoning)
+        XCTAssertEqual(AssistantBlock.expanded("short", streaming: true), "short")
+    }
 }

@@ -167,6 +167,24 @@ private enum Corpus {
         return made + prose(120, seed: 7100)
     }
 
+    /// One line of code as an agent streams it into a file it is writing.
+    static func codeLine(_ k: Int) -> String {
+        "    let value\(k) = compute(\(k), " + prose(4, seed: 4000 + k).replacingOccurrences(of: " ", with: "_") + ")\n"
+    }
+
+    /// An open code fence already `bytes` long: the answer is in the middle of
+    /// writing a whole file into one block, which is common and has no blank
+    /// line anywhere inside it to settle at.
+    static func openCodeBlock(bytes: Int) -> String {
+        var made = "\n\nHere is the whole file:\n\n```swift\n"
+        var k = 0
+        while made.utf8.count < bytes {
+            made += codeLine(100_000 + k)
+            k += 1
+        }
+        return made
+    }
+
     /// One reasoning delta, ~60–70 chars, with an occasional newline so the
     /// tail-line extractor sees realistic paragraph breaks.
     static func reasoningDelta(_ k: Int) -> String {
@@ -213,6 +231,8 @@ final class MainThreadStarvationTests: XCTestCase {
         static let giant = BubbleScale(reasoningParagraphs: 512, textCopies: 72)
         var reasoningParagraphs: Int
         var textCopies: Int
+        /// When non-zero, the open bubble ends inside a code fence this long.
+        var openFenceBytes = 0
     }
 
     // Condition A: the post-send state. `atBottom == true`, so every delta's
@@ -276,6 +296,35 @@ final class MainThreadStarvationTests: XCTestCase {
         )
     }
 
+    // L: the worst case K cannot reach. K's text has a blank line every few
+    // deltas, so the part that re-renders stays small. An agent writing a
+    // whole file into one code block has no blank line to settle at: the
+    // block being written is the entire file, re-rendered on every flush.
+    //
+    // Unlike the others this one asserts, because it separates cleanly: one
+    // `Text` per code block delivered ~5% of frames with ~1 s stalls here, and
+    // the sliced block ~92% with stalls under 100 ms. The bounds sit between
+    // the two with room for a loaded machine. K is not asserted — its signal
+    // (5–10%) is smaller than what a busy host adds to it.
+    func testL_longCodeBlockAtWireRate() {
+        var scale = BubbleScale.giant
+        scale.openFenceBytes = 60_000
+        // A measurement only counts when the idle second before it was clean;
+        // a noisy host gets two more tries, and three noisy ones are a failure,
+        // not a skip — a gate that can quietly not run is not a gate.
+        for attempt in 1...3 {
+            let (idle, busy) = runExperiment(
+                condition: "L", mountView: true, initiallyAtBottom: true, scale: scale,
+                hz: 200, reasoningCount: 0, textCount: 400, textDelta: Corpus.codeLine
+            )
+            guard idle.dropRate == 0 else { continue }
+            XCTAssertLessThan(busy.dropRate, 0.5, "streaming into a long code block starves the screen again (attempt \(attempt))")
+            XCTAssertLessThan(busy.maxGapMs, 500, "a stall this long is the one-Text-per-block layout again (attempt \(attempt))")
+            return
+        }
+        XCTFail("three measurements in a row had a busy idle baseline; nothing was measured")
+    }
+
     // J: not an A/B condition — a cost attribution. `MarkdownText` runs
     // `Markdown.parse` over the *entire* accumulated source on every render,
     // and every text delta is a render. This measures that parse alone, off
@@ -325,10 +374,12 @@ final class MainThreadStarvationTests: XCTestCase {
 
     // MARK: Runner
 
+    @discardableResult
     private func runExperiment(
         condition: String, mountView: Bool, initiallyAtBottom: Bool, scale: BubbleScale,
-        hz: Double? = nil, reasoningCount: Int? = nil, textCount: Int? = nil
-    ) {
+        hz: Double? = nil, reasoningCount: Int? = nil, textCount: Int? = nil,
+        textDelta: (Int) -> String = Corpus.textDelta
+    ) -> (idle: FrameMeter.Stats, busy: FrameMeter.Stats) {
         let deltaHz = hz ?? self.deltaHz
         let reasoningDeltas = reasoningCount ?? self.reasoningDeltas
         let textDeltas = textCount ?? self.textDeltas
@@ -341,9 +392,11 @@ final class MainThreadStarvationTests: XCTestCase {
         XCTAssertTrue(conversation.running, "the field symptom happens mid-turn")
         var bubbleReasoning = 0
         var bubbleText = 0
+        var bubbleTextBytes = 0
         if case .assistant(let turn)? = conversation.items.last {
             bubbleReasoning = turn.reasoning.count
             bubbleText = turn.text.count
+            bubbleTextBytes = turn.text.utf8.count
         }
 
         var window: UIWindow?
@@ -370,7 +423,7 @@ final class MainThreadStarvationTests: XCTestCase {
         var plan: [(offset: Double, signal: TunnelSignal)] = []
         for k in 0..<(reasoningDeltas + textDeltas) {
             let kind = k < reasoningDeltas ? "reasoning-delta" : "text-delta"
-            let text = k < reasoningDeltas ? Corpus.reasoningDelta(k) : Corpus.textDelta(k - reasoningDeltas)
+            let text = k < reasoningDeltas ? Corpus.reasoningDelta(k) : textDelta(k - reasoningDeltas)
             plan.append((Double(k) / deltaHz, chunkSignal(seq: seq, kind: kind, text: text)))
             seq += 1
         }
@@ -401,6 +454,14 @@ final class MainThreadStarvationTests: XCTestCase {
 
         XCTAssertEqual(next, plan.count, "every condition must inject the whole stream")
         XCTAssertGreaterThan(meter.stamps.count, 10, "the probe never ticked; the measurement is void")
+        // Injected is not the same as folded. If the stream stops reaching the
+        // bubble — held back behind a history page that never lands, say —
+        // every number below reads as a smooth screen that was never asked to
+        // draw anything.
+        pump(seconds: 0.1)
+        if case .assistant(let turn)? = conversation.items.last, textDeltas > 0 {
+            XCTAssertGreaterThan(turn.text.utf8.count, bubbleTextBytes, "the stream never reached the bubble; the measurement is void")
+        }
 
         let busy = meter.stats(fps: fps)
         // Phase-resolved: the first 90 deltas are reasoning, the rest text,
@@ -419,6 +480,7 @@ final class MainThreadStarvationTests: XCTestCase {
 
         window?.isHidden = true
         window?.rootViewController = nil
+        return (idle, busy)
     }
 
     // MARK: Reporting
@@ -553,6 +615,15 @@ final class MainThreadStarvationTests: XCTestCase {
                 "text": .string(Corpus.initialStreamText(copies: scale.textCopies)),
             ]),
         ]))
+        if scale.openFenceBytes > 0 {
+            apply("assistant/chunk", .object([
+                "turn": .number(999), "step": .number(0),
+                "chunk": .object([
+                    "type": .string("text-delta"),
+                    "text": .string(Corpus.openCodeBlock(bytes: scale.openFenceBytes)),
+                ]),
+            ]))
+        }
     }
 
     /// One streamed delta, wrapped the way the tunnel pump would hand it over.
