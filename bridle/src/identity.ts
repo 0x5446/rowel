@@ -589,7 +589,6 @@ export function withdrawOffer(state: BridleState, code: string): void {
   })
 }
 
-
 /**
  * Look up an already-paired device.
  * @param state - loaded state.
