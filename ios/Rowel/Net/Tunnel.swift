@@ -430,8 +430,10 @@ public actor Tunnel {
 
     /// Invoke one harness method.
     ///
-    /// - Throws: `CallError`. `code == "disconnected"` means the socket went away
-    ///   and the call may be safely retried; anything else came from the harness.
+    /// - Throws: `CallError`. `disconnected` means nothing was sent and the call
+    ///   may be retried; `interrupted` and `timeout` mean it was sent and its
+    ///   outcome is unknown (`CallError.outcomeUnknown`); anything else came
+    ///   from the harness.
     @discardableResult
     public func call(_ method: String, _ payload: JSONValue = .emptyObject) async throws -> JSONValue {
         counter += 1
@@ -1078,7 +1080,9 @@ public actor Tunnel {
         let waiting = pending
         pending.removeAll()
         for (_, continuation) in waiting {
-            continuation.resume(throwing: CallError(code: "disconnected", message: "The connection to that Mac dropped."))
+            // Not "disconnected": these calls were written, and may have taken
+            // effect. See `CallError.outcomeUnknown`.
+            continuation.resume(throwing: CallError(code: "interrupted", message: "The connection to that Mac dropped before it answered."))
         }
     }
 

@@ -234,7 +234,9 @@ command/done: line = running.removeValue(forKey: data.commandId)
 
 ### 4.1 尾页（`prepend = false`）
 
-按顺序折叠每个 `events[].event`，`view` 取 `events[].view`。
+按顺序折叠每个 `events[].event`，`view` 取 `events[].view`，然后按到达顺序回放尾页到达**之前**收到的实时事件（`receiveLive` 在 `loaded == false` 时只缓冲，不折叠）。重叠部分由 `seen` 去重。
+
+先缓冲是因为打开一个正在运行的会话时，实时流几乎总比历史页先到：直接折叠会把正在写的气泡建在它之后的历史**前面**，历史再追加到后面——`seen` 能去重，却无法把折叠顺序排回来。取历史失败时缓冲照样回放（`historyFailed`），不为一页不会来的历史扣着已到的事件。
 
 ```
 oldestSeq = min(oldestSeq ?? 首条seq, 首条seq)
@@ -250,7 +252,7 @@ loaded    = true
 ```
 1. 新建一个临时折叠器
 2. 用它以 prepend=false 折叠这一页
-3. 把它的 items 整体插到当前 items 前面
+3. 把它的 items 中 **id 不在当前 items 里的**整体插到当前 items 前面（瘦身后的尾页可能从一条 `assistant/message` 开始，而构成它的 chunk 落在上一页里；单独折叠它们就是同一个气泡的第二份、永远未完成的拷贝）
 4. 重建索引
 5. seen ∪= 临时折叠器的 seen
 ```
@@ -416,6 +418,8 @@ diff     → diff(title, files: view.diffs)
 | turn 无最终消息就结束 | 气泡与卡片都置为完成（`testTurnEndCompletesStreamingBubbles`） |
 | `turn/end` 且 `reason.kind == "success"` | 不产生 notice（`testSuccessfulTurnEndAddsNoNotice`） |
 | prepend 之后来了实时 chunk | 拼进正确的气泡（`testPrependKeepsLiveStreamingCoherent`） |
+| 尾页之前到达的实时事件 | 排在历史之后，工具结果不丢（`testLiveEventsThatBeatTheHistoryPageLandBehindIt`） |
+| 上一页带来屏幕上已有消息的 chunk | 不产生第二个气泡（`testTheChunksOfAMessageAlreadyHeldDoNotBecomeASecondBubble`） |
 | projection 乱序 | 高 seq 胜出（`testStaleProjectionIsDropped`） |
 | 注入的上下文 | 标 synthetic，显示 summary（`testSyntheticUserMessageIsMarked`） |
 | `source.kind == "tool"` 的 user 消息 | 丢弃（`testToolSourcedUserMessageIsDropped`） |
