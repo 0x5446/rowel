@@ -68,4 +68,63 @@ final class MarkdownSettleTests: XCTestCase {
             previous = settled
         }
     }
+
+    // MARK: - The fast path says what the slow one said
+
+    /// The implementation `settle` had before it stopped copying every line,
+    /// kept verbatim as the reference the fast one is held to.
+    private func referenceSettle(_ source: String) -> (settled: String, live: String) {
+        let lines = source.components(separatedBy: "\n")
+        var fence: String?
+        var lastBlank = -1
+        var boundary = -1
+        for (index, line) in lines.enumerated() {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if let marker = fence {
+                if trimmed.hasPrefix(marker) { fence = nil }
+            } else if trimmed.isEmpty {
+                lastBlank = index
+            } else {
+                if lastBlank >= 0 { boundary = lastBlank }
+                if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") {
+                    fence = String(trimmed.prefix(3))
+                }
+            }
+        }
+        guard boundary > 0 else { return ("", source) }
+        return (lines[..<boundary].joined(separator: "\n"), lines[(boundary + 1)...].joined(separator: "\n"))
+    }
+
+    /// Every prefix of every corpus entry — the shapes text passes through as
+    /// it streams — plus the awkward characters: CRLF, which `components`
+    /// splits and `Character` does not, and whitespace that is not ASCII.
+    func testTheFastSplitMatchesTheReferenceOnEveryPrefix() {
+        let extra = [
+            "crlf\r\n\r\nnext\r\n",
+            "wide\u{3000}space\n\u{3000}\nafter",
+            "\u{3000}```\nfenced by a wide space\n\nstill fenced\n",
+            "emoji 👩🏽‍💻 line\n\n```\n👍\n\n```\n\ndone",
+        ]
+        for source in corpus + extra {
+            var prefix = ""
+            for character in source {
+                prefix.append(character)
+                let fast = Markdown.settle(prefix)
+                let reference = referenceSettle(prefix)
+                XCTAssertEqual(fast.settled, reference.settled, "settled half differs for \(prefix.debugDescription)")
+                XCTAssertEqual(fast.live, reference.live, "live half differs for \(prefix.debugDescription)")
+            }
+        }
+    }
+
+    /// A code block drawn in slices must draw every character, once.
+    func testCodeSlicesAreLossless() {
+        for lines in [0, 1, 39, 40, 41, 80, 81, 1_000] {
+            let text = (0..<lines).map { "line \($0)" }.joined(separator: "\n")
+            let slices = CodeBlock.slices(text)
+            XCTAssertEqual(slices.joined(separator: "\n"), text, "\(lines) lines")
+            XCTAssertTrue(slices.dropLast().allSatisfy { $0.components(separatedBy: "\n").count == CodeBlock.sliceLines })
+        }
+        XCTAssertEqual(CodeBlock.slices("ends with a newline\n").joined(separator: "\n"), "ends with a newline\n")
+    }
 }

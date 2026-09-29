@@ -304,7 +304,10 @@ struct ConversationView: View {
 
     private func lastLength(_ conversation: Conversation) -> Int {
         guard case .assistant(let turn)? = conversation.items.last else { return 0 }
-        return turn.text.count + turn.reasoning.count
+        // Bytes, not characters: `count` walks every grapheme of a bubble that
+        // can be a few hundred kilobytes, on every body evaluation. Any measure
+        // that grows with the text says "it grew" equally well.
+        return turn.text.utf8.count + turn.reasoning.utf8.count
     }
 
     private func stillOpen(_ item: ConversationItem) -> Bool {

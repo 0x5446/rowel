@@ -9,6 +9,18 @@ the same decision.
 
 ## Unreleased
 
+- **The screen keeps up while the agent writes a long file into a code
+  block.** A code block was drawn as one piece of text, laid out whole every
+  time it grew — thirty times a second while streaming. At 60 KB that took
+  about a second, so the app showed roughly three frames a second and ignored
+  taps for as long as the file was being written. Code is now drawn in slices
+  of 40 lines and only the last one is redrawn: measured on the simulator, 95%
+  of frames dropped became 7–9%, and the longest freeze went from about a
+  second to under 100 ms. An opened thinking block that is still streaming
+  shows its last 8 KB for the same reason, and all of it once the step ends.
+  Selecting text in a long code block now stays within 40 lines. Two identical
+  blocks in one reply — two `---` rules, say — no longer confuse the layout.
+
 - **Scanning a new code after the Mac refused this phone works.** The refused
   screen says to run `bridle pair` and scan again; doing so saved the new code
   and kept using the connection built from the old one, which stayed refused

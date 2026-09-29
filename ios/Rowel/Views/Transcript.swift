@@ -202,7 +202,7 @@ struct AssistantBlock: View {
             }
 
             if showReasoning {
-                Text(turn.reasoning)
+                Text(AssistantBlock.expanded(turn.reasoning, streaming: !turn.complete))
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
@@ -238,6 +238,28 @@ struct AssistantBlock: View {
 
     /// How much of the end of a reasoning block `tail(of:)` reads.
     static let tailWindow = 4096
+
+    /// The reasoning to show when the block is opened.
+    ///
+    /// While it is still being written, only its end. The whole of it is one
+    /// `Text`, laid out again on every flush, and a long thinking block is a
+    /// few hundred kilobytes — the same whole-block relayout that froze a code
+    /// block being streamed into. The end is what someone opening a live block
+    /// is reading anyway; the rest comes back the moment the step finishes.
+    ///
+    /// - Parameters:
+    ///   - reasoning: everything folded so far.
+    ///   - streaming: whether the step is still being written.
+    static func expanded(_ reasoning: String, streaming: Bool) -> String {
+        guard streaming, reasoning.utf8.count > expandedWindow else { return reasoning }
+        let end = reasoning.suffix(expandedWindow)
+        // From a line start, so the first line shown is not cut mid-word.
+        let start = end.firstIndex(where: \.isNewline).map(end.index(after:)) ?? end.startIndex
+        return "… earlier reasoning shows when this step finishes\n\n" + end[start...]
+    }
+
+    /// How much of a streaming reasoning block `expanded` shows.
+    static let expandedWindow = 8192
 }
 
 // MARK: - Notice
