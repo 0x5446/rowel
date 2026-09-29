@@ -176,6 +176,11 @@ final class TunnelTests: XCTestCase {
 
         let resumes = await mac.resumedFrom
         XCTAssertEqual(resumes.last, 41, "the reconnect asked for the wrong point in the log")
+        // And says which numbering 41 was counted in, so a Bridle that restarted
+        // in between answers `resync` instead of replaying its own new 42.
+        let epochs = await mac.resumedEpochs
+        XCTAssertEqual(epochs.first, .some(nil), "the first resume has no earlier numbering to name")
+        XCTAssertEqual(epochs.last, .some(mac.epoch))
         await tunnel.stop()
     }
 

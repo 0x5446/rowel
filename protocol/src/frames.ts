@@ -153,9 +153,19 @@ export interface ResumeFrame {
   t: 'resume'
   /** Highest sequence the app already has; `0` requests a fresh subscription. */
   since: number
+  /**
+   * The `ready.epoch` of the connection `since` was counted on. A Bridle that
+   * restarted has a different one and answers `resync`. Omitted on the first
+   * connection, and by apps that predate it.
+   */
+  epoch?: string
 }
 
-/** Bridle to App: the replay buffer no longer reaches `since`; refetch state. */
+/**
+ * Bridle to App: events were lost to this app — the replay buffer no longer
+ * reaches `since`, the Bridle restarted, or an event was too large to carry —
+ * so refetch state. Events continue after `from`.
+ */
 export interface ResyncFrame {
   t: 'resync'
   /** First sequence the Bridle can still serve. */
@@ -200,6 +210,11 @@ export interface ReadyFrame {
   direct?: string[]
   /** Highest event sequence the Bridle has produced. */
   seq: number
+  /**
+   * Identifies this Bridle process's event numbering, which restarts with
+   * every process. The app echoes it in its next `resume`.
+   */
+  epoch?: string
 }
 
 /** Bridle to App: the local dsh went away or came back. */

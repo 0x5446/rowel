@@ -9,6 +9,7 @@
  * listening, numbers every downlink frame, and replays the gap on reconnect.
  */
 
+import { randomBytes } from 'node:crypto'
 import type { StreamName } from '@rowel/protocol'
 
 /** One buffered downlink frame. */
@@ -35,6 +36,13 @@ export class EventLog {
   private readonly capacity: number
   private readonly listeners = new Set<(event: LoggedEvent) => void>()
   private sequence = 0
+  /**
+   * Which process's numbering this is. Sequences restart at 1 in every
+   * process, so an app resuming from `since: 500` after the Bridle restarted
+   * would otherwise be handed the *new* process's 501 onward as a seamless
+   * continuation — and never see the new 1..500, which can hold a question.
+   */
+  readonly epoch: string = randomBytes(12).toString('base64url')
 
   /** @param capacity - how many frames to retain. */
   constructor(capacity: number = DEFAULT_CAPACITY) {
@@ -76,9 +84,12 @@ export class EventLog {
   /**
    * Answer a resume request.
    * @param since - the highest sequence the app already holds.
+   * @param epoch - the {@link EventLog.epoch} that `since` counts in, when the
+   *   app knows it; absent from apps that predate it.
    * @returns the missing frames, or an instruction to refetch.
    */
-  replay(since: number): ReplayResult {
+  replay(since: number, epoch?: string): ReplayResult {
+    if (epoch !== undefined && epoch !== this.epoch) return { kind: 'resync', from: this.sequence }
     if (since >= this.sequence) {
       // Also covers the app claiming a sequence from a previous Bridle process:
       // there is nothing to replay, and the fresh subscription starts clean.

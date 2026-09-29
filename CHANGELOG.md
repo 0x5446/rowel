@@ -9,6 +9,17 @@ the same decision.
 
 ## Unreleased
 
+- **Nothing is lost when the Bridle restarts, or when one event is too big to
+  send.** Event numbers start again at 1 in every Bridle process, and a phone
+  reconnecting after a restart asked to resume from its old number — which the
+  new process, already past it, answered with its own later events as if
+  nothing had happened. Whatever came first, a question included, never
+  arrived. The phone now says which process its number came from, and a
+  different one is answered with a refetch. An event over the 32 MB tunnel
+  limit used to be dropped on the assumption that the phone would notice the
+  gap; it could not when that event was the last one, so the Bridle now says so
+  itself.
+
 - **The Relay can no longer pair itself with your Mac.** `bridle pair`
   published the pairing bundle to the Relay for the short code, and that bundle
   carried the same one-time token as the QR — so whoever ran the Relay, or got

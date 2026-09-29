@@ -260,6 +260,8 @@ public actor Tunnel {
     private var pending: [String: CheckedContinuation<JSONValue, Error>] = [:]
     private var counter = 0
     private var highestSeq = 0
+    /// The Bridle process `highestSeq` counts in; see `ResumeFrame.epoch`.
+    private var epoch: String?
     private var everConnected = false
     private var noteCounter = 0
     /// When the last frame of any kind arrived, including the Bridle's pings.
@@ -1020,7 +1022,11 @@ public actor Tunnel {
             status = .online(carrier: currentCarrier, machine: ready.machine, harnessUp: ready.dshReachable)
             continuation?.yield(.handshake(confirmation: confirmation ?? "", host: ready.host, harness: ready.harness, direct: ready.direct))
             continuation?.yield(.harness(reachable: ready.dshReachable, detail: nil))
-            try? write(ResumeFrame(since: highestSeq))
+            // With the epoch `highestSeq` was counted in, not this ready's: the
+            // Bridle compares them, and a restarted one answers `resync`
+            // instead of passing its own new numbering off as a continuation.
+            try? write(ResumeFrame(since: highestSeq, epoch: epoch))
+            epoch = ready.epoch
             // Re-offered on every ready rather than once, because the machine
             // is what stores it and a machine can be reinstalled, restored from
             // a backup, or simply be a different one. Sending it again costs a

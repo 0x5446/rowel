@@ -86,3 +86,17 @@ test('an empty log reports a tail past its head', () => {
   assert.equal(log.tail, 1)
   assert.equal(log.replay(0).kind, 'replay')
 })
+
+test('a resume counted in another process is told to refetch, even when the number fits', () => {
+  // The Bridle restarted: numbering began again at 1, and this process has
+  // already passed the phone's old resume point. Replaying from 500 would pass
+  // the new 501.. off as a continuation and lose the new 1..500 for good.
+  const previous = new EventLog()
+  const current = new EventLog()
+  for (let i = 0; i < 800; i += 1) current.append('mux', { i })
+
+  assert.notEqual(previous.epoch, current.epoch)
+  assert.deepEqual(current.replay(500, previous.epoch), { kind: 'resync', from: 800 })
+  assert.equal(current.replay(500, current.epoch).kind, 'replay', 'the same process must still replay')
+  assert.equal(current.replay(500).kind, 'replay', 'an app that sends no epoch keeps the old behaviour')
+})
