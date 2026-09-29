@@ -15,8 +15,8 @@
 
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { BridleCore, TunnelSession } from '@rowel/bridle'
-import { NoiseInitiator, TUNNEL_PROLOGUE, generateKeyPair } from '@rowel/protocol'
+import { BridleCore, TunnelSession, saveState } from '@rowel/bridle'
+import { NoiseInitiator, TUNNEL_PROLOGUE, decodeFrame, encodeFrame, generateKeyPair } from '@rowel/protocol'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -54,13 +54,15 @@ function core(overrides = {}) {
         baseUrl: 'http://127.0.0.1:9',
         call: async () => ({ ok: true, value: {} }),
         health: async () => ({ reachable: false }),
-        pump: async (stream, onFrame) => { pumps.push({ stream, onFrame }) },
+        pump: async (stream, onFrame, onStatus) => { pumps.push({ stream, onFrame, onStatus }) },
       },
     },
   )
   return {
     machine,
     feed: (f) => { for (const p of pumps) if (p.stream === 'mux') p.onFrame(f) },
+    /** The mux downlink coming back, as it does when dsh restarts. */
+    reconnect: () => { for (const p of pumps) if (p.stream === 'mux') p.onStatus(true) },
   }
 }
 
@@ -231,7 +233,7 @@ test('a handshake whose ready frame cannot be sent leaves nobody counted as list
     pairedAt: 0,
     lastSeen: 0,
   })
-  machine.save()
+  saveState(machine.state)
 
   // Fails on the ready frame, not on the handshake reply. That is the shape of
   // the real failure: a socket that dies in the millisecond between the two,
@@ -265,4 +267,98 @@ test('a handshake whose ready frame cannot be sent leaves nobody counted as list
   machine.stop()
   if (previous === undefined) delete process.env.ROWEL_HOME
   else process.env.ROWEL_HOME = previous
+})
+
+test('a request dsh re-sends after its downlink comes back is still one request', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const { machine, feed, reconnect } = core()
+  await machine.start()
+  let changes = 0
+  machine.onWaitingChanged(() => { changes += 1 })
+  const asked = frame('approval/requested', 's1', { approvalId: 'a1', toolName: 'Bash' })
+  feed(asked)
+  machine.markRung()
+
+  reconnect()
+  feed(asked)
+  t.mock.timers.tick(5_000)
+
+  assert.equal(changes, 1, 'the re-send was taken for a new request')
+  assert.equal(machine.pendingRequests.length, 1)
+  assert.equal(machine.dueForRing().length, 0, 'the phone would be rung again for the same question')
+  machine.stop()
+})
+
+test('a request dsh does not re-send after a restart is dropped, and attached phones are told', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const { machine, feed, reconnect } = core()
+  await machine.start()
+  feed(frame('question/requested', 's2', { id: 'q1' }))
+  const told = []
+  const unsubscribe = machine.events.subscribe((event) => { told.push(event.frame) })
+
+  // dsh restarted: the question died with it, and nothing says "resolved".
+  reconnect()
+  t.mock.timers.tick(5_000)
+
+  assert.equal(machine.pendingRequests.length, 0, 'a question nobody can answer is still offered')
+  assert.deepEqual(told, [{ payload: { type: 'question/resolved', sessionId: 's2' } }])
+  unsubscribe()
+  machine.stop()
+})
+
+/**
+ * A handshake completed against a real state file, and the pieces a test needs
+ * to keep talking: the session, what it sent, and the app's end of the channel.
+ */
+async function pairedSession(t) {
+  const home = mkdtempSync(join(tmpdir(), 'rowel-wake-'))
+  const previous = process.env.ROWEL_HOME
+  process.env.ROWEL_HOME = home
+  const { machine } = core({ privateKey: generateKeyPair().privateKey.toString('base64url') })
+  await machine.start()
+  machine.state.peers.push({ key: appKeys.publicKey.toString('base64url'), name: 'a-phone', pairedAt: 0, lastSeen: 0 })
+  saveState(machine.state)
+  const sent = []
+  let closedWhy
+  const session = new TunnelSession(machine, {
+    send: (bytes) => { sent.push(bytes) },
+    close: () => {},
+  }, { version: 'test/0', onClosed: (why) => { closedWhy = why } })
+  const initiator = new NoiseInitiator(appKeys, machine.keys.publicKey, TUNNEL_PROLOGUE)
+  session.receive(initiator.writeMessage(Buffer.from(JSON.stringify({ versions: [1], name: 'a-phone', client: 't' }), 'utf8')))
+  const { channel } = initiator.readMessage(sent[0])
+  t.after(() => {
+    session.dispose('test over')
+    machine.stop()
+    if (previous === undefined) delete process.env.ROWEL_HOME
+    else process.env.ROWEL_HOME = previous
+  })
+  return {
+    session,
+    sent,
+    say: (frame) => { session.receive(channel.encrypt(encodeFrame(frame))) },
+    pings: () => sent.slice(1).map((bytes) => decodeFrame(channel.decrypt(bytes))).filter((f) => f.t === 'ping').length,
+    closedWhy: () => closedWhy,
+  }
+}
+
+test('a second hello does not start a second ping timer', async (t) => {
+  t.mock.timers.enable({ apis: ['setInterval', 'Date'] })
+  const phone = await pairedSession(t)
+  phone.say({ t: 'hello' })
+  phone.say({ t: 'hello' })
+  t.mock.timers.tick(25_000)
+  assert.equal(phone.pings(), 1, 'each hello left another timer running')
+})
+
+test('a phone that stops answering is let go instead of counted as listening', async (t) => {
+  t.mock.timers.enable({ apis: ['setInterval', 'Date'] })
+  const phone = await pairedSession(t)
+  t.mock.timers.tick(25_000)
+  phone.say({ t: 'pong', nonce: '1' })
+  t.mock.timers.tick(50_000)
+  assert.equal(phone.closedWhy(), undefined, 'a phone answering its pings was dropped')
+  t.mock.timers.tick(25_000)
+  assert.equal(phone.closedWhy(), 'peer silent')
 })

@@ -19,7 +19,7 @@ import {
   signRegistration,
 } from '@rowel/protocol'
 import { TunnelSession } from './tunnel/session.ts'
-import { signingKeys } from './identity.ts'
+import { signingKeys, updateState } from './identity.ts'
 import type { BridleCore } from './core.ts'
 
 /** Backoff floor between redials. */
@@ -341,7 +341,7 @@ export class RelayClient {
     // pending list, which `approval/resolved` and `question/resolved` remove
     // from. Deriving costs a property read.
     if (this.core.attached > 0) return
-    if (this.core.pendingRequests.length === 0) return
+    if (this.core.dueForRing().length === 0) return
     // By endpoint, not by peer. One phone can hold two pairings — `bridle
     // revoke` is manual and a phone that re-pairs after a reset arrives with a
     // fresh device identity but the same APNs token — and ringing per peer
@@ -355,6 +355,9 @@ export class RelayClient {
         machine: this.core.state.machineName,
       }), 'utf8')))
     }
+    // Only once somebody was actually rung: with no phone able to take a ring
+    // yet, the request is still owed to the first one that can.
+    if (rung.size > 0) this.core.markRung()
   }
 
   /**
@@ -381,15 +384,13 @@ export class RelayClient {
     // deployed. Requiring the claim to be made explicitly is what lets that
     // message type grow.
     if (typeof token !== 'string' || dead !== true) return
-    let changed = false
-    for (const peer of this.core.state.peers) {
-      if (peer.push !== token) continue
-      delete peer.push
-      changed = true
-    }
-    if (!changed) return
+    if (!this.core.state.peers.some(peer => peer.push === token)) return
+    updateState(this.core.state, (disk) => {
+      for (const peer of disk.peers) {
+        if (peer.push === token) delete peer.push
+      }
+    })
     this.options.log?.('a phone stopped accepting notifications; it will be rung again when it reconnects')
-    this.core.save()
   }
 
   private teardown(reason: string): void {

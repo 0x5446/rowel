@@ -21,7 +21,7 @@ import {
   type ServerFrame,
   MAX_FRAME_BYTES,
 } from '@rowel/protocol'
-import { acceptPeer, findPeer, offerAccepts, rowelHome, touchPeer } from '../identity.ts'
+import { acceptPeer, findPeer, offerAccepts, rowelHome, touchPeer, updateState } from '../identity.ts'
 import type { BridleCore, DshStatus } from '../core.ts'
 import type { LoggedEvent } from './event-log.ts'
 import { thinHistory } from './history.ts'
@@ -77,6 +77,9 @@ const MAX_INFLIGHT = 64
 /** Tunnel-level liveness probe interval. */
 const PING_INTERVAL_MS = 25_000
 
+/** Silence after which the peer is taken to be gone: two missed pings, with slack. */
+const PEER_SILENCE_MS = PING_INTERVAL_MS * 2.5
+
 /** Version reported to the app; injected so the CLI and tests agree. */
 export interface SessionOptions {
   /** Bridle package version string. */
@@ -98,6 +101,8 @@ export class TunnelSession {
   private detach: (() => void) | undefined
   private unwatchStatus: (() => void) | undefined
   private pingTimer: NodeJS.Timeout | undefined
+  /** When anything last arrived from the peer. */
+  private heardAt = Date.now()
   private lastSent = 0
   private closed = false
   /** The version this session negotiated. Set once, at handshake. */
@@ -127,6 +132,7 @@ export class TunnelSession {
    */
   receive(bytes: Buffer): void {
     if (this.closed) return
+    this.heardAt = Date.now()
     try {
       if (this.channel === undefined) this.handleHandshake(bytes)
       else this.handleFrame(decodeFrame(this.channel.decrypt(bytes)))
@@ -264,10 +270,24 @@ export class TunnelSession {
     // The ready frame may have failed to send, which disposes the session.
     // Registering listeners and timers on a corpse leaks both.
     if (this.closed) return
+    // A `hello` runs this again on a live session; the first round's listener
+    // and timer would otherwise outlive it until the process exits.
+    this.unwatchStatus?.()
+    if (this.pingTimer !== undefined) clearInterval(this.pingTimer)
     this.unwatchStatus = this.core.onDshStatus((next: DshStatus) => {
       this.sendFrame({ t: 'status', dshReachable: next.reachable, ...(next.detail === undefined ? {} : { detail: next.detail }) })
     })
-    this.pingTimer = setInterval(() => { this.sendFrame({ t: 'ping', nonce: String(Date.now()) }) }, PING_INTERVAL_MS)
+    this.pingTimer = setInterval(() => {
+      // A phone that vanished without closing — backgrounded, out of range —
+      // leaves a socket nobody reads, and while it stands the core counts a
+      // listener and rings nobody. The app answers every ping; two unanswered
+      // intervals is a phone that is gone.
+      if (Date.now() - this.heardAt > PEER_SILENCE_MS) {
+        this.dispose('peer silent')
+        return
+      }
+      this.sendFrame({ t: 'ping', nonce: String(Date.now()) })
+    }, PING_INTERVAL_MS)
     this.pingTimer.unref()
   }
 
@@ -319,15 +339,13 @@ export class TunnelSession {
     const key = this.peerKey
     if (key === undefined) return
     const peer = findPeer(this.core.state, key)
-    if (peer === undefined) return
-    if (token === null) {
-      if (peer.push === undefined) return
-      delete peer.push
-    } else {
-      if (peer.push === token) return
-      peer.push = token
-    }
-    this.core.save()
+    if (peer === undefined || peer.push === (token ?? undefined)) return
+    updateState(this.core.state, (disk) => {
+      const stored = findPeer(disk, key)
+      if (stored === undefined) return
+      if (token === null) delete stored.push
+      else stored.push = token
+    })
   }
 
   private handleResume(since: number): void {

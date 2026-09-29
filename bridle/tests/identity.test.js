@@ -15,6 +15,8 @@ import {
   loadState,
   offerAccepts,
   openPairingOffer,
+  overrideState,
+  reloadState,
   revokePeer,
   saveState,
   signingKeys,
@@ -167,5 +169,65 @@ test('revoking by prefix removes exactly one device', () => {
     assert.equal(removed?.name, 'iPhone')
     assert.equal(loadState().peers.length, 1)
     assert.equal(revokePeer(state, 'nothing-matches-this'), undefined)
+  })
+})
+
+test('a revoke made by another process survives this one writing afterwards', () => {
+  withHome(() => {
+    // Two processes, two snapshots: a daemon that loaded before `bridle revoke`
+    // ran in another terminal. Writing its whole snapshot back used to bring
+    // the revoked phone back from the dead.
+    const phone = generateKeyPair().publicKey
+    acceptPeer(loadState(), phone, 'phone')
+    const daemon = loadState()
+    const cli = loadState()
+
+    assert.ok(revokePeer(cli, phone.toString('base64url')), 'the CLI revoked the phone')
+    touchPeer(daemon, phone)
+
+    assert.equal(findPeer(loadState(), phone), undefined, 'the revoke has to stick')
+    assert.equal(findPeer(daemon, phone), undefined, 'and the daemon has to see it')
+  })
+})
+
+test('an offer opened by another process is not erased by this one writing', () => {
+  withHome(() => {
+    const phone = generateKeyPair().publicKey
+    acceptPeer(loadState(), phone, 'phone')
+    const daemon = loadState()
+    const offer = openPairingOffer(loadState())
+
+    touchPeer(daemon, phone)
+
+    assert.equal(loadState().offer?.token, offer.token)
+  })
+})
+
+test('an environment override is used but never written to the file', () => {
+  withHome(() => {
+    loadState()
+    const previous = process.env.ROWEL_RELAY_URL
+    process.env.ROWEL_RELAY_URL = 'ws://127.0.0.1:8787'
+    try {
+      const state = loadState()
+      assert.equal(state.relayUrl, 'ws://127.0.0.1:8787')
+      acceptPeer(state, generateKeyPair().publicKey, 'phone')
+      assert.equal(state.relayUrl, 'ws://127.0.0.1:8787', 'the override outlives a write')
+    } finally {
+      if (previous === undefined) delete process.env.ROWEL_RELAY_URL
+      else process.env.ROWEL_RELAY_URL = previous
+    }
+    assert.equal(loadState().relayUrl, 'wss://rowel-relay.novabox.ai', 'one test run must not become the configuration')
+  })
+})
+
+test('a process override survives a reload of the file', () => {
+  withHome(() => {
+    const state = loadState()
+    overrideState(state, { relayUrl: '' })
+    reloadState(state)
+    openPairingOffer(state)
+    assert.equal(state.relayUrl, '')
+    assert.equal(loadState().relayUrl, 'wss://rowel-relay.novabox.ai')
   })
 })

@@ -9,7 +9,7 @@
 
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer } from 'node:http'
@@ -152,4 +152,24 @@ test('a Bridle that cannot start does not take dsh with it', async (t) => {
   await new Promise(resolve => setTimeout(resolve, 600))
 
   assert.deepEqual(failures, [], 'an unhandled rejection here is a dead harness')
+})
+
+test('an empty relay setting turns the Relay off, and is not written to the state file', async (t) => {
+  // The documented meaning of `relay: ''` is "no Relay". It used to be read as
+  // "not set", so the plugin dialled whatever the state file named — and a
+  // non-empty setting was copied into that file on the next handshake.
+  const path = join(process.env.ROWEL_HOME, 'bridle.json')
+  const seeded = JSON.parse(readFileSync(path, 'utf8'))
+  writeFileSync(path, JSON.stringify({ ...seeded, relayUrl: 'ws://127.0.0.1:9' }))
+  t.after(() => { writeFileSync(path, JSON.stringify(seeded)) })
+
+  const ctx = fakeContext()
+  apply(ctx, { dsh: 'http://127.0.0.1:9', relay: '', noDirect: true })
+  await new Promise(resolve => setTimeout(resolve, 300))
+  const live = readRuntime()
+  ctx.dispose()
+
+  assert.equal(live?.relayUrl, '', 'the plugin is still pointed at a Relay')
+  assert.equal(live?.relayState, 'offline')
+  assert.equal(JSON.parse(readFileSync(path, 'utf8')).relayUrl, 'ws://127.0.0.1:9', 'a plugin setting reached the state file')
 })

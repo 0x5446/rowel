@@ -25,6 +25,8 @@ export {
   loadState,
   offerAccepts,
   openPairingOffer,
+  overrideState,
+  reloadState,
   rowelHome,
   revokePeer,
   saveState,
@@ -32,7 +34,9 @@ export {
   statePath,
   staticKeys,
   touchPeer,
+  updateState,
   type BridleState,
   type PairedPeer,
   type PairingOffer,
+  type StateOverrides,
 } from './identity.ts'

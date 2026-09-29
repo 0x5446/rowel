@@ -5,7 +5,7 @@
  * and rewritten atomically.
  */
 
-import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { chmodSync, closeSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { hostname, homedir, userInfo } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -164,7 +164,7 @@ export function loadState(): BridleState {
     }
     if (RETIRED_RELAY_URLS.includes(parsed.relayUrl)) {
       parsed.relayUrl = DEFAULT_RELAY_URL
-      saveState(parsed)
+      mutateDisk((disk) => { disk.relayUrl = DEFAULT_RELAY_URL })
     }
     // `deviceId` is derived from the signing key, and a derived value kept on
     // disk can go stale. This one did: the hash is domain-separated by the
@@ -182,7 +182,15 @@ export function loadState(): BridleState {
     const derived = deviceIdFor(signingPublicKeyOf(Buffer.from(parsed.signingKey, 'base64url')))
     if (parsed.deviceId !== derived) {
       parsed.deviceId = derived
-      persistDeviceId(path, derived)
+      // Only the one field, on top of whatever is on disk now: this snapshot
+      // may be seconds old, and writing it whole would undo a device the
+      // daemon paired in that gap. A correction that cannot be written is not
+      // worth failing a load over — the next load redoes it.
+      try {
+        mutateDisk((disk) => { disk.deviceId = derived })
+      } catch {
+        // See above.
+      }
     }
     return applyEnvironment(parsed)
   }
@@ -202,63 +210,159 @@ export function loadState(): BridleState {
   return applyEnvironment(state)
 }
 
-/**
- * Write back only the corrected `deviceId`, on top of whatever is on disk now.
- *
- * Not `saveState(parsed)`. Two Bridles can share a home — `bridle pair` runs
- * beside a daemon by design — and this correction happens during *load*, on a
- * snapshot that may already be seconds old. Writing the whole snapshot back
- * would undo a device the daemon paired, a push token it learned, or a
- * last-seen stamp it recorded in that gap. The atomic rename protects against
- * a half-written file; it does nothing about a lost update.
- *
- * So the file is re-read and one field replaced. That is not a transaction —
- * a writer landing between this read and this write still wins — but the
- * window shrinks from "however long loading took" to two adjacent syscalls,
- * and what it can lose is a `deviceId` correction that the next load redoes
- * anyway rather than somebody's pairing.
- * @param path - the state file.
- * @param deviceId - the derived value to store.
- */
-function persistDeviceId(path: string, deviceId: string): void {
-  try {
-    const current = JSON.parse(readFileSync(path, 'utf8')) as BridleState
-    if (current.deviceId === deviceId) return
-    current.deviceId = deviceId
-    saveState(current)
-  } catch {
-    // A correction that cannot be written is not worth failing a load over:
-    // the value in memory is already right, and the next load tries again.
-  }
-}
+/** Settings that apply to one process and must never reach the file. */
+export type StateOverrides = Partial<Pick<BridleState, 'relayUrl' | 'dshUrl'>>
+
+/** The overrides each in-memory state carries, reapplied after every reload. */
+const overridesOf = new WeakMap<BridleState, StateOverrides>()
 
 /**
- * Overlay the environment on loaded state. The overrides are not persisted: a
- * `ROWEL_DSH_URL` set for one test run must not silently become the machine's
- * configuration.
- * @param state - state as read from disk.
- * @returns the same object with any overrides applied.
+ * Apply settings to this process's view of the state without persisting them.
+ *
+ * A `ROWEL_RELAY_URL` set for one test run, or a plugin's `relay` setting,
+ * describes how *this* process should run, not what the machine is. They live
+ * beside the state rather than in it: every write goes through
+ * {@link updateState}, which edits what is on disk and never this object, so
+ * nothing here can leak into the file however the state is later saved.
+ * @param state - the in-memory state.
+ * @param overrides - the values to hold for the life of this process.
  */
+export function overrideState(state: BridleState, overrides: StateOverrides): void {
+  const held = { ...overridesOf.get(state), ...overrides }
+  overridesOf.set(state, held)
+  Object.assign(state, held)
+}
+
 function applyEnvironment(state: BridleState): BridleState {
   const relay = process.env['ROWEL_RELAY_URL']
   const dsh = process.env['ROWEL_DSH_URL']
-  if (relay !== undefined && relay.length > 0) state.relayUrl = relay
-  if (dsh !== undefined && dsh.length > 0) state.dshUrl = dsh
+  overrideState(state, {
+    ...(relay !== undefined && relay.length > 0 ? { relayUrl: relay } : {}),
+    ...(dsh !== undefined && dsh.length > 0 ? { dshUrl: dsh } : {}),
+  })
   return state
 }
 
 /**
- * Persist state atomically with owner-only permissions.
- * @param state - the state to write.
+ * Change the state file and this process's view of it, as one transaction.
+ *
+ * The file has more than one writer by design — a daemon and a `bridle pair`
+ * or `bridle revoke` in another terminal — and each used to write its whole
+ * in-memory snapshot back. A snapshot taken before the other process wrote
+ * then undid that write: a revoked phone came back, a fresh offer vanished.
+ * So a change is a function applied to what is on disk *now*, under a lock,
+ * and the in-memory state is replaced by the result rather than trusted.
+ * @param state - the in-memory state, refreshed from the file afterwards.
+ * @param mutate - edits the on-disk copy; its return value is passed through.
+ * @returns whatever `mutate` returned.
  */
-export function saveState(state: BridleState): void {
-  const home = rowelHome()
-  mkdirSync(home, { recursive: true, mode: 0o700 })
+export function updateState<T>(state: BridleState, mutate: (disk: BridleState) => T): T {
+  let result: T | undefined
+  const disk = mutateDisk((current) => { result = mutate(current) })
+  adopt(state, disk)
+  return result as T
+}
+
+/**
+ * Replace this process's view with what is on disk, keeping its overrides.
+ * @param state - the in-memory state.
+ */
+export function reloadState(state: BridleState): void {
+  adopt(state, readDisk())
+}
+
+/**
+ * The identity a running process was started with. Never re-read: a key file
+ * swapped underneath a daemon (a restore from backup, say) must take effect on
+ * the next start, not silently halfway through this one.
+ */
+const IDENTITY_FIELDS: ReadonlySet<string> = new Set(['privateKey', 'signingKey', 'deviceId'])
+
+function adopt(state: BridleState, disk: BridleState): void {
+  for (const key of Object.keys(state)) {
+    if (!IDENTITY_FIELDS.has(key) && !(key in disk)) Reflect.deleteProperty(state, key)
+  }
+  for (const [key, value] of Object.entries(disk)) {
+    if (!IDENTITY_FIELDS.has(key)) Reflect.set(state, key, value)
+  }
+  Object.assign(state, overridesOf.get(state))
+}
+
+function readDisk(): BridleState {
+  return JSON.parse(readFileSync(statePath(), 'utf8')) as BridleState
+}
+
+function mutateDisk(mutate: (disk: BridleState) => void): BridleState {
+  return withStateLock(() => {
+    const disk = readDisk()
+    mutate(disk)
+    writeDisk(disk)
+    return disk
+  })
+}
+
+/** How long a writer waits for another one before giving up. */
+const LOCK_WAIT_MS = 2_000
+/** A lock older than this was left by a process that died holding it. */
+const LOCK_STALE_MS = 10_000
+
+/**
+ * Run `body` holding the state file's lock.
+ *
+ * An exclusive-create lock file, because the writers are separate processes
+ * (and one of them may be dsh itself, with the plugin) and nothing else in
+ * Node is shared between them. Held for one read and one write — microseconds
+ * — so waiting synchronously is cheaper than making every caller async.
+ */
+function withStateLock<T>(body: () => T): T {
+  mkdirSync(rowelHome(), { recursive: true, mode: 0o700 })
+  const lock = `${statePath()}.lock`
+  const deadline = Date.now() + LOCK_WAIT_MS
+  for (;;) {
+    try {
+      closeSync(openSync(lock, 'wx', 0o600))
+      break
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      try {
+        if (Date.now() - statSync(lock).mtimeMs > LOCK_STALE_MS) {
+          unlinkSync(lock)
+          continue
+        }
+      } catch {
+        // Released between the failed create and the stat: just try again.
+        continue
+      }
+      if (Date.now() > deadline) throw new Error(`${lock} is held by another bridle`)
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5)
+    }
+  }
+  try {
+    return body()
+  } finally {
+    try {
+      unlinkSync(lock)
+    } catch {
+      // Already gone; nothing to release.
+    }
+  }
+}
+
+function writeDisk(state: BridleState): void {
   const path = statePath()
   const temporary = `${path}.${String(process.pid)}.tmp`
   writeFileSync(temporary, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 })
   renameSync(temporary, path)
   chmodSync(path, 0o600)
+}
+
+/**
+ * Replace the whole state file: a fresh identity, or one restored from backup.
+ * Anything that changes part of the state goes through {@link updateState}.
+ * @param state - the complete state to write.
+ */
+export function saveState(state: BridleState): void {
+  withStateLock(() => { writeDisk(state) })
 }
 
 /**
@@ -283,7 +387,7 @@ export function signingKeys(state: BridleState): SigningKeyPair {
 
 /**
  * Create (or refresh) the outstanding pairing offer.
- * @param state - loaded state, mutated and persisted.
+ * @param state - loaded state; the change is written through {@link updateState}.
  * @param now - current epoch milliseconds.
  * @returns the offer to render as a QR and a typed code.
  */
@@ -293,8 +397,7 @@ export function openPairingOffer(state: BridleState, now: number = Date.now()): 
     code: mintShortCode(),
     expiresAt: now + PAIRING_TTL_MS,
   }
-  state.offer = offer
-  saveState(state)
+  updateState(state, (disk) => { disk.offer = offer })
   return offer
 }
 
@@ -315,22 +418,23 @@ export function offerAccepts(state: BridleState, token: string, now: number = Da
 
 /**
  * Record a newly paired device and consume the offer.
- * @param state - loaded state, mutated and persisted.
+ * @param state - loaded state; the change is written through {@link updateState}.
  * @param key - the device's raw static public key.
  * @param name - the device name reported by the app.
  * @param now - current epoch milliseconds.
  */
 export function acceptPeer(state: BridleState, key: Buffer, name: string, now: number = Date.now()): void {
   const encoded = key.toString('base64url')
-  const existing = state.peers.find(peer => peer.key === encoded)
-  if (existing !== undefined) {
-    existing.name = name
-    existing.lastSeen = now
-  } else {
-    state.peers.push({ key: encoded, name, pairedAt: now, lastSeen: now })
-  }
-  delete state.offer
-  saveState(state)
+  updateState(state, (disk) => {
+    const existing = disk.peers.find(peer => peer.key === encoded)
+    if (existing !== undefined) {
+      existing.name = name
+      existing.lastSeen = now
+    } else {
+      disk.peers.push({ key: encoded, name, pairedAt: now, lastSeen: now })
+    }
+    delete disk.offer
+  })
 }
 
 /**
@@ -346,27 +450,28 @@ export function findPeer(state: BridleState, key: Buffer): PairedPeer | undefine
 
 /**
  * Update a peer's last-seen stamp.
- * @param state - loaded state, mutated and persisted.
+ * @param state - loaded state; the change is written through {@link updateState}.
  * @param key - the device's raw static public key.
  * @param now - current epoch milliseconds.
  */
 export function touchPeer(state: BridleState, key: Buffer, now: number = Date.now()): void {
-  const peer = findPeer(state, key)
-  if (peer === undefined) return
-  peer.lastSeen = now
-  saveState(state)
+  if (findPeer(state, key) === undefined) return
+  updateState(state, (disk) => {
+    const peer = findPeer(disk, key)
+    if (peer !== undefined) peer.lastSeen = now
+  })
 }
 
 /**
  * Remove a paired device.
- * @param state - loaded state, mutated and persisted.
+ * @param state - loaded state; the change is written through {@link updateState}.
  * @param keyPrefix - full key or a unique base64url prefix.
  * @returns the removed peer, or undefined when nothing matched.
  */
 export function revokePeer(state: BridleState, keyPrefix: string): PairedPeer | undefined {
-  const index = state.peers.findIndex(peer => peer.key.startsWith(keyPrefix))
-  if (index < 0) return undefined
-  const [removed] = state.peers.splice(index, 1)
-  saveState(state)
-  return removed
+  return updateState(state, (disk) => {
+    const index = disk.peers.findIndex(peer => peer.key.startsWith(keyPrefix))
+    if (index < 0) return undefined
+    return disk.peers.splice(index, 1)[0]
+  })
 }

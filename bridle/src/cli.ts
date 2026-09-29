@@ -18,7 +18,7 @@ import { BridleCore } from './core.ts'
 import { DirectServer } from './direct-server.ts'
 import { DshClient } from './dsh/client.ts'
 import { dshHomeUrl, ensureDsh, probeDsh } from './dsh/discovery.ts'
-import { loadState, rowelHome, revokePeer, saveState, signingKeys, staticKeys } from './identity.ts'
+import { loadState, overrideState, rowelHome, revokePeer, saveState, signingKeys, staticKeys, updateState } from './identity.ts'
 import { deviceIdFor } from '@rowel/protocol'
 import { BackupError, describeBackup, exportIdentity, importIdentity } from './backup.ts'
 import { createInvitation, publishInvitation, toHttpUrl, type Invitation } from './pair.ts'
@@ -166,8 +166,9 @@ async function start(options: Options): Promise<void> {
 
   const relayOverride = flagString(options, 'relay')
   if (relayOverride !== undefined) {
-    state.relayUrl = relayOverride
-    saveState(state)
+    updateState(state, (disk) => { disk.relayUrl = relayOverride })
+    // Also for this run, over any `ROWEL_RELAY_URL`: the flag is the later word.
+    overrideState(state, { relayUrl: relayOverride })
   }
   const dshOverride = flagString(options, 'dsh')
 
@@ -191,8 +192,7 @@ async function start(options: Options): Promise<void> {
       return
     }
     if (flagString(options, 'dsh-home') !== undefined && state.dshHome !== homeOverride) {
-      state.dshHome = homeOverride
-      saveState(state)
+      updateState(state, (disk) => { disk.dshHome = homeOverride })
     }
   }
   const discovered = await ensureDsh({
@@ -214,7 +214,11 @@ async function start(options: Options): Promise<void> {
     say(`harness   moved: ${state.dshUrl} did not answer; now bound to ${discovered.url}`)
     say('          (a different dsh means different conversations — use --dsh to rebind deliberately)')
   }
-  state.dshUrl = discovered.url
+  // Remembered, so the next start races this address first — unless it came
+  // from `ROWEL_DSH_URL`, which describes this run and not the machine.
+  const dshFromEnvironment = (process.env['ROWEL_DSH_URL'] ?? '').length > 0
+  if (dshFromEnvironment) overrideState(state, { dshUrl: discovered.url })
+  else if (discovered.url !== state.dshUrl) updateState(state, (disk) => { disk.dshUrl = discovered.url })
   const core = new BridleCore(state, { dsh: new DshClient({ baseUrl: discovered.url }) })
   await core.start()
   say(`harness   ${discovered.url}${discovered.launched ? ' (started by bridle)' : ''}`)

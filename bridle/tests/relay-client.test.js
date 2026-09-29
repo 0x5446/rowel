@@ -211,3 +211,63 @@ test('a relay that stops answering is noticed instead of believed', { timeout: 3
     `the client never left \`online\` while the relay was not answering: ${states.join(' → ')}`,
   )
 })
+
+test('a Relay that reconnects does not ring the phone again for the same question', { timeout: 30_000 }, async (t) => {
+  // Every re-registration is a reason to reconsider ringing — a Mac waking from
+  // sleep, a network change — and reconsidering used to mean "is anything
+  // pending", so the same question buzzed the phone once per reconnect.
+  const server = new WebSocketServer({ host: '127.0.0.1', port: 0 })
+  await new Promise((resolve) => server.on('listening', resolve))
+  let connections = 0
+  let wakes = 0
+  server.on('connection', (socket) => {
+    connections += 1
+    const first = connections === 1
+    socket.send(JSON.stringify({ t: 'challenge', nonce: `n${String(connections)}` }))
+    socket.on('message', (data, isBinary) => {
+      if (isBinary) {
+        wakes += 1
+        return
+      }
+      if (JSON.parse(String(data)).t !== 'register') return
+      socket.send(JSON.stringify({ t: 'registered', device: 'd' }))
+      if (first) setTimeout(() => { socket.close(4000, 'replaced by a newer connection') }, 300)
+    })
+  })
+  const url = `http://127.0.0.1:${String(server.address().port)}`
+
+  let feed = () => {}
+  const machine = new BridleCore(
+    {
+      version: 1,
+      deviceId: 'd',
+      privateKey: Buffer.alloc(32).toString('base64url'),
+      signingKey: Buffer.alloc(64).toString('base64url'),
+      machineName: 'a-mac',
+      relayUrl: url,
+      dshUrl: 'http://127.0.0.1:9',
+      peers: [{ key: 'k', name: 'phone', pairedAt: 0, lastSeen: 0, push: 'ab'.repeat(32) }],
+    },
+    {
+      dsh: {
+        baseUrl: 'http://127.0.0.1:9',
+        call: async () => ({ ok: true, value: {} }),
+        health: async () => ({ reachable: false }),
+        pump: async (stream, onFrame) => { if (stream === 'mux') feed = onFrame },
+      },
+    },
+  )
+  await machine.start()
+  feed({ type: 'server-request', rpcId: 'r1', payload: { type: 'approval/requested', sessionId: 's1', approvalId: 'a1' } })
+  const relay = new RelayClient(machine, { version: 'test/0', log: () => {} })
+  t.after(async () => {
+    relay.stop()
+    machine.stop()
+    await new Promise((resolve) => server.close(resolve))
+  })
+  relay.start()
+
+  await until(() => connections >= 2 && wakes >= 1, 20_000, 'a second registration')
+  await new Promise((resolve) => setTimeout(resolve, 500))
+  assert.equal(wakes, 1, 'the phone was rung again for a question it was already rung for')
+})

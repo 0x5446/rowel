@@ -27,6 +27,7 @@ import {
   clearRuntime,
   competingDaemon,
   loadState,
+  overrideState,
   rememberInstance,
   writeRuntime,
   type BridleState,
@@ -88,8 +89,12 @@ export function apply(
   }
 
   const state: BridleState = loadState()
-  if (config.relay !== undefined && config.relay.length > 0) state.relayUrl = config.relay
-  if (config.dsh !== undefined && config.dsh.length > 0) state.dshUrl = config.dsh
+  // For this process only — never written to the machine's state file. An
+  // empty `relay` is a setting in its own right: it turns the Relay off.
+  overrideState(state, {
+    ...(config.relay === undefined ? {} : { relayUrl: config.relay }),
+    ...(config.dsh !== undefined && config.dsh.length > 0 ? { dshUrl: config.dsh } : {}),
+  })
 
   const core = new BridleCore(state)
   const startedAt = Date.now()
