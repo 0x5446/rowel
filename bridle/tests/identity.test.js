@@ -13,7 +13,7 @@ import {
   acceptPeer,
   findPeer,
   loadState,
-  offerAccepts,
+  offerMatch,
   openPairingOffer,
   overrideState,
   reloadState,
@@ -112,8 +112,8 @@ test('an outstanding offer accepts its own token and nothing else', () => {
   withHome(() => {
     const state = loadState()
     const offer = openPairingOffer(state)
-    assert.equal(offerAccepts(state, offer.token), true)
-    assert.equal(offerAccepts(state, 'some-other-token'), false)
+    assert.equal(offerMatch(state, offer.token), 'scanned')
+    assert.equal(offerMatch(state, 'some-other-token'), undefined)
   })
 })
 
@@ -121,7 +121,7 @@ test('an expired offer is refused', () => {
   withHome(() => {
     const state = loadState()
     const offer = openPairingOffer(state)
-    assert.equal(offerAccepts(state, offer.token, offer.expiresAt + 1), false)
+    assert.equal(offerMatch(state, offer.token, offer.expiresAt + 1), undefined)
   })
 })
 
@@ -131,7 +131,7 @@ test('pairing consumes the offer, so one invitation admits one device', () => {
     const offer = openPairingOffer(state)
     const device = generateKeyPair().publicKey
     acceptPeer(state, device, 'Alex iPhone')
-    assert.equal(offerAccepts(state, offer.token), false)
+    assert.equal(offerMatch(state, offer.token), undefined)
     assert.equal(findPeer(state, device)?.name, 'Alex iPhone')
   })
 })

@@ -21,7 +21,7 @@ import {
   type ServerFrame,
   MAX_FRAME_BYTES,
 } from '@rowel/protocol'
-import { acceptPeer, findPeer, offerAccepts, rowelHome, touchPeer, updateState } from '../identity.ts'
+import { acceptPeer, claimOffer, findPeer, offerMatch, rowelHome, touchPeer, updateState } from '../identity.ts'
 import type { BridleCore, DshStatus } from '../core.ts'
 import type { LoggedEvent } from './event-log.ts'
 import { thinHistory } from './history.ts'
@@ -61,8 +61,11 @@ interface HandshakeReply {
   ok: boolean
   /** The version both ends will speak. Present when `ok`. */
   version?: number
-  /** Refusal reason when `ok` is false. */
-  reason?: 'version' | 'unpaired' | 'internal'
+  /**
+   * Refusal reason when `ok` is false. `pending` is not final: the device
+   * presented the short-code token and waits for a person at the Mac.
+   */
+  reason?: 'version' | 'unpaired' | 'internal' | 'pending'
   /** What this build can speak. Present when refusing for `version`, so the app can say which end is old. */
   supported?: number[]
   /** Human-readable machine name. */
@@ -186,8 +189,16 @@ export class TunnelSession {
     this.core.refreshState()
     const known = findPeer(this.core.state, remoteStatic)
     if (known === undefined) {
-      if (request.token === undefined || !offerAccepts(this.core.state, request.token)) {
+      const presented = request.token === undefined ? undefined : offerMatch(this.core.state, request.token)
+      if (presented === undefined) {
         this.refuse('unpaired')
+        return
+      }
+      if (presented === 'typed') {
+        // The Relay held the bundle this token came from, so the token says
+        // nothing about who is on the other end. A person at the Mac decides.
+        claimOffer(this.core.state, remoteStatic, name)
+        this.refuse('pending')
         return
       }
       acceptPeer(this.core.state, remoteStatic, name)

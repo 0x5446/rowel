@@ -9,7 +9,8 @@
  *
  * Anything held here is public by construction: the Relay could read a bundle,
  * substitute a key, and try to sit in the middle. That is precisely why the
- * short-code flow ends with a six-digit number on both screens. Holding the
+ * bundle carries a token that only earns a request to pair, which a person at
+ * the Mac accepts after comparing key fingerprints. Holding the
  * bundle is a convenience for people who cannot scan, not a trust anchor.
  */
 

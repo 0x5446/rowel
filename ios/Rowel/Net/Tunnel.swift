@@ -70,6 +70,11 @@ public enum RefusalReason: Equatable, Sendable {
     case version(appIsOlder: Bool)
     /// The machine failed internally during the handshake.
     case machineError(String)
+    /// This device presented the short-code token and the Mac has not said yes
+    /// yet. The one refusal that is not final: the person at the Mac compares
+    /// fingerprints in `bridle pair --code`, and the next dial after they
+    /// accept goes through. `Tunnel.run` retries it instead of stopping.
+    case awaitingApproval
 }
 
 /// What one path did in one dial round, with its structure intact.
@@ -172,6 +177,10 @@ public struct TunnelTimings: Sendable {
     /// all, and `poke()` from the foreground observer will get there faster
     /// than any timer.
     public var maximumBackoff: TimeInterval = 30
+
+    /// How often to ask again while the Mac decides whether to accept this
+    /// device. Short, because a person is standing at the Mac waiting too.
+    public var approvalPoll: TimeInterval = 3
 
     /// How long the Relay waits before joining a dial the local address started.
     ///
@@ -524,6 +533,14 @@ public actor Tunnel {
                 try await connectOnce()
                 backoff = 0.5
                 try await pump()
+            } catch RefusalReason.awaitingApproval {
+                teardown(reason: "awaiting approval")
+                if Task.isCancelled { return }
+                let detail = "Accept this iPhone on your Mac. It shows the key \(Pairing.keyFingerprint(identity.publicKey)) — check the Mac shows the same."
+                note(.fail, "Waiting for the Mac to accept this iPhone")
+                status = .waiting(detail: detail, retryIn: timings.approvalPoll, diagnosis: nil)
+                await sleep(timings.approvalPoll)
+                continue
             } catch let refusal as RefusalReason {
                 note(.fail, "Refused by the Mac")
                 status = .refused(reason: refusal)
@@ -920,6 +937,7 @@ public actor Tunnel {
                 socket.close("refused")
                 switch answer.reason {
                 case "unpaired": return .refused(.unpaired)
+                case "pending": return .refused(.awaitingApproval)
                 case "version": return .refused(.version(appIsOlder: answer.weAreTheOldEnd))
                 default: return .refused(.machineError(answer.reason ?? "unknown"))
                 }
@@ -1095,6 +1113,7 @@ extension RefusalReason: Error, LocalizedError {
         case .unpaired: return "This iPhone isn’t paired with that Mac any more."
         case .version: return "The Rowel app and that Mac’s Bridle are different versions."
         case .machineError(let detail): return detail
+        case .awaitingApproval: return "Waiting for the Mac to accept this iPhone."
         }
     }
 }

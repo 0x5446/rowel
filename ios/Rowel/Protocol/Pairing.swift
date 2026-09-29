@@ -6,9 +6,9 @@
 ///   the responder's identity before the first byte and a hostile Relay cannot
 ///   interpose. This is the default and needs no confirmation step.
 /// - **Short code** is for people who cannot scan. The phone fetches the bundle
-///   from the Relay, which could lie, so both ends then show a six-digit number
-///   derived from the completed handshake. Equal numbers rule out a party in the
-///   middle — the same trick as Bluetooth numeric comparison.
+///   from the Relay, which could lie or use it itself, so its token only earns a
+///   request: the Mac shows the requesting device's key fingerprint, and the
+///   person accepts only if it matches the one this device shows.
 
 import CryptoKit
 import Foundation

@@ -9,6 +9,18 @@ the same decision.
 
 ## Unreleased
 
+- **The Relay can no longer pair itself with your Mac.** `bridle pair`
+  published the pairing bundle to the Relay for the short code, and that bundle
+  carried the same one-time token as the QR — so whoever ran the Relay, or got
+  into it, could present the token first and become a paired phone: a shell on
+  the Mac. Scanning the QR did not protect you, because the token had already
+  left. The QR's token now never leaves the Mac, and the short code carries a
+  different one that only earns a *request*: `bridle pair --code` shows the
+  requesting phone's key and asks `Accept? [y/N]`, and the app shows its own
+  key while it waits. `bridle start` and plain `bridle pair` show only the QR.
+  An invitation made by an older Bridle is discarded on upgrade, since its
+  token may already be at the Relay.
+
 - **Revoking a phone sticks.** `bridle revoke` in one terminal and a running
   Bridle in another both write `~/.rowel/bridle.json`, and each used to write
   back its whole copy of the file. A copy read before the revoke put the phone

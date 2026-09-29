@@ -11,7 +11,7 @@ import assert from 'node:assert/strict'
 import { Socket, createServer } from 'node:net'
 import test from 'node:test'
 import WebSocket from 'ws'
-import { probeDsh, revokePeer } from '@rowel/bridle'
+import { approveClaimant, probeDsh, reloadState, revokePeer } from '@rowel/bridle'
 import { generateKeyPair } from '@rowel/protocol'
 import { HandshakeRefused, RowelPhone, startStack, waitFor } from '../lib/index.js'
 
@@ -50,6 +50,28 @@ test('a stolen pairing token works exactly once', { skip, timeout: 60_000 }, asy
   const thief = new RowelPhone({ bundle, prefer: 'relay', name: 'Thief iPhone' })
   t.after(() => { thief.close() })
   await assert.rejects(() => thief.connect(), (error) => error.reason === 'unpaired')
+  assert.equal(stack.state.peers.length, 1)
+})
+
+test('the token a Relay can read earns a request to pair, never a pairing', { skip, timeout: 60_000 }, async (t) => {
+  const stack = await startStack({ dshUrl: DSH_URL })
+  t.after(() => stack.stop())
+  await stack.waitForRelay()
+  const invitation = stack.invite()
+
+  // What the Relay holds for the short code, used by whoever holds it — the
+  // Relay itself, in the case this exists for. It used to be the QR's token,
+  // and presenting it paired the presenter outright.
+  const claimer = new RowelPhone({ bundle: { ...invitation.bundle, token: invitation.codeToken }, prefer: 'relay', name: 'Claimer' })
+  t.after(() => { claimer.close() })
+  await assert.rejects(() => claimer.connect(), (error) => error.reason === 'pending')
+  reloadState(stack.state)
+  assert.equal(stack.state.peers.length, 0, 'a claim alone admitted the device')
+  assert.equal(stack.state.offer?.claimant?.key, claimer.keys.publicKey.toString('base64url'))
+
+  // A person at the Mac compared the fingerprints and said yes.
+  assert.ok(approveClaimant(stack.state, claimer.keys.publicKey.toString('base64url')))
+  await claimer.connect()
   assert.equal(stack.state.peers.length, 1)
 })
 

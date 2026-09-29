@@ -18,7 +18,7 @@ import { BridleCore } from './core.ts'
 import { DirectServer } from './direct-server.ts'
 import { DshClient } from './dsh/client.ts'
 import { dshHomeUrl, ensureDsh, probeDsh } from './dsh/discovery.ts'
-import { loadState, overrideState, rowelHome, revokePeer, saveState, signingKeys, staticKeys, updateState } from './identity.ts'
+import { approveClaimant, loadState, overrideState, reloadState, rowelHome, revokePeer, saveState, signingKeys, staticKeys, updateState, withdrawOffer } from './identity.ts'
 import { deviceIdFor } from '@rowel/protocol'
 import { BackupError, describeBackup, exportIdentity, importIdentity } from './backup.ts'
 import { createInvitation, publishInvitation, toHttpUrl, type Invitation } from './pair.ts'
@@ -296,7 +296,6 @@ async function start(options: Options): Promise<void> {
   if (state.peers.length === 0 || flagBoolean(options, 'pair')) {
     say('')
     const invitation = createInvitation(state, directAddresses)
-    await tryPublish(state, invitation)
     await printInvitation(invitation, state, flagBoolean(options, 'link'))
   } else {
     say(`paired    ${String(state.peers.length)} device${state.peers.length === 1 ? '' : 's'} · run "bridle pair" to add another`)
@@ -324,19 +323,82 @@ async function pair(options: Options): Promise<void> {
     say('')
   }
   const invitation = createInvitation(state, runtime?.direct ?? [])
-  if (!flagBoolean(options, 'no-relay-offer')) await tryPublish(state, invitation)
-  await printInvitation(invitation, state, flagBoolean(options, 'link'))
+  if (!flagBoolean(options, 'code')) {
+    await printInvitation(invitation, state, flagBoolean(options, 'link'))
+    return
+  }
+  await pairByCode(state, invitation)
 }
 
-async function tryPublish(state: ReturnType<typeof loadState>, invitation: Invitation): Promise<void> {
+/**
+ * The short-code path: publish, then wait here for the phone and ask.
+ *
+ * The Relay holds the bundle a typed code fetches, so a phone that presents
+ * it is only a claim until a person at this Mac says yes (see `pair.ts`). The
+ * question is asked in this terminal, which is why this command stays in the
+ * foreground until the phone turns up, the offer lapses, or the answer is no.
+ */
+async function pairByCode(state: ReturnType<typeof loadState>, invitation: Invitation): Promise<void> {
+  if (process.stdin.isTTY !== true) {
+    withdrawOffer(state)
+    say('"bridle pair --code" has to ask you to accept the phone, so it needs a terminal.')
+    say('Scan the QR from "bridle pair" instead, or run this where you can answer.')
+    process.exitCode = 1
+    return
+  }
   try {
     await publishInvitation(state, invitation)
   } catch (error) {
-    // The QR path does not need the Relay to hold anything, so a Relay that is
-    // down costs the typed code and nothing else.
-    say(`(short code unavailable: ${error instanceof Error ? error.message : String(error)})`)
+    withdrawOffer(state)
+    say(`The Relay did not take the code: ${error instanceof Error ? error.message : String(error)}`)
+    say('Scan the QR from "bridle pair" instead — it does not need the Relay.')
+    process.exitCode = 1
+    return
+  }
+  say(`Type this code in the Rowel app:   ${invitation.code}`)
+  say(`expires:                           ${new Date(invitation.expiresAt).toLocaleTimeString()}`)
+  say('')
+  say('Waiting for the phone… (Ctrl-C to give up)')
+  let asked: string | undefined
+  for (;;) {
+    await new Promise((resolve) => setTimeout(resolve, CLAIM_POLL_MS))
+    reloadState(state)
+    const offer = state.offer
+    if (offer === undefined) {
+      // Taken by a scan of the QR from another `bridle pair`, or withdrawn.
+      say('This invitation is no longer open.')
+      return
+    }
+    if (offer.expiresAt <= Date.now()) {
+      withdrawOffer(state)
+      say('The code expired before a phone accepted it. Run "bridle pair --code" again.')
+      process.exitCode = 1
+      return
+    }
+    const claimant = offer.claimant
+    if (claimant === undefined || claimant.key === asked) continue
+    asked = claimant.key
+    say('')
+    say(`"${claimant.name}" asks to pair with this Mac.`)
+    say(`its key:  ${keyFingerprint(Buffer.from(claimant.key, 'base64url'))}`)
+    say('The phone shows its own key while it waits. Accept only if the two are the same:')
+    say('anyone holding the code could be asking, including the Relay.')
+    const answer = (await readLine('Accept? [y/N] ')).trim().toLowerCase()
+    if (answer !== 'y' && answer !== 'yes') {
+      withdrawOffer(state)
+      say('Refused. The code no longer works.')
+      return
+    }
+    if (approveClaimant(state, claimant.key)) {
+      say(`Paired with ${claimant.name}. The phone connects on its next try, within a few seconds.`)
+      return
+    }
+    say('That request changed or expired while you were deciding; still waiting.')
   }
 }
+
+/** How often `bridle pair --code` looks for a claiming phone. */
+const CLAIM_POLL_MS = 500
 
 async function printInvitation(invitation: Invitation, state: ReturnType<typeof loadState>, forceLink = false): Promise<void> {
   // Block-drawing QR codes only survive a real terminal. Over SSH into a log,
@@ -346,10 +408,8 @@ async function printInvitation(invitation: Invitation, state: ReturnType<typeof 
     const qr = await QRCode.toString(invitation.link, { type: 'terminal', small: true, errorCorrectionLevel: 'M' })
     say('Scan this in the Rowel app:')
     process.stdout.write(`\n${qr}\n`)
-    say(`or type this code:   ${invitation.code}`)
   } else {
-    say('Pair the Rowel app with either of these:')
-    say(`code:                ${invitation.code}`)
+    say('Pair the Rowel app with this link:')
   }
   if (forceLink || !drawable) say(`link:                ${invitation.link}`)
   say(`machine:             ${state.machineName}`)
@@ -360,6 +420,7 @@ async function printInvitation(invitation: Invitation, state: ReturnType<typeof 
   say(`identity:            ${keyFingerprint(staticKeys(state).publicKey)}`)
   say(`expires:             ${new Date(invitation.expiresAt).toLocaleTimeString()}`)
   say('')
+  say('No camera? "bridle pair --code" gives a code to type instead.')
   say('No app yet? Get it at https://rowel.novabox.ai/get')
 }
 
@@ -680,7 +741,7 @@ function usage(): void {
   process.stdout.write(`Rowel Bridle ${VERSION} — reach your local DeepSeek Harness from your phone.
 
   bridle                    start the bridle (and pair, on first run)
-  bridle pair               show a new pairing QR and short code
+  bridle pair               show a new pairing QR (--code: a code to type instead)
   bridle status             machine, relay, harness, and paired devices
   bridle devices            list paired devices
   bridle instances          every identity on this machine, and who runs it

@@ -1,11 +1,21 @@
 /**
  * Making a machine claimable by a phone.
  *
- * Two paths, one outcome. Scanning the QR is the default because it carries the
- * machine's static key directly, which is what makes a hostile Relay
- * impossible rather than merely unlikely. Typing the short code exists because
- * some people will be pairing an iPad, or a phone whose camera is covered by a
- * corporate policy, and telling them "get a different device" is not a product.
+ * Two paths, and they do not trust the same things. Scanning the QR is the
+ * default: the code carries the machine's static key and a token that never
+ * leaves this machine any other way, so a phone presenting that token scanned
+ * this screen, and a hostile Relay can neither impersonate the machine nor
+ * pair itself.
+ *
+ * Typing the short code exists because some people will be pairing an iPad,
+ * or a phone whose camera is covered by a corporate policy. Its bundle is
+ * handed to the Relay, which could read the token in it, swap the key, or
+ * present the token itself. So that token only ever earns a *claim*: the
+ * Bridle records the claiming device and refuses it, and `bridle pair --code`
+ * shows its fingerprint to the person at the Mac, who accepts it only if it
+ * matches the one on their phone. One comparison covers both attacks — a
+ * Relay pairing itself shows its own key, and a Relay sitting in the middle
+ * shows its own key too.
  */
 
 import {
@@ -24,6 +34,8 @@ export interface Invitation {
   link: string
   /** Typed alternative, e.g. `KTPQ-3WRM`. */
   code: string
+  /** The token the short-code bundle carries instead of the QR's. */
+  codeToken: string
   /** Epoch milliseconds after which the invitation stops working. */
   expiresAt: number
 }
@@ -45,15 +57,15 @@ export function createInvitation(state: BridleState, direct: string[] = []): Inv
     token: offer.token,
     name: state.machineName,
   }
-  return { bundle, link: encodePairingLink(bundle), code: offer.code, expiresAt: offer.expiresAt }
+  return { bundle, link: encodePairingLink(bundle), code: offer.code, codeToken: offer.codeToken, expiresAt: offer.expiresAt }
 }
 
 /**
  * Hand the invitation to the Relay so a typed short code can fetch it.
  *
- * The Relay learns the machine's static key here, which is exactly why the
- * short-code path ends in a six-digit confirmation on both screens: a Relay
- * that substituted its own key would produce a different number.
+ * With the short-code token, never the QR's: whatever is published here the
+ * Relay can read, and the QR token is the one thing this Bridle accepts
+ * without asking a person.
  * @param state - loaded state, for the signing identity.
  * @param invitation - the invitation to publish.
  * @throws {@link Error} when the Relay refuses the offer.
@@ -68,7 +80,7 @@ export async function publishInvitation(state: BridleState, invitation: Invitati
       device: deviceIdFor(keys.publicKey),
       key: keys.publicKey.toString('base64url'),
       signature: signPairOffer(keys.privateKey, invitation.code),
-      bundle: invitation.bundle,
+      bundle: { ...invitation.bundle, token: invitation.codeToken },
       expiresAt: invitation.expiresAt,
     }),
     signal: AbortSignal.timeout(10_000),

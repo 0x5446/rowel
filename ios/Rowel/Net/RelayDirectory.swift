@@ -3,8 +3,9 @@
 /// Claiming a typed short code, and checking whether a machine is online. Both
 /// are unauthenticated by design — the Relay knows device ids and nothing else,
 /// and every answer it gives is verified afterwards by the Noise handshake
-/// against the key in the bundle. A Relay that lies about a bundle produces a
-/// handshake the app then confirms out of band with a six-digit number.
+/// against the key in the bundle. A bundle fetched here only ever earns a
+/// request to pair: the Mac shows the requesting key and a person accepts it
+/// only if it matches this device's fingerprint (see `bridle pair --code`).
 
 import Foundation
 

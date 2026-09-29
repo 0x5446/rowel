@@ -231,13 +231,11 @@ interface AgentClient {
 
 **二维码**（默认）：配对码直接带着机器的静态公钥，手机在第一个字节之前就知道对方是谁。恶意 Relay 无法介入。
 
-**短码**（扫不了码时）：手机从 Relay 换取配对载荷，而 Relay 可能撒谎。所以握手完成后**两端各显示一个 6 位数字**，从 handshake hash 派生：
+**短码**（扫不了码时）：手机从 Relay 换取配对载荷，而 Relay 读得到它、改得了它、也能自己拿去用。所以短码载荷里是**另一把** token（`codeToken`），它只能换来一次"申请"：Bridle 记下申请的手机（`offer.claimant`）并以 `pending` 拒绝；`bridle pair --code` 在 Mac 的终端里显示该手机的密钥指纹并询问是否接受，手机在等待期间显示自己的指纹。两者一致才接受。
 
-```
-digits = BE_uint32(sha256("rowel-confirm" ‖ handshakeHash)[0..4]) mod 10^6
-```
+一次比对同时挡住两种攻击：Relay 冒充手机（Mac 看到的是 Relay 的密钥），Relay 居中替换机器公钥（Mac 看到的仍是 Relay 的密钥）。
 
-数字相同 ⇒ 两端的握手记录一致 ⇒ 没有中间人。这是 Bluetooth 数字比对的同一套逻辑。
+> 早期版本这里写的是握手后两端比对 6 位确认数。Mac 端从未实现它，而短码载荷里放的又是与二维码同一把 token——Relay 拿着它就能直接配对。2026-09 改成上面的两把 token + Mac 端确认。
 
 ### 5.4 dsh 没有认证层，这是设计的中心事实
 

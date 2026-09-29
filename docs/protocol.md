@@ -117,17 +117,9 @@ device = base64url( sha256("rowel-device" ‖ ed25519_signing_public_key)[0..16]
 
 > 陷阱：判定**必须**基于去格式化后的字符串。基于归一化结果判断长度是错的——9 个字符的输入归一化后仍是 9 个字符，与"8 字符 + 连字符"同长，会被误判为合法。
 
-### 2.5 确认数
+### 2.5 确认数（未使用）
 
-短码路径下，两端各自显示并由人工比对。
-
-```
-digits = BE_uint32( sha256("rowel-confirm" ‖ handshake_hash)[0..4] ) mod 1000000
-```
-
-十进制，**左侧补零至 6 位**。
-
-`handshake_hash` 是握手完成时 Noise 对称状态的 `h`（§3.3）。
+`confirmationNumber`（`digits = BE_uint32(sha256("rowel-confirm" ‖ handshake_hash)[0..4]) mod 1000000`，左侧补零至 6 位）保留在 `protocol/src/pairing.ts`，但**不属于任何配对流程**：Mac 端从未实现它。短码路径的防线是 Mac 端对手机密钥指纹的人工确认（§3.3 第 5 步）。
 
 ### 2.6 密钥指纹
 
@@ -234,8 +226,9 @@ EncryptAndHash(payload)
 1. 取 `versions`（缺失或空则视为 `[1]`），与自己支持的集合求交；交集为空 → `refuse("version", supported)`。否则选交集中最大者。
 2. **重新读取状态文件**（`bridle pair` / `bridle revoke` 在别的进程里跑，必须在**本次握手**生效，而不是下次重启）
 3. 静态公钥在已配对列表中 → 接受，更新 last-seen
-4. 否则要求 `token` 存在且匹配一个未过期未使用的 offer → 接受并记录设备，**令牌立即作废**
-5. 否则 → `refuse("unpaired")`
+4. 否则 `token` 匹配未过期 offer 的**二维码 token**（`offer.token`，只出现在二维码里，从不发给 Relay）→ 接受并记录设备，**offer 立即作废**
+5. 否则 `token` 匹配 offer 的**短码 token**（`offer.codeToken`，随短码载荷交给 Relay）→ 把该设备记为 `offer.claimant`（只留最新一个），`refuse("pending")`。`pending` **不是终态**：App 应显示本机密钥指纹并每隔几秒重拨；Mac 上的人在 `bridle pair --code` 里比对指纹后接受，设备进入已配对列表，下一次握手按第 3 步通过；拒绝或过期则 offer 作废，之后按第 6 步拒绝
+6. 否则 → `refuse("unpaired")`
 
 **握手完成后**双方各得两个方向密钥：`(k_initiator→responder, k_responder→initiator)`，以及 `handshake_hash = h`。
 

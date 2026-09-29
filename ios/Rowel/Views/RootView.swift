@@ -305,6 +305,10 @@ struct StatusLine: View {
                     : "The Bridle on \(machineLabel) is older than Rowel. Run `npm update` there, or update the dsh plugin."
             case .machineError(let detail):
                 return detail
+            case .awaitingApproval:
+                // Never a refusal the screen sees: `Tunnel.run` retries it as
+                // `.waiting`, with the fingerprint in the detail.
+                return "Waiting for \(machineLabel) to accept this iPhone."
             }
         case .online:
             if let detail = session.harnessDetail { return detail }
