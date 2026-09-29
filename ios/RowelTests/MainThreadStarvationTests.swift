@@ -303,10 +303,12 @@ final class MainThreadStarvationTests: XCTestCase {
     //
     // Unlike the others this one asserts, because it separates cleanly: one
     // `Text` per code block delivered ~5% of frames with ~1 s stalls here, and
-    // the sliced block ~92% with stalls under 100 ms. The bounds (35 points
-    // more dropped than idle, 350 ms longer than idle's longest gap) sit above
-    // the worst reading seen on a heavily loaded host (21%, 230 ms) and still
-    // catch anything a third of the way back to the old layout. K is not
+    // the sliced block ~92% with stalls under 100 ms on a desk machine. A CI
+    // runner reads the new layout at up to ~44% dropped but still ~135 ms
+    // stalls: dropped frames swing with the host, the longest stall does not.
+    // So the stall is the gate (under 400 ms more than idle's longest gap;
+    // the old layout stalled for a second), and dropped frames only catch a
+    // screen that has all but stopped (under 75 points more than idle). K is not
     // asserted — its signal (5–10%) is smaller than what a busy host adds.
     func testL_longCodeBlockAtWireRate() {
         var scale = BubbleScale.giant
@@ -328,8 +330,8 @@ final class MainThreadStarvationTests: XCTestCase {
         guard let (idle, busy) = best else { return XCTFail("no measurement ran") }
         let reading = String(format: "busy %.1f%% / %.0f ms, idle %.1f%% / %.0f ms",
                              busy.dropRate * 100, busy.maxGapMs, idle.dropRate * 100, idle.maxGapMs)
-        XCTAssertLessThan(busy.dropRate - idle.dropRate, 0.35, "streaming into a long code block starves the screen again (\(reading))")
-        XCTAssertLessThan(busy.maxGapMs - idle.maxGapMs, 350, "a stall this long is the one-Text-per-block layout again (\(reading))")
+        XCTAssertLessThan(busy.dropRate - idle.dropRate, 0.75, "streaming into a long code block starves the screen again (\(reading))")
+        XCTAssertLessThan(busy.maxGapMs - idle.maxGapMs, 400, "a stall this long is the one-Text-per-block layout again (\(reading))")
     }
 
     // J: not an A/B condition — a cost attribution. `MarkdownText` runs
