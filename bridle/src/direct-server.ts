@@ -12,6 +12,7 @@
 import { createServer, type Server } from 'node:http'
 import { networkInterfaces } from 'node:os'
 import { WebSocketServer, type WebSocket } from 'ws'
+import { MAX_FRAME_BYTES } from '@rowel/protocol'
 import { TunnelSession } from './tunnel/session.ts'
 import type { BridleCore } from './core.ts'
 
@@ -27,6 +28,12 @@ export interface DirectServerOptions {
   /** Progress reporting. */
   log?: (message: string) => void
 }
+
+/** Connections that have not completed a handshake, at most, at once. */
+const MAX_UNAUTHENTICATED = 8
+
+/** How long a connection has to complete the handshake. */
+const HANDSHAKE_TIMEOUT_MS = 10_000
 
 /** A WebSocket listener on the local network. */
 export class DirectServer {
@@ -45,7 +52,10 @@ export class DirectServer {
       response.writeHead(426, { 'content-type': 'text/plain' })
       response.end('rowel bridle: websocket upgrade required\n')
     })
-    this.wss = new WebSocketServer({ server: this.http, path: DIRECT_PATH, maxPayload: 64 * 1024 * 1024 })
+    // The tunnel's own ceiling, as on the relay path. This listener answers
+    // anyone on the network before they have proved anything, so a message
+    // allowance twice the tunnel's was only room for a stranger to fill.
+    this.wss = new WebSocketServer({ server: this.http, path: DIRECT_PATH, maxPayload: MAX_FRAME_BYTES })
     this.wss.on('connection', (socket: WebSocket) => { this.attach(socket) })
     // `ws` re-emits the HTTP server's failures, and an 'error' event with no
     // listener takes the process down. This one is a guest inside dsh.
@@ -121,13 +131,29 @@ export class DirectServer {
   }
 
   private attach(socket: WebSocket): void {
+    // Anyone on the same Wi-Fi can open a socket here, paired or not. The relay
+    // path caps circuits per machine; this one had no cap and no deadline, so
+    // a stranger could hold any number of silent sockets open indefinitely —
+    // inside dsh's own process, with the plugin.
+    const strangers = [...this.sessions].filter(session => session.peerKey === undefined).length
+    if (strangers >= MAX_UNAUTHENTICATED) {
+      socket.close(1013, 'too many unauthenticated connections')
+      return
+    }
+    const deadline = setTimeout(() => {
+      if (session.peerKey === undefined) session.dispose('no handshake in time')
+    }, HANDSHAKE_TIMEOUT_MS)
+    deadline.unref()
     const session = new TunnelSession(this.core, {
       send: (bytes: Buffer) => { socket.send(bytes, { binary: true }) },
       close: () => { socket.close() },
     }, {
       version: this.options.version,
       onAuthenticated: (_key, name) => { this.options.log?.(`${name} attached over the local network`) },
-      onClosed: () => { this.sessions.delete(session) },
+      onClosed: () => {
+        clearTimeout(deadline)
+        this.sessions.delete(session)
+      },
     })
     this.sessions.add(session)
     socket.on('message', (data: Buffer | ArrayBuffer | Buffer[]) => {

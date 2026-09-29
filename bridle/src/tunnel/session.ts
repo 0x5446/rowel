@@ -429,7 +429,18 @@ export class TunnelSession {
     if (!response.ok) {
       return { ok: false, error: { code: 'internal', message: `dsh export answered HTTP ${String(response.status)}`, details: {} } }
     }
-    const body = Buffer.from(await response.arrayBuffer())
+    const body = await readUpTo(response, EXPORT_MAX_BYTES)
+    if (body === undefined) {
+      const ceiling = (MAX_FRAME_BYTES / (1024 * 1024)).toFixed(0)
+      return {
+        ok: false,
+        error: {
+          code: 'too-large',
+          message: `That archive is too big to send over the tunnel (the limit is ${ceiling} MB once encoded). Export it on the Mac instead.`,
+          details: { limit: EXPORT_MAX_BYTES },
+        },
+      }
+    }
     return {
       ok: true,
       value: {
@@ -562,6 +573,43 @@ export class TunnelSession {
         },
       },
     })
+  }
+}
+
+/**
+ * Largest archive `session.export` will read: the most that still fits the
+ * tunnel's frame ceiling once base64 has grown it by a third, with room for the
+ * JSON around it. Checked while reading — the archive used to be read whole,
+ * then encoded, then measured, so a long session's export cost three times its
+ * size in memory (inside dsh's process, with the plugin) only to be refused.
+ */
+const EXPORT_MAX_BYTES = Math.floor(MAX_FRAME_BYTES * 3 / 4) - 64 * 1024
+
+/**
+ * Read a response body, giving up once it passes `limit` bytes.
+ * @param response - the response to read.
+ * @param limit - the most bytes to hold.
+ * @returns the body, or undefined when it is larger than `limit`.
+ */
+async function readUpTo(response: Response, limit: number): Promise<Buffer | undefined> {
+  const declared = Number(response.headers.get('content-length') ?? Number.NaN)
+  if (declared > limit) {
+    await response.body?.cancel()
+    return undefined
+  }
+  if (response.body === null) return Buffer.alloc(0)
+  const reader = response.body.getReader()
+  const chunks: Buffer[] = []
+  let held = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) return Buffer.concat(chunks, held)
+    held += value.byteLength
+    if (held > limit) {
+      await reader.cancel().catch(() => {})
+      return undefined
+    }
+    chunks.push(Buffer.from(value))
   }
 }
 

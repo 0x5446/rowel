@@ -26,8 +26,9 @@
 import { DurableObject } from 'cloudflare:workers'
 import type { Env } from './env.ts'
 import { exchangeOf } from './env.ts'
+import { TokenBuckets } from './bucket.ts'
 import { deviceIdFor, mintNonce, verifyRegistration } from './identity.ts'
-import { MAX_CIRCUITS_PER_MACHINE, REGISTER_TIMEOUT_MS } from './limits.ts'
+import { MAX_CIRCUITS_PER_MACHINE, MAX_WAKE_MACHINE_CHARS, REGISTER_TIMEOUT_MS, WAKE_LIMIT } from './limits.ts'
 import { MuxType, decodeMux, decodeText, encodeMux, encodeText, fromBase64Url } from './wire.ts'
 import { wake, type WakeTarget } from './apns.ts'
 
@@ -47,6 +48,13 @@ type Attachment =
 
 /** The switchboard. */
 export class Switchboard extends DurableObject<Env> {
+  /**
+   * This machine's wake allowance. In memory: an object that hibernates comes
+   * back with a full bucket, which errs toward ringing — the right way for a
+   * limit whose job is to stop abuse, not to ration a real machine.
+   */
+  private readonly wakes = new TokenBuckets()
+
   /**
    * Take one socket, either end.
    * @param request - the upgrade, forwarded by the Worker with a role in its path.
@@ -242,12 +250,13 @@ export class Switchboard extends DurableObject<Env> {
    * @param payload - the JSON `WakeRequest` the Bridle sent.
    */
   private async ring(payload: Uint8Array): Promise<void> {
+    if (!this.wakes.take('wake', WAKE_LIMIT)) return
     let target: WakeTarget
     try {
       const parsed: unknown = JSON.parse(decodeText(payload))
       const { token, machine } = parsed as Partial<WakeTarget>
       if (typeof token !== 'string') return
-      target = { token, ...(typeof machine === 'string' ? { machine } : {}) }
+      target = { token, ...(typeof machine === 'string' ? { machine: machine.slice(0, MAX_WAKE_MACHINE_CHARS) } : {}) }
     } catch {
       return
     }

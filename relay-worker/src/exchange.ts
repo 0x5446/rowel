@@ -20,6 +20,7 @@
 
 import { DurableObject } from 'cloudflare:workers'
 import type { Env } from './env.ts'
+import { TokenBuckets } from './bucket.ts'
 import {
   ATTACH_LIMIT,
   BRIDLE_LIMIT,
@@ -54,11 +55,6 @@ interface Counts {
 type OfferSlots = Record<string, number>
 
 /** One token bucket. */
-interface Bucket {
-  tokens: number
-  updatedAt: number
-}
-
 /** Why an attach was refused, in the close codes docs/protocol.md §8 defines. */
 export interface AttachRefusal {
   ok: false
@@ -95,8 +91,14 @@ export class Exchange extends DurableObject<Env> {
    * happens after a stretch with no traffic, and a caller who has stopped
    * calling is exactly the one whose bucket has refilled anyway. Under an
    * actual flood the object stays resident and the buckets hold.
+   *
+   * One bucket per kind of request (`attach:`, `claim:`, `bridle:` + address),
+   * as the Node Relay keeps three limiters. A Mac and a phone behind one home
+   * address share the address, and with one bucket per address a phone
+   * mistyping a short code, or reconnecting in a hurry, spent the Bridle's
+   * reconnects too.
    */
-  private readonly buckets = new Map<string, Bucket>()
+  private readonly buckets = new TokenBuckets()
 
   /** @param ctx - the object's own storage and scheduling. @param env - bindings. */
   constructor(ctx: DurableObjectState, env: Env) {
@@ -202,7 +204,7 @@ export class Exchange extends DurableObject<Env> {
    * @returns the Switchboard to forward the upgrade to, or a refusal.
    */
   async locate(deviceId: string, caller: string): Promise<AttachRoute | AttachRefusal> {
-    if (!this.take(caller, ATTACH_LIMIT.capacity, ATTACH_LIMIT.refillPerSecond)) {
+    if (!this.buckets.take(`attach:${caller}`, ATTACH_LIMIT)) {
       return { ok: false, code: 4029, reason: 'too many connections; wait a moment' }
     }
     const machine = await this.ctx.storage.get<MachineRow>(`m:${deviceId}`)
@@ -236,7 +238,7 @@ export class Exchange extends DurableObject<Env> {
    * @returns whether the claim may proceed.
    */
   claimAllowance(caller: string): boolean {
-    return this.take(caller, CLAIM_LIMIT.capacity, CLAIM_LIMIT.refillPerSecond)
+    return this.buckets.take(`claim:${caller}`, CLAIM_LIMIT)
   }
 
   /**
@@ -249,7 +251,7 @@ export class Exchange extends DurableObject<Env> {
    * @returns whether the connection may proceed.
    */
   bridleAllowance(caller: string): boolean {
-    return this.take(caller, BRIDLE_LIMIT.capacity, BRIDLE_LIMIT.refillPerSecond)
+    return this.buckets.take(`bridle:${caller}`, BRIDLE_LIMIT)
   }
 
   /**
@@ -394,22 +396,5 @@ export class Exchange extends DurableObject<Env> {
     const now = Date.now()
     await this.ctx.storage.put('since', now)
     return now
-  }
-
-  private take(caller: string, capacity: number, refillPerSecond: number): boolean {
-    const now = Date.now()
-    const bucket = this.buckets.get(caller) ?? { tokens: capacity, updatedAt: now }
-    const elapsed = Math.max(0, now - bucket.updatedAt) / 1000
-    bucket.tokens = Math.min(capacity, bucket.tokens + elapsed * refillPerSecond)
-    bucket.updatedAt = now
-    if (bucket.tokens < 1) {
-      this.buckets.set(caller, bucket)
-      return false
-    }
-    bucket.tokens -= 1
-    this.buckets.set(caller, bucket)
-    // A bucket back at capacity carries no information worth remembering.
-    if (bucket.tokens >= capacity) this.buckets.delete(caller)
-    return true
   }
 }
