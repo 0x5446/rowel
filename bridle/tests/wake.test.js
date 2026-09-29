@@ -35,7 +35,7 @@ function frame(type, sessionId, extra = {}) {
 }
 
 /** A core whose dsh never answers; only the bookkeeping is under test. */
-function core(overrides = {}) {
+function core(overrides = {}, dshExtra = {}) {
   const pumps = []
   const machine = new BridleCore(
     {
@@ -55,6 +55,7 @@ function core(overrides = {}) {
         call: async () => ({ ok: true, value: {} }),
         health: async () => ({ reachable: false }),
         pump: async (stream, onFrame, onStatus) => { pumps.push({ stream, onFrame, onStatus }) },
+        ...dshExtra,
       },
     },
   )
@@ -311,11 +312,11 @@ test('a request dsh does not re-send after a restart is dropped, and attached ph
  * A handshake completed against a real state file, and the pieces a test needs
  * to keep talking: the session, what it sent, and the app's end of the channel.
  */
-async function pairedSession(t) {
+async function pairedSession(t, dshExtra = {}) {
   const home = mkdtempSync(join(tmpdir(), 'rowel-wake-'))
   const previous = process.env.ROWEL_HOME
   process.env.ROWEL_HOME = home
-  const { machine } = core({ privateKey: generateKeyPair().privateKey.toString('base64url') })
+  const { machine } = core({ privateKey: generateKeyPair().privateKey.toString('base64url') }, dshExtra)
   await machine.start()
   machine.state.peers.push({ key: appKeys.publicKey.toString('base64url'), name: 'a-phone', pairedAt: 0, lastSeen: 0 })
   saveState(machine.state)
@@ -376,4 +377,26 @@ test('an event too large to carry is replaced by an instruction to refetch', asy
   const frames = phone.frames().slice(before - 1)
   assert.deepEqual(frames.map((f) => f.t), ['resync'])
   assert.equal(frames[0].from, phone.machine.events.head)
+})
+
+test('an export too big for the tunnel is refused without reading it all into memory', async (t) => {
+  let served = 0
+  const phone = await pairedSession(t, {
+    // 40 MB, a megabyte at a time, and counted as it goes: the archive used to
+    // be read whole, base64-encoded, and only then measured.
+    export: async () => new Response(new ReadableStream({
+      pull(controller) {
+        if (served >= 40) return controller.close()
+        served += 1
+        controller.enqueue(new Uint8Array(1024 * 1024))
+      },
+    })),
+  })
+  const before = phone.sent.length
+  phone.say({ t: 'req', id: 'x1', method: 'session.export', payload: { sessionId: 's1' } })
+  await new Promise((resolve) => setTimeout(resolve, 200))
+  const answer = phone.frames().slice(before - 1).find((f) => f.t === 'res')
+  assert.equal(answer?.result.ok, false)
+  assert.equal(answer?.result.error.code, 'too-large')
+  assert.ok(served < 30, `read ${String(served)} MB of an archive it could never send`)
 })

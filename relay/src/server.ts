@@ -90,6 +90,10 @@ export interface RelayStats {
 }
 
 /** The switchboard. */
+
+/** How many wakes {@link RelayServer.wakes} keeps. */
+const WAKE_LOG_LIMIT = 100
+
 export class RelayServer {
   private readonly http: Server
   private readonly bridleSockets = new WebSocketServer({ noServer: true, maxPayload: MAX_PAYLOAD })
@@ -337,7 +341,12 @@ export class RelayServer {
     }
   }
 
-  /** Every wake a Bridle has asked for, oldest first. Tests read this. */
+  /**
+   * The wakes Bridles have asked for, oldest first — the latest
+   * {@link WAKE_LOG_LIMIT}, since this also runs as a long-lived standby and an
+   * unbounded list would grow forever holding every APNs token it saw.
+   * Tests read this.
+   */
   readonly wakes: Record<string, unknown>[] = []
 
   private forwardFromBridle(machine: Machine, bytes: Buffer): void {
@@ -356,6 +365,7 @@ export class RelayServer {
       // test can check: that the Bridle decided to ring, and whom.
       try {
         this.wakes.push(JSON.parse(message.payload.toString('utf8')) as Record<string, unknown>)
+        if (this.wakes.length > WAKE_LOG_LIMIT) this.wakes.splice(0, this.wakes.length - WAKE_LOG_LIMIT)
       } catch {
         // A malformed wake is the Bridle's problem, not a reason to drop it.
       }

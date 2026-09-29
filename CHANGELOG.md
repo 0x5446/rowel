@@ -9,6 +9,18 @@ the same decision.
 
 ## Unreleased
 
+- **Limits where anyone could reach.** The local-network listener, open to
+  everyone on the same Wi-Fi, now holds at most eight connections that have
+  not completed a handshake and drops any that take longer than ten seconds;
+  its message ceiling matches the tunnel's 32 MB instead of 64. Exporting a
+  conversation too big for the tunnel stops reading at the limit rather than
+  loading the whole archive (three times over) before refusing it. On the
+  hosted Relay, a phone and a Mac behind the same home address no longer share
+  one rate-limit bucket, and wakes are rate-limited per machine with the
+  machine name capped at 64 characters. The self-hosted Node relay's record of
+  wakes is capped, and the deployment notes now say plainly that it does not
+  send notifications.
+
 - **The screen keeps up while the agent writes a long file into a code
   block.** A code block was drawn as one piece of text, laid out whole every
   time it grew — thirty times a second while streaming. At 60 KB that took

@@ -16,7 +16,7 @@
     "build": "tsc -b protocol bridle dsh-plugin relay e2e",
     "typecheck": "tsc -b protocol bridle dsh-plugin relay e2e --pretty false",
     "clean": "tsc -b protocol bridle dsh-plugin relay e2e --clean",
-    "test": "npm run build && npm run check:docs && node --test bridle/tests/*.test.js dsh-plugin/tests/*.test.js protocol/tests/*.test.js relay/tests/*.test.js",
+    "test": "npm run build && npm run check:docs && node --test bridle/tests/*.test.js dsh-plugin/tests/*.test.js protocol/tests/*.test.js relay/tests/*.test.js relay-worker/tests/bucket.test.js",
     "test:e2e": "npm run build && node --test --test-concurrency=1 e2e/tests/*.test.js",
     "test:ios": "cd ios && ./run-tests.sh",
     "vectors": "npm run build && node protocol/scripts/emit-vectors.js",

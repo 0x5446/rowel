@@ -80,3 +80,15 @@ export function positiveInt(raw: string | undefined, fallback: number): number {
   const value = Number(raw)
   return Number.isInteger(value) && value > 0 ? value : fallback
 }
+
+/**
+ * Burst and refill for wakes, per machine. A registered Bridle is only a key
+ * someone generated, and a wake is a time-sensitive notification on somebody's
+ * phone plus a call against this deployment's APNs quota — so a machine gets a
+ * few in a burst and about one every six seconds after. A real one rings for a
+ * question at a time.
+ */
+export const WAKE_LIMIT = { capacity: 5, refillPerSecond: 10 / 60 } as const
+
+/** Longest machine name a wake may put in a notification, in characters. */
+export const MAX_WAKE_MACHINE_CHARS = 64
