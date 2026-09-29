@@ -31,11 +31,6 @@ function identityOf(frame: unknown): string | undefined {
   return undefined
 }
 
-/** One held request, as the ring bookkeeping names it: which slot, and which request in it. */
-function ringKey(key: string, frame: unknown): string {
-  return `${key}|${identityOf(frame) ?? ''}`
-}
-
 /** How long dsh has to re-send its pending requests after the downlink reconnects. */
 const RESEND_GRACE_MS = 2_000
 
@@ -106,8 +101,12 @@ export class BridleCore {
    */
   private readonly unconfirmed = new Set<string>()
   private sweepTimer: NodeJS.Timeout | undefined
-  /** Which requests a phone has already been rung for. See {@link BridleCore.dueForRing}. */
-  private readonly rung = new Set<string>()
+  /**
+   * The request frames a phone has already been rung for. By frame, because a
+   * re-sent request keeps the frame first held (see `trackWaiting`) and a new
+   * one replaces it — so nothing here needs forgetting. See {@link BridleCore.dueForRing}.
+   */
+  private readonly rung = new WeakSet<object>()
 
   /**
    * The LAN addresses a phone can dial this machine on right now, best first.
@@ -277,7 +276,6 @@ export class BridleCore {
     if (frame === undefined) return false
     this.waiting.delete(key)
     this.unconfirmed.delete(key)
-    this.rung.delete(ringKey(key, frame))
     return true
   }
 
@@ -291,12 +289,12 @@ export class BridleCore {
    * already been rung for, each time.
    */
   dueForRing(): unknown[] {
-    return [...this.waiting.entries()].filter(([key, frame]) => !this.rung.has(ringKey(key, frame))).map(([, frame]) => frame)
+    return [...this.waiting.values()].filter(frame => !this.rung.has(frame as object))
   }
 
   /** Record that a phone has been rung for everything held right now. */
   markRung(): void {
-    for (const [key, frame] of this.waiting) this.rung.add(ringKey(key, frame))
+    for (const frame of this.waiting.values()) this.rung.add(frame as object)
   }
 
   /**

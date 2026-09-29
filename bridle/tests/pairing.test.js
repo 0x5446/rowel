@@ -93,10 +93,10 @@ test('a claim is recorded, and only the device the person was shown can be appro
 
     // Someone else claims while the person is reading the prompt.
     assert.equal(redeemOffer(state, intruder, 'not a phone', offer.codeToken), 'claimed')
-    assert.equal(approveClaimant(state, phone.toString('base64url')), false, 'approved a device that was no longer the claimant')
+    assert.equal(approveClaimant(state, phone.toString('base64url'), offer.code), false, 'approved a device that was no longer the claimant')
     assert.equal(findPeer(state, intruder), undefined)
 
-    assert.equal(approveClaimant(state, intruder.toString('base64url')), true)
+    assert.equal(approveClaimant(state, intruder.toString('base64url'), offer.code), true)
     assert.equal(state.offer, undefined, 'approving must consume the offer')
   })
 })
@@ -107,9 +107,9 @@ test('an expired claim cannot be approved, and a refused offer stops working', a
     const offer = openPairingOffer(state)
     const phone = generateKeyPair().publicKey
     redeemOffer(state, phone, 'phone', offer.codeToken)
-    assert.equal(approveClaimant(state, phone.toString('base64url'), offer.expiresAt + 1), false)
+    assert.equal(approveClaimant(state, phone.toString('base64url'), offer.code, offer.expiresAt + 1), false)
 
-    withdrawOffer(state)
+    withdrawOffer(state, offer.code)
     assert.equal(offerMatch(state, offer.codeToken), undefined)
   })
 })
@@ -164,7 +164,7 @@ test('a bridle pair cannot withdraw or approve an offer that replaced its own', 
 
     withdrawOffer(state, mine.code)
     assert.equal(loadState().offer?.code, newer.code, 'the older command took down the newer offer')
-    assert.equal(approveClaimant(state, phone.toString('base64url'), Date.now(), mine.code), false)
+    assert.equal(approveClaimant(state, phone.toString('base64url'), mine.code), false)
     assert.equal(findPeer(loadState(), phone), undefined)
   })
 })

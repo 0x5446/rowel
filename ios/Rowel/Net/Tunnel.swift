@@ -78,12 +78,14 @@ public enum RefusalReason: Equatable, Sendable {
     case version(appIsOlder: Bool)
     /// The machine failed internally during the handshake.
     case machineError(String)
-    /// This device presented the short-code token and the Mac has not said yes
-    /// yet. The one refusal that is not final: the person at the Mac compares
-    /// fingerprints in `bridle pair --code`, and the next dial after they
-    /// accept goes through. `Tunnel.run` retries it instead of stopping.
-    case awaitingApproval
 }
+
+/// This device presented the short-code token and the Mac has not said yes yet.
+///
+/// Not a `RefusalReason`, whose every case is final: the person at the Mac
+/// compares fingerprints in `bridle pair --code`, and the next dial after they
+/// accept goes through. `Tunnel.run` retries it instead of stopping.
+struct AwaitingApproval: Error {}
 
 /// What one path did in one dial round, with its structure intact.
 ///
@@ -545,7 +547,7 @@ public actor Tunnel {
                 try await connectOnce()
                 backoff = 0.5
                 try await pump()
-            } catch RefusalReason.awaitingApproval {
+            } catch is AwaitingApproval {
                 teardown(reason: "awaiting approval")
                 if Task.isCancelled { return }
                 let detail = "Accept this iPhone on your Mac. It shows the key \(Pairing.keyFingerprint(identity.publicKey)) — check the Mac shows the same."
@@ -644,14 +646,14 @@ public actor Tunnel {
     private func dial(
         _ plan: [Candidate],
         remoteStatic: Data
-    ) async -> (winner: Attempt?, failures: [String], refusal: RefusalReason?) {
+    ) async -> (winner: Attempt?, failures: [String], refusal: (any Error)?) {
         let request = HandshakeRequest(name: deviceName, client: clientVersion, token: pairingToken)
         for candidate in plan { note(.attempt, "Dialling \(candidate.label)") }
 
         var winner: Attempt?
         var failures: [String] = []
         var outcomes: [PathOutcome] = []
-        var refusal: RefusalReason?
+        var refusal: (any Error)?
 
         await withTaskGroup(of: Outcome.self) { group in
             for candidate in plan {
@@ -840,7 +842,9 @@ public actor Tunnel {
     private enum Outcome: @unchecked Sendable {
         case won(Attempt)
         case failed(label: String, carrier: Carrier, code: Int?, reason: String, took: TimeInterval)
-        case refused(RefusalReason)
+        /// The machine answered, and not with a tunnel: a `RefusalReason`, or
+        /// `AwaitingApproval`.
+        case refused(any Error)
         case cancelled
     }
 
@@ -960,10 +964,10 @@ public actor Tunnel {
             guard answer.ok else {
                 socket.close("refused")
                 switch answer.reason {
-                case "unpaired": return .refused(.unpaired)
-                case "pending": return .refused(.awaitingApproval)
-                case "version": return .refused(.version(appIsOlder: answer.weAreTheOldEnd))
-                default: return .refused(.machineError(answer.reason ?? "unknown"))
+                case "unpaired": return .refused(RefusalReason.unpaired)
+                case "pending": return .refused(AwaitingApproval())
+                case "version": return .refused(RefusalReason.version(appIsOlder: answer.weAreTheOldEnd))
+                default: return .refused(RefusalReason.machineError(answer.reason ?? "unknown"))
                 }
             }
             if Task.isCancelled {
@@ -1148,7 +1152,6 @@ extension RefusalReason: Error, LocalizedError {
         case .unpaired: return "This iPhone isn’t paired with that Mac any more."
         case .version: return "The Rowel app and that Mac’s Bridle are different versions."
         case .machineError(let detail): return detail
-        case .awaitingApproval: return "Waiting for the Mac to accept this iPhone."
         }
     }
 }
