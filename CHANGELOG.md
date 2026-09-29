@@ -7,7 +7,11 @@ Versions are the tags `install.sh` can install. `ROWEL_REF` in that script names
 the one it installs by default, so a release here and a change to that line are
 the same decision.
 
-## Unreleased
+## 0.1.5 — 2026-09-29
+
+- **The dsh plugin says the version it is.** It reported 0.1.2 to `bridle
+  status` and the Relay through every release since, because the number was
+  written into the code; it now reads its package version, as the CLI does.
 
 - **Limits where anyone could reach.** The local-network listener, open to
   everyone on the same Wi-Fi, now holds at most eight connections that have

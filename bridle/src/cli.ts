@@ -26,8 +26,8 @@ import { RelayClient } from './relay-client.ts'
 import { clearRuntime, competingDaemon, readRuntime, writeRuntime } from './runtime.ts'
 import { holdsIdentity, listInstances, rememberInstance } from './instances.ts'
 import { installService, serviceLogPath, uninstallService } from './service.ts'
+import { VERSION } from './version.ts'
 
-const VERSION = readVersion()
 
 /** Parsed command line. */
 interface Options {
@@ -867,15 +867,6 @@ async function readSecret(prompt: string): Promise<string> {
   return value
 }
 
-function readVersion(): string {
-  try {
-    const here = dirname(fileURLToPath(import.meta.url))
-    const manifest = JSON.parse(readFileSync(join(here, '..', 'package.json'), 'utf8')) as { version?: string }
-    return manifest.version ?? '0.0.0'
-  } catch {
-    return '0.0.0'
-  }
-}
 
 main(process.argv.slice(2)).catch((error: unknown) => {
   process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`)

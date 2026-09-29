@@ -120,6 +120,10 @@ test('a Bridle inside dsh still answers "bridle status"', async (t) => {
   const live = readRuntime()
   assert.ok(live, 'nothing published, so `bridle status` would report no Bridle at all')
   assert.equal(live.pid, process.pid, 'the pid must be the host process, since that is the liveness check')
+  // The version it reports is the one it is. It said 0.1.2 through two
+  // releases past that, because the number was spelled out in code.
+  const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+  assert.equal(live.version, manifest.version, 'the plugin reports a version other than its own')
   assert.equal(live.dshUrl, 'http://127.0.0.1:9')
 
   ctx.dispose()

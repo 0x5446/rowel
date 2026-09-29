@@ -1,6 +1,6 @@
 {
   "name": "@rowel/bridle",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Rowel Bridle \u2014 pairs your phone with a local DeepSeek Harness and carries traffic end-to-end encrypted.",
   "license": "MIT",
   "type": "module",
