@@ -303,28 +303,33 @@ final class MainThreadStarvationTests: XCTestCase {
     //
     // Unlike the others this one asserts, because it separates cleanly: one
     // `Text` per code block delivered ~5% of frames with ~1 s stalls here, and
-    // the sliced block ~92% with stalls under 100 ms. The bounds (35% dropped,
-    // 350 ms) sit above the worst reading seen on a heavily loaded host (21%,
-    // 230 ms) and still catch anything a third of the way back to the old
-    // layout. K is not
+    // the sliced block ~92% with stalls under 100 ms. The bounds (35 points
+    // more dropped than idle, 350 ms longer than idle's longest gap) sit above
+    // the worst reading seen on a heavily loaded host (21%, 230 ms) and still
+    // catch anything a third of the way back to the old layout. K is not
     // asserted — its signal (5–10%) is smaller than what a busy host adds.
     func testL_longCodeBlockAtWireRate() {
         var scale = BubbleScale.giant
         scale.openFenceBytes = 60_000
-        // A measurement only counts when the idle second before it was clean;
-        // a noisy host gets two more tries, and three noisy ones are a failure,
-        // not a skip — a gate that can quietly not run is not a gate.
-        for attempt in 1...3 {
-            let (idle, busy) = runExperiment(
+        // Judged against the idle second measured just before, not against an
+        // idle second that has to be perfect: a CI simulator never gives a
+        // clean one (the first version demanded idle == 0 and could not reach
+        // a verdict there at all). Up to three tries, keeping the quietest, so
+        // a noisy moment gets another chance — and a verdict every time.
+        var best: (idle: FrameMeter.Stats, busy: FrameMeter.Stats)?
+        for _ in 1...3 {
+            let measured = runExperiment(
                 condition: "L", mountView: true, initiallyAtBottom: true, scale: scale,
                 hz: 200, reasoningCount: 0, textCount: 400, textDelta: Corpus.codeLine
             )
-            guard idle.dropRate == 0 else { continue }
-            XCTAssertLessThan(busy.dropRate, 0.35, "streaming into a long code block starves the screen again (attempt \(attempt))")
-            XCTAssertLessThan(busy.maxGapMs, 350, "a stall this long is the one-Text-per-block layout again (attempt \(attempt))")
-            return
+            if best == nil || measured.idle.dropRate < best!.idle.dropRate { best = measured }
+            if measured.idle.dropRate == 0 { break }
         }
-        XCTFail("three measurements in a row had a busy idle baseline; nothing was measured")
+        guard let (idle, busy) = best else { return XCTFail("no measurement ran") }
+        let reading = String(format: "busy %.1f%% / %.0f ms, idle %.1f%% / %.0f ms",
+                             busy.dropRate * 100, busy.maxGapMs, idle.dropRate * 100, idle.maxGapMs)
+        XCTAssertLessThan(busy.dropRate - idle.dropRate, 0.35, "streaming into a long code block starves the screen again (\(reading))")
+        XCTAssertLessThan(busy.maxGapMs - idle.maxGapMs, 350, "a stall this long is the one-Text-per-block layout again (\(reading))")
     }
 
     // J: not an A/B condition — a cost attribution. `MarkdownText` runs
