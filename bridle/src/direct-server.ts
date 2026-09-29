@@ -35,6 +35,9 @@ const MAX_UNAUTHENTICATED = 8
 /** How long a connection has to complete the handshake. */
 const HANDSHAKE_TIMEOUT_MS = 10_000
 
+/** Paired phones one machine serves at once, as the relay path caps circuits. */
+const MAX_PHONES = 8
+
 /** A WebSocket listener on the local network. */
 export class DirectServer {
   private readonly http: Server
@@ -52,6 +55,13 @@ export class DirectServer {
       response.writeHead(426, { 'content-type': 'text/plain' })
       response.end('rowel bridle: websocket upgrade required\n')
     })
+    // The same bounds for the stretch before the upgrade, which `attach` never
+    // sees: a stranger dribbling out an HTTP request is held to the handshake
+    // deadline, and no more sockets are accepted than a full house of phones
+    // plus the strangers `attach` allows.
+    this.http.headersTimeout = HANDSHAKE_TIMEOUT_MS
+    this.http.requestTimeout = HANDSHAKE_TIMEOUT_MS
+    this.http.maxConnections = MAX_UNAUTHENTICATED + MAX_PHONES
     // The tunnel's own ceiling, as on the relay path. This listener answers
     // anyone on the network before they have proved anything, so a message
     // allowance twice the tunnel's was only room for a stranger to fill.

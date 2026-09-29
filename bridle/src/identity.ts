@@ -5,7 +5,7 @@
  * and rewritten atomically.
  */
 
-import { chmodSync, closeSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { hostname, homedir, userInfo } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -333,7 +333,7 @@ function mutateDisk(mutate: (disk: BridleState) => void): BridleState {
 
 /** How long a writer waits for another one before giving up. */
 const LOCK_WAIT_MS = 2_000
-/** A lock older than this was left by a process that died holding it. */
+/** A lock with no readable holder older than this was left by a process that died writing it. */
 const LOCK_STALE_MS = 10_000
 
 /**
@@ -350,19 +350,11 @@ function withStateLock<T>(body: () => T): T {
   const deadline = Date.now() + LOCK_WAIT_MS
   for (;;) {
     try {
-      closeSync(openSync(lock, 'wx', 0o600))
+      writeFileSync(lock, String(process.pid), { flag: 'wx', mode: 0o600 })
       break
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-      try {
-        if (Date.now() - statSync(lock).mtimeMs > LOCK_STALE_MS) {
-          unlinkSync(lock)
-          continue
-        }
-      } catch {
-        // Released between the failed create and the stat: just try again.
-        continue
-      }
+      if (reclaimIfAbandoned(lock)) continue
       if (Date.now() > deadline) throw new Error(`${lock} is held by another bridle`)
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5)
     }
@@ -370,11 +362,61 @@ function withStateLock<T>(body: () => T): T {
   try {
     return body()
   } finally {
+    // Only ours. A lock taken over after we were presumed dead is somebody
+    // else's now, and deleting it would let a third writer in beside them.
     try {
-      unlinkSync(lock)
+      if (readFileSync(lock, 'utf8') === String(process.pid)) unlinkSync(lock)
     } catch {
       // Already gone; nothing to release.
     }
+  }
+}
+
+/**
+ * Remove a lock whose holder is gone.
+ *
+ * By whether the process that wrote it still exists, not by its age: a live
+ * holder paused for a while (a laptop lid, a debugger) must keep its lock, or
+ * two writers end up inside at once. Age decides only for a lock whose holder
+ * cannot be read — written by something that died between create and write.
+ * @param lock - the lock file.
+ * @returns whether it was removed, so the caller should try again at once.
+ */
+function reclaimIfAbandoned(lock: string): boolean {
+  let holder: string
+  try {
+    holder = readFileSync(lock, 'utf8')
+  } catch {
+    return true // released between our create and this read
+  }
+  const pid = Number(holder)
+  const abandoned = Number.isInteger(pid) && pid > 0
+    ? !processExists(pid)
+    : lockAge(lock) > LOCK_STALE_MS
+  if (!abandoned) return false
+  try {
+    if (readFileSync(lock, 'utf8') === holder) unlinkSync(lock)
+  } catch {
+    // Someone else cleared it first; either way, try again.
+  }
+  return true
+}
+
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    // EPERM: it exists, it just is not ours to signal.
+    return (error as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
+
+function lockAge(lock: string): number {
+  try {
+    return Date.now() - statSync(lock).mtimeMs
+  } catch {
+    return 0
   }
 }
 
@@ -443,6 +485,11 @@ export function openPairingOffer(state: BridleState, now: number = Date.now()): 
 export function offerMatch(state: BridleState, token: string, now: number = Date.now()): 'scanned' | 'typed' | undefined {
   const offer = state.offer
   if (offer === undefined || offer.expiresAt <= now) return undefined
+  // An offer without a `codeToken` was written by an older Bridle, which sent
+  // its one token to the Relay too. `loadState` drops such an offer, but one
+  // can also arrive mid-run — an older `bridle pair` beside this daemon — so
+  // the match refuses it wherever it came from.
+  if (typeof offer.codeToken !== 'string') return undefined
   // The tokens are high-entropy and single-use; a length-varying compare here
   // leaks nothing an attacker cannot already measure by trying.
   if (offer.token === token) return 'scanned'
@@ -451,21 +498,46 @@ export function offerMatch(state: BridleState, token: string, now: number = Date
 }
 
 /**
- * Record a device that presented the short-code token, for a person to judge.
+ * Act on a token a new device presented, deciding and writing in one step.
  *
- * Only the latest is kept. Whoever holds the Relay's copy of the bundle can
- * claim, so a claim is a request, not a grant — and the person accepting it
- * compares the fingerprint they are shown against the one on their phone.
+ * Deciding from memory and writing afterwards let an offer replaced in between
+ * — another `bridle pair` — be consumed or claimed with the old one's token.
+ * The decision is made again on what is on disk, under the lock.
  * @param state - loaded state; the change is written through {@link updateState}.
  * @param key - the device's raw static public key.
  * @param name - the device name it reported.
+ * @param token - the token it presented.
  * @param now - current epoch milliseconds.
+ * @returns `paired` for the QR token, `claimed` for the short-code token,
+ *   undefined when neither matches the offer on disk.
  */
-export function claimOffer(state: BridleState, key: Buffer, name: string, now: number = Date.now()): void {
+export function redeemOffer(state: BridleState, key: Buffer, name: string, token: string, now: number = Date.now()): 'paired' | 'claimed' | undefined {
+  // Most tokens that match nothing are strangers; turn them away without
+  // taking the lock or touching the disk.
+  const guess = offerMatch(state, token, now)
+  if (guess === undefined) return undefined
+  if (guess === 'typed' && state.offer?.claimant?.key === key.toString('base64url') && now - state.offer.claimant.at < CLAIM_REFRESH_MS) {
+    return 'claimed'
+  }
   const encoded = key.toString('base64url')
-  if (state.offer?.claimant?.key === encoded && now - state.offer.claimant.at < CLAIM_REFRESH_MS) return
-  updateState(state, (disk) => {
-    if (disk.offer !== undefined) disk.offer.claimant = { key: encoded, name, at: now }
+  return updateState(state, (disk) => {
+    const presented = offerMatch(disk, token, now)
+    if (presented === 'scanned') {
+      const existing = disk.peers.find(peer => peer.key === encoded)
+      if (existing !== undefined) {
+        existing.name = name
+        existing.lastSeen = now
+      } else {
+        disk.peers.push({ key: encoded, name, pairedAt: now, lastSeen: now })
+      }
+      delete disk.offer
+      return 'paired'
+    }
+    if (presented === 'typed' && disk.offer !== undefined) {
+      disk.offer.claimant = { key: encoded, name, at: now }
+      return 'claimed'
+    }
+    return undefined
   })
 }
 
@@ -478,11 +550,14 @@ const CLAIM_REFRESH_MS = 30_000
  * @param state - loaded state; the change is written through {@link updateState}.
  * @param key - base64url key of the claimant the person approved.
  * @param now - current epoch milliseconds.
+ * @param code - the short code of the offer the person was looking at; a
+ *   different offer on disk means theirs was replaced, and nothing is approved.
  * @returns whether that device is now paired.
  */
-export function approveClaimant(state: BridleState, key: string, now: number = Date.now()): boolean {
+export function approveClaimant(state: BridleState, key: string, now: number = Date.now(), code?: string): boolean {
   return updateState(state, (disk) => {
     const claimant = disk.offer?.claimant
+    if (code !== undefined && disk.offer?.code !== code) return false
     if (claimant === undefined || claimant.key !== key || (disk.offer?.expiresAt ?? 0) <= now) return false
     disk.peers.push({ key: claimant.key, name: claimant.name, pairedAt: now, lastSeen: now })
     delete disk.offer
@@ -493,9 +568,13 @@ export function approveClaimant(state: BridleState, key: string, now: number = D
 /**
  * Withdraw the outstanding offer: a refused claim, or a person who gave up.
  * @param state - loaded state; the change is written through {@link updateState}.
+ * @param code - withdraw only the offer with this short code, so a `bridle
+ *   pair` that lost track of time cannot take down a newer one.
  */
-export function withdrawOffer(state: BridleState): void {
-  updateState(state, (disk) => { delete disk.offer })
+export function withdrawOffer(state: BridleState, code?: string): void {
+  updateState(state, (disk) => {
+    if (code === undefined || disk.offer?.code === code) delete disk.offer
+  })
 }
 
 /**

@@ -39,6 +39,13 @@ private actor ScriptedTransport: HarnessTransport {
         waiting[method] = queue
     }
 
+    /// Fail a call that is already waiting.
+    func releaseFailing(_ method: String, code: String) {
+        guard var queue = waiting[method], !queue.isEmpty else { return fail(method, code: code) }
+        queue.removeFirst().resume(throwing: CallError(code: code, message: code))
+        waiting[method] = queue
+    }
+
     func count(_ method: String) -> Int { calls.filter { $0 == method }.count }
 
     func call(_ method: String, _ payload: JSONValue) async throws -> JSONValue {
@@ -299,5 +306,76 @@ final class LoadingTests: XCTestCase {
         guard case .assistant(let bubble) = held.items.last else { return XCTFail("no bubble") }
         XCTAssertTrue(bubble.complete)
         XCTAssertEqual(bubble.text, "all of it")
+    }
+
+    /// The connection came back while the load it should replace was still
+    /// out; that load then failed. The reconnect's retry must not be lost.
+    func testAReconnectThatBeatsAFailingLoadStillRetries() async throws {
+        let transport = ScriptedTransport()
+        await transport.hold("session.history")
+        let session = machine(transport)
+        let conversation = session.conversation("s1")
+        try await until("the first request") { await transport.count("session.history") == 1 }
+
+        session.receiveForTesting(.status(.online(carrier: .relay, machine: "Mac", harnessUp: true)))
+        try await Task.sleep(for: .milliseconds(50))
+        await transport.releaseFailing("session.history", code: "interrupted")
+        try await until("the retry") { await transport.count("session.history") == 2 }
+        await transport.release("session.history", page([said("here", seq: 3)]))
+        try await until("the page") { conversation.loaded }
+
+        XCTAssertEqual(conversation.items.map(\.id), ["m3"])
+    }
+
+    /// A resync while the first load is out: the old page must not land in the
+    /// refetched conversation, whichever answer comes back first.
+    func testAPageFromBeforeAResyncIsDropped() async throws {
+        let transport = ScriptedTransport()
+        await transport.hold("session.history")
+        await transport.answer("session.list", .object(["items": .array([])]))
+        let session = machine(transport)
+        let conversation = session.conversation("s1")
+        try await until("the first request") { await transport.count("session.history") == 1 }
+
+        session.receiveForTesting(.resync(from: 0))
+        // Whether the refetch goes out at once or waits for the load in flight
+        // is the implementation's business; either way the old answer lands
+        // after the reset.
+        for _ in 0..<20 where await transport.count("session.history") < 2 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        await transport.release("session.history", page([said("stale", seq: 1)]))
+        try await until("the refetch") { await transport.count("session.history") == 2 }
+        await transport.release("session.history", page([said("fresh", seq: 9)]))
+        try await until("the fresh page") { conversation.loaded && !conversation.items.isEmpty }
+        try await Task.sleep(for: .milliseconds(50))
+
+        XCTAssertEqual(conversation.items.map(\.id), ["m9"], "a page from before the resync was folded into it")
+    }
+
+    /// A history that failed outright must not keep holding the live stream:
+    /// the conversation would look frozen until the next successful load.
+    func testLiveEventsFlowAfterTheHistoryFails() async throws {
+        let transport = ScriptedTransport()
+        await transport.fail("session.history", code: "internal")
+        let session = machine(transport)
+        let conversation = session.conversation("s1")
+        try await until("the failure") { !conversation.loading }
+
+        session.receiveForTesting(live(said("still going", seq: 4)))
+        XCTAssertTrue(conversation.items.contains { $0.id == "m4" }, "the live stream stayed held behind a page that is not coming")
+    }
+
+    /// A result that arrives before its call is not folded, and so must not
+    /// spend its sequence number: re-delivered behind the call, it has to land.
+    func testAnUnplacedResultCanLandWhenItsCallArrives() {
+        let held = Conversation(sessionId: "s1")
+        held.absorb(page: page([]), prepend: false)
+        held.apply(event: toolResult("c9", seq: 21), view: nil)
+        held.apply(event: toolCall("c9", seq: 20), view: nil)
+        held.apply(event: toolResult("c9", seq: 21), view: nil)
+
+        guard case .tool(let card)? = held.items.last else { return XCTFail("no card") }
+        XCTAssertFalse(card.running, "the result was spent before it had anywhere to land")
     }
 }

@@ -59,6 +59,8 @@ const HEARTBEAT_MS = 25_000
 export interface RelayServerOptions {
   /** TCP port; `0` lets the OS choose. */
   port?: number
+  /** Keep the wakes Bridles ask for in {@link RelayServer.wakes}, for tests to read. */
+  recordWakes?: boolean
   /** Bind address. */
   host?: string
   /** Progress reporting. */
@@ -342,10 +344,10 @@ export class RelayServer {
   }
 
   /**
-   * The wakes Bridles have asked for, oldest first — the latest
-   * {@link WAKE_LOG_LIMIT}, since this also runs as a long-lived standby and an
-   * unbounded list would grow forever holding every APNs token it saw.
-   * Tests read this.
+   * The wakes Bridles have asked for, oldest first — kept only when the relay
+   * was built with `recordWakes` (the tests), and then only the latest
+   * {@link WAKE_LOG_LIMIT}. Anything else would have this relay, which also
+   * runs as a long-lived standby, holding every APNs token it ever saw.
    */
   readonly wakes: Record<string, unknown>[] = []
 
@@ -363,6 +365,7 @@ export class RelayServer {
       // and pushing needs a signing key that belongs to a deployment rather
       // than to a test. What it does is record the ask, which is the part a
       // test can check: that the Bridle decided to ring, and whom.
+      if (this.options.recordWakes !== true) return
       try {
         this.wakes.push(JSON.parse(message.payload.toString('utf8')) as Record<string, unknown>)
         if (this.wakes.length > WAKE_LOG_LIMIT) this.wakes.splice(0, this.wakes.length - WAKE_LOG_LIMIT)

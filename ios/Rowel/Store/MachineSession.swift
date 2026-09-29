@@ -143,6 +143,9 @@ public final class MachineSession {
     /// Conversations whose `ensureLoaded` is in flight, so a reconnect landing
     /// mid-load does not start a second one.
     private var ensuring: Set<String> = []
+    /// Conversations asked to load again while a load was already running —
+    /// a reconnect that beat the failure of the attempt it should replace.
+    private var ensureAgain: Set<String> = []
     /// How many conversations stay folded in memory. Each keeps receiving and
     /// folding its live events, so the cost of an unbounded cache is paid in
     /// main-thread work as well as memory.
@@ -292,14 +295,18 @@ public final class MachineSession {
             let onScreen = recent.first
             for id in conversations.keys where id != onScreen { conversations[id] = nil }
             recent = onScreen.map { [$0] } ?? []
+            // The others were dropped rather than refetched: each would cost
+            // two history calls now, for a screen nobody is looking at, and
+            // opening one again rebuilds it from scratch anyway. The one on
+            // screen is reset *now*, so live events from here on wait for the
+            // refetch instead of folding into a transcript about to be thrown
+            // away, and a load already in flight is outdated by the reset.
+            let conversation = onScreen.flatMap { conversations[$0] }
+            conversation?.reset()
+            conversation?.loading = true
             Task {
                 await self.refreshSessions()
-                // The others were dropped rather than refetched: each would
-                // cost two history calls now, for a screen nobody is looking
-                // at, and opening one again rebuilds it from scratch anyway.
-                if let onScreen, let conversation = self.conversations[onScreen] {
-                    await self.loadHistory(conversation, reset: true)
-                }
+                if let conversation { await self.ensureLoaded(conversation) }
             }
         case .harness(let reachable, let detail):
             harnessKnown = true
@@ -585,19 +592,26 @@ public final class MachineSession {
     /// arrive and the skills not.
     func ensureLoaded(_ conversation: Conversation) async {
         let id = conversation.sessionId
-        guard conversations[id] === conversation, !ensuring.contains(id) else { return }
+        guard conversations[id] === conversation else { return }
+        guard !ensuring.contains(id) else {
+            ensureAgain.insert(id)
+            return
+        }
         ensuring.insert(id)
         defer { ensuring.remove(id) }
-        if !conversation.loaded {
-            await loadHistory(conversation, reset: false)
-        } else if conversation.topUpOwed {
-            conversation.loading = true
-            defer { conversation.loading = false }
-            try? await topUp(conversation)
-        }
-        if !conversation.commandsKnown || !conversation.skillsKnown {
-            await loadCommands(conversation)
-        }
+        repeat {
+            ensureAgain.remove(id)
+            if !conversation.loaded {
+                await loadHistory(conversation)
+            } else if conversation.topUpOwed {
+                conversation.loading = true
+                try? await topUp(conversation, generation: conversation.generation)
+                conversation.loading = false
+            }
+            if !conversation.commandsKnown || !conversation.skillsKnown {
+                await loadCommands(conversation)
+            }
+        } while ensureAgain.contains(id) && conversations[id] === conversation
     }
 
     /// Fetch the children of a conversation.
@@ -719,34 +733,38 @@ public final class MachineSession {
     /// tail arrives first, small enough to paint fast, and the rest of the
     /// page follows behind it while they read — the same prepend the "load
     /// earlier" button does, without the button.
-    public func loadHistory(_ conversation: Conversation, reset: Bool) async {
-        if reset { conversation.reset() }
+    func loadHistory(_ conversation: Conversation) async {
+        let generation = conversation.generation
         conversation.loading = true
-        defer { conversation.loading = false }
+        defer { if conversation.generation == generation { conversation.loading = false } }
         do {
             let blank = conversation.items.isEmpty
             let page = try await harness.history(
                 sessionId: conversation.sessionId,
                 maxMessages: blank ? firstPaintMessages : historyPageSize
             )
+            // A reset while this was out makes it a page about a log that has
+            // since been refetched from scratch; the new load owns the screen.
+            guard conversation.generation == generation else { return }
             conversation.absorb(page: page, prepend: false)
             // The top-up happens inside `loading`, so the "load earlier"
             // control stays quiet until the conversation holds the same page
             // it always used to start with.
             if blank, conversation.hasMore {
                 conversation.topUpOwed = true
-                try await topUp(conversation)
+                try await topUp(conversation, generation: generation)
             }
         } catch let error as CallError where error.isConnectionLoss {
             // The reconnect retries — `ensureLoaded`, on the way back online.
         } catch {
+            guard conversation.generation == generation else { return }
             conversation.historyFailed()
             conversation.note((error as? LocalizedError)?.errorDescription ?? "Could not load this conversation.", kind: .failure)
         }
     }
 
     /// Fetch the rest of the opening page, behind a tail that already landed.
-    private func topUp(_ conversation: Conversation) async throws {
+    private func topUp(_ conversation: Conversation, generation: Int) async throws {
         guard let before = conversation.oldestSeq else {
             conversation.topUpOwed = false
             return
@@ -756,6 +774,7 @@ public final class MachineSession {
             beforeSeq: before,
             maxMessages: historyPageSize - firstPaintMessages
         )
+        guard conversation.generation == generation else { return }
         conversation.absorb(page: rest, prepend: true)
         conversation.topUpOwed = false
     }

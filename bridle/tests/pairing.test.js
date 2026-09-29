@@ -9,7 +9,7 @@
  */
 
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -17,7 +17,6 @@ import test from 'node:test'
 import { generateKeyPair } from '@rowel/protocol'
 import {
   approveClaimant,
-  claimOffer,
   createInvitation,
   findPeer,
   loadState,
@@ -25,6 +24,8 @@ import {
   openPairingOffer,
   overrideState,
   publishInvitation,
+  redeemOffer,
+  reloadState,
   statePath,
   withdrawOffer,
 } from '../lib/index.js'
@@ -82,16 +83,16 @@ test('the Relay is never sent the token that pairs without asking', async () => 
 test('a claim is recorded, and only the device the person was shown can be approved', async () => {
   await withHome(() => {
     const state = loadState()
-    openPairingOffer(state)
+    const offer = openPairingOffer(state)
     const phone = generateKeyPair().publicKey
     const intruder = generateKeyPair().publicKey
 
-    claimOffer(state, phone, 'phone')
+    assert.equal(redeemOffer(state, phone, 'phone', offer.codeToken), 'claimed')
     assert.equal(state.offer?.claimant?.key, phone.toString('base64url'))
     assert.equal(findPeer(state, phone), undefined, 'a claim alone paired the device')
 
     // Someone else claims while the person is reading the prompt.
-    claimOffer(state, intruder, 'not a phone')
+    assert.equal(redeemOffer(state, intruder, 'not a phone', offer.codeToken), 'claimed')
     assert.equal(approveClaimant(state, phone.toString('base64url')), false, 'approved a device that was no longer the claimant')
     assert.equal(findPeer(state, intruder), undefined)
 
@@ -105,7 +106,7 @@ test('an expired claim cannot be approved, and a refused offer stops working', a
     const state = loadState()
     const offer = openPairingOffer(state)
     const phone = generateKeyPair().publicKey
-    claimOffer(state, phone, 'phone')
+    redeemOffer(state, phone, 'phone', offer.codeToken)
     assert.equal(approveClaimant(state, phone.toString('base64url'), offer.expiresAt + 1), false)
 
     withdrawOffer(state)
@@ -125,5 +126,63 @@ test('an offer written before the two-token split is dropped on load', async () 
     assert.equal(state.offer, undefined)
     assert.equal(offerMatch(state, 'old-token'), undefined, 'a token the Relay may hold still pairs')
     assert.equal(JSON.parse(readFileSync(statePath(), 'utf8')).offer, undefined, 'and the file still carries it')
+  })
+})
+
+test('a token from an offer that was replaced redeems nothing, even if memory still holds it', async () => {
+  await withHome(() => {
+    // The daemon's view is a moment old: another `bridle pair` has since
+    // replaced the offer on disk. The decision is made on disk, under the lock.
+    const daemon = loadState()
+    const old = openPairingOffer(daemon)
+    openPairingOffer(loadState())
+    const phone = generateKeyPair().publicKey
+    assert.equal(redeemOffer(daemon, phone, 'phone', old.token), undefined, 'a replaced offer\'s token paired a device')
+    assert.equal(findPeer(loadState(), phone), undefined)
+    assert.notEqual(loadState().offer, undefined, 'the newer offer was consumed by the old token')
+  })
+})
+
+test('an old-format offer that arrives while running is refused too', async () => {
+  await withHome(() => {
+    const state = loadState()
+    const disk = JSON.parse(readFileSync(statePath(), 'utf8'))
+    disk.offer = { token: 'old-token', code: 'BCDF-GHJK', expiresAt: Date.now() + 600_000 }
+    writeFileSync(statePath(), JSON.stringify(disk))
+    reloadState(state)
+    assert.equal(redeemOffer(state, generateKeyPair().publicKey, 'relay', 'old-token'), undefined)
+  })
+})
+
+test('a bridle pair cannot withdraw or approve an offer that replaced its own', async () => {
+  await withHome(() => {
+    const state = loadState()
+    const mine = openPairingOffer(state)
+    const newer = openPairingOffer(loadState())
+    const phone = generateKeyPair().publicKey
+    redeemOffer(loadState(), phone, 'phone', newer.codeToken)
+
+    withdrawOffer(state, mine.code)
+    assert.equal(loadState().offer?.code, newer.code, 'the older command took down the newer offer')
+    assert.equal(approveClaimant(state, phone.toString('base64url'), Date.now(), mine.code), false)
+    assert.equal(findPeer(loadState(), phone), undefined)
+  })
+})
+
+test('a lock held by a live process is waited on, and one left by a dead process is taken', async () => {
+  await withHome(() => {
+    const state = loadState()
+    const lock = `${statePath()}.lock`
+    // A dead holder: a pid that cannot exist.
+    writeFileSync(lock, '999999999')
+    openPairingOffer(state)
+    assert.equal(existsSync(lock), false, 'the lock was left behind')
+    // A live holder that is not this process: the parent that ran the tests.
+    writeFileSync(lock, String(process.ppid))
+    const started = Date.now()
+    assert.throws(() => { openPairingOffer(state) }, /held by another bridle/u)
+    assert.ok(Date.now() - started >= 1_500, 'a live holder\'s lock was not waited on')
+    assert.equal(readFileSync(lock, 'utf8'), String(process.ppid), 'a live holder\'s lock was taken or deleted')
+    rmSync(lock)
   })
 })
