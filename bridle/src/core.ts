@@ -11,7 +11,7 @@ import { basename } from 'node:path'
 import { DshClient, type DshHealth } from './dsh/client.ts'
 import type { AgentClient } from './agents/types.ts'
 import { EventLog } from './tunnel/event-log.ts'
-import { loadState, rowelHome, saveState, statePath, staticKeys, type BridleState } from './identity.ts'
+import { loadState, reloadState, rowelHome, statePath, staticKeys, type BridleState } from './identity.ts'
 import type { StaticKeyPair } from '@rowel/protocol'
 
 /**
@@ -30,6 +30,14 @@ function identityOf(frame: unknown): string | undefined {
   if (typeof outer.payload?.id === 'string') return outer.payload.id
   return undefined
 }
+
+/** One held request, as the ring bookkeeping names it: which slot, and which request in it. */
+function ringKey(key: string, frame: unknown): string {
+  return `${key}|${identityOf(frame) ?? ''}`
+}
+
+/** How long dsh has to re-send its pending requests after the downlink reconnects. */
+const RESEND_GRACE_MS = 2_000
 
 /** Current dsh reachability as the core last observed it. */
 export interface DshStatus {
@@ -90,6 +98,16 @@ export class BridleCore {
   private attachments = 0
 
   private readonly waitingListeners = new Set<() => void>()
+  /**
+   * Requests held from before the mux downlink last reconnected, and not yet
+   * re-sent by dsh since. dsh re-sends everything still pending to a new
+   * subscriber, so whatever it does not re-send is gone — dsh restarted, and
+   * the request went with it. See {@link BridleCore.sweepUnconfirmed}.
+   */
+  private readonly unconfirmed = new Set<string>()
+  private sweepTimer: NodeJS.Timeout | undefined
+  /** Which requests a phone has already been rung for. See {@link BridleCore.dueForRing}. */
+  private readonly rung = new Set<string>()
 
   /**
    * The LAN addresses a phone can dial this machine on right now, best first.
@@ -108,7 +126,6 @@ export class BridleCore {
   directAddresses: () => string[] = () => []
   private healthTimer: NodeJS.Timeout | undefined
   private watcher: FSWatcher | undefined
-  private writing = false
 
   /**
    * @param state - loaded identity state; `dshUrl` selects the harness.
@@ -205,7 +222,11 @@ export class BridleCore {
       // shows the stale card. So the identity of the request decides, not the
       // session it belongs to.
       const identity = identityOf(frame)
-      if (this.waiting.has(key) && identityOf(this.waiting.get(key)) === identity) return
+      if (this.waiting.has(key) && identityOf(this.waiting.get(key)) === identity) {
+        this.unconfirmed.delete(key)
+        return
+      }
+      this.unconfirmed.delete(key)
       this.waiting.set(key, frame)
       for (const listener of this.waitingListeners) {
         try {
@@ -223,8 +244,8 @@ export class BridleCore {
     // itself. A listener re-deciding whether to ring has to hear this too:
     // an owed ring that was never sent because the Relay was down must not
     // survive the answer.
-    const answered = (type === 'approval/resolved' && this.waiting.delete(`approval/requested:${sessionId}`))
-      || (type === 'question/resolved' && this.waiting.delete(`question/requested:${sessionId}`))
+    const answered = (type === 'approval/resolved' && this.forget(`approval/requested:${sessionId}`))
+      || (type === 'question/resolved' && this.forget(`question/requested:${sessionId}`))
     if (answered) this.waitingChanged()
   }
 
@@ -242,8 +263,62 @@ export class BridleCore {
     if (payload?.type !== 'host/session-removed') return
     const sessionId = payload.sessionId
     if (typeof sessionId !== 'string') return
-    this.waiting.delete(`approval/requested:${sessionId}`)
-    this.waiting.delete(`question/requested:${sessionId}`)
+    const forgot = [this.forget(`approval/requested:${sessionId}`), this.forget(`question/requested:${sessionId}`)]
+    if (forgot.includes(true)) this.waitingChanged()
+  }
+
+  /**
+   * Drop one held request, with its bookkeeping.
+   * @param key - `<type>:<sessionId>`.
+   * @returns whether anything was held under that key.
+   */
+  private forget(key: string): boolean {
+    const frame = this.waiting.get(key)
+    if (frame === undefined) return false
+    this.waiting.delete(key)
+    this.unconfirmed.delete(key)
+    this.rung.delete(ringKey(key, frame))
+    return true
+  }
+
+  /**
+   * The held requests nobody has been rung for yet.
+   *
+   * A ring is owed once per request, not once per reason to reconsider. The
+   * reasons come often — every attach and detach, every time the Relay
+   * re-registers after a Mac wakes or changes network — and deciding from
+   * "is anything pending" alone rang the phone again for a question it had
+   * already been rung for, each time.
+   */
+  dueForRing(): unknown[] {
+    return [...this.waiting.entries()].filter(([key, frame]) => !this.rung.has(ringKey(key, frame))).map(([, frame]) => frame)
+  }
+
+  /** Record that a phone has been rung for everything held right now. */
+  markRung(): void {
+    for (const [key, frame] of this.waiting) this.rung.add(ringKey(key, frame))
+  }
+
+  /**
+   * Forget the requests dsh did not re-send after the downlink came back.
+   *
+   * A request dies with the dsh process that asked it, and the `resolved`
+   * event never comes. Left alone it was offered to every phone that attached
+   * and rung on every Relay reconnect, for a question nobody could answer any
+   * more. A phone attached right now is told as if it had been answered — the
+   * same event it already knows how to fold — so its card goes too.
+   */
+  private sweepUnconfirmed(): void {
+    this.sweepTimer = undefined
+    let forgot = false
+    for (const key of [...this.unconfirmed]) {
+      const sessionId = key.slice(key.indexOf(':') + 1)
+      const resolved = key.startsWith('approval/') ? 'approval/resolved' : 'question/resolved'
+      if (!this.forget(key)) continue
+      forgot = true
+      this.events.append('mux', { payload: { type: resolved, sessionId } })
+    }
+    if (forgot) this.waitingChanged()
   }
 
   /** dsh reachability as of the last probe or downlink transition. */
@@ -275,25 +350,21 @@ export class BridleCore {
   stop(): void {
     this.abort.abort()
     if (this.healthTimer !== undefined) clearInterval(this.healthTimer)
+    if (this.sweepTimer !== undefined) clearTimeout(this.sweepTimer)
     this.watcher?.close()
   }
 
   /**
-   * Re-read the parts of the state file another `bridle` invocation may have
-   * changed: the paired devices, the outstanding offer, and the machine name.
-   * The keys are never re-read — this process owns its identity for its whole
-   * life, and a swapped key file should not silently take effect.
+   * Re-read what another `bridle` invocation may have changed — the paired
+   * devices, the outstanding offer, the machine name. The keys are never
+   * re-read (see `reloadState`), and this process's overrides survive.
    */
   refreshState(): void {
     try {
-      const fresh = loadState()
-      this.state.peers = fresh.peers
-      if (fresh.offer === undefined) delete this.state.offer
-      else this.state.offer = fresh.offer
-      this.state.machineName = fresh.machineName
+      reloadState(this.state)
     } catch {
-      // A partially written file will be whole again in a moment, and the
-      // in-memory copy is the better answer until then.
+      // A missing or unreadable file is not a reason to forget who is paired;
+      // the in-memory copy is the better answer until the file is back.
     }
   }
 
@@ -311,7 +382,6 @@ export class BridleCore {
     try {
       this.watcher = watch(rowelHome(), { persistent: false }, (_event, filename) => {
         if (filename !== null && filename !== name) return
-        if (this.writing) return
         this.refreshState()
       })
     } catch {
@@ -329,19 +399,15 @@ export class BridleCore {
     return (): void => { this.statusListeners.delete(listener) }
   }
 
-  /** Persist the identity state after a mutation. */
-  save(): void {
-    this.writing = true
-    try {
-      saveState(this.state)
-    } finally {
-      // The watcher fires on the next tick; clearing later than the write keeps
-      // this process from reloading its own change.
-      setTimeout(() => { this.writing = false }, 50).unref()
-    }
-  }
-
   private onStream(stream: 'mux' | 'host', up: boolean, detail?: string): void {
+    if (up && stream === 'mux' && this.waiting.size > 0) {
+      // dsh re-sends what is still pending as soon as a subscriber arrives;
+      // give it a moment, then drop whatever it did not.
+      for (const key of this.waiting.keys()) this.unconfirmed.add(key)
+      if (this.sweepTimer !== undefined) clearTimeout(this.sweepTimer)
+      this.sweepTimer = setTimeout(() => { this.sweepUnconfirmed() }, RESEND_GRACE_MS)
+      this.sweepTimer.unref()
+    }
     if (up) this.connected.add(stream)
     else this.connected.delete(stream)
     // A live downlink is stronger evidence than a periodic probe, so let it

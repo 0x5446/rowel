@@ -9,6 +9,27 @@ the same decision.
 
 ## Unreleased
 
+- **Revoking a phone sticks.** `bridle revoke` in one terminal and a running
+  Bridle in another both write `~/.rowel/bridle.json`, and each used to write
+  back its whole copy of the file. A copy read before the revoke put the phone
+  back the next time the daemon saved anything — a push token, a last-seen
+  time. Every change is now made to what is on disk at that moment, under a
+  lock, so neither writer can undo the other. The same fix keeps a
+  `ROWEL_RELAY_URL` or `ROWEL_DSH_URL` set for one run from being written into
+  the file as the machine's configuration, and makes the plugin's `relay: ''`
+  do what its description says: no Relay.
+
+- **A question the agent can no longer ask stops showing up, and a phone is
+  rung once per question.** A pending approval lives in the dsh process; when
+  dsh restarted, the Bridle kept offering it to every phone that connected and
+  rang for it on every Relay reconnect, for a question nobody could answer.
+  The Bridle now notices which requests dsh does not re-send after it comes
+  back, drops them, and tells any phone that is connected, so the card goes.
+  Separately, a phone that was already rung for a question is not rung again
+  just because the Mac woke from sleep or changed network. And a phone that
+  disappears without closing its connection is let go after about a minute,
+  instead of being counted as listening — which silenced its notifications.
+
 - **A command typed into the message field is now run, instead of being handed
   to the agent as words.** The composer has always offered skills under a slash,
   and for a skill that is the whole mechanism: it is text, and the model reads
