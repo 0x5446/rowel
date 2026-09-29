@@ -378,4 +378,23 @@ final class LoadingTests: XCTestCase {
         guard case .tool(let card)? = held.items.last else { return XCTFail("no card") }
         XCTAssertFalse(card.running, "the result was spent before it had anywhere to land")
     }
+
+    /// The first load failed, live events were shown, and a later load then
+    /// succeeded. Its page is the history those events belong behind; appended
+    /// after them, the conversation read backwards.
+    func testALoadThatSucceedsAfterAFailureKeepsTheOrder() async throws {
+        let transport = ScriptedTransport()
+        await transport.fail("session.history", code: "internal")
+        let session = machine(transport)
+        let conversation = session.conversation("s1")
+        try await until("the failure") { await transport.count("session.history") == 1 }
+        try await until("it to settle") { !conversation.loading }
+        session.receiveForTesting(live(said("latest", seq: 8)))
+
+        await transport.answer("session.history", page([said("earlier", seq: 2), said("latest", seq: 8)]))
+        session.receiveForTesting(.status(.online(carrier: .relay, machine: "Mac", harnessUp: true)))
+        try await until("the reload") { conversation.loaded }
+
+        XCTAssertEqual(conversation.items.filter { $0.id.hasPrefix("m") }.map(\.id), ["m2", "m8"], "history landed behind the live message")
+    }
 }
