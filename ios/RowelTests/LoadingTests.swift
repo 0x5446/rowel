@@ -425,4 +425,25 @@ final class LoadingTests: XCTestCase {
         session.receiveForTesting(live(said("after", seq: 61)))
         XCTAssertTrue(conversation.items.contains { $0.id == "m61" }, "live events stayed held after the resync")
     }
+
+    /// A conversation dropped by a resync while its load was out, and opened
+    /// again: the new one must load, not wait on the old one's load.
+    func testAConversationReopenedAfterAResyncLoadsOnItsOwn() async throws {
+        let transport = ScriptedTransport()
+        await transport.hold("session.history")
+        await transport.answer("session.list", .object(["items": .array([])]))
+        let session = machine(transport)
+        _ = session.conversation("a")
+        _ = session.conversation("b")
+        try await until("both opening requests") { await transport.count("session.history") == 2 }
+
+        session.receiveForTesting(.resync(from: 0))   // "b" is on screen; "a" is dropped
+        let reopened = session.conversation("a")
+        try await until("the reopened conversation's own request") { await transport.count("session.history") >= 3 }
+        await transport.release("session.history", page([said("old a", seq: 1)]))
+        await transport.release("session.history", page([said("b", seq: 1)]))
+        await transport.release("session.history", page([said("new a", seq: 2)]))
+        try await until("the reopened conversation to load") { reopened.loaded }
+        XCTAssertTrue(reopened.items.contains { $0.id == "m2" })
+    }
 }

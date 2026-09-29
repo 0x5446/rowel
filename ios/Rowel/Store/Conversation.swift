@@ -189,6 +189,10 @@ public final class Conversation {
                 apply(event: event, view: entry["view"])
             }
             replayEarly()
+            // Only the tail page makes a conversation loaded. An older page
+            // lands on one that already is; one landing on a reset
+            // conversation must not pass for the refetch.
+            loaded = true
         }
         if let first = entries.first?["event"]?["seq"]?.intValue {
             oldestSeq = min(oldestSeq ?? first, first)
@@ -199,7 +203,6 @@ public final class Conversation {
         if let projections = page["projections"] {
             absorbProjections(projections)
         }
-        loaded = true
     }
 
     /// Show a title this device just set, until the machine's own projection

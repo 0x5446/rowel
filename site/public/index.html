@@ -213,7 +213,8 @@
 </p>
 
 <p>
-  Pairing is a QR code in your terminal, or a short code typed by hand. It
+  Pairing is a QR code in your terminal, or a short code typed by hand and
+  accepted on the Mac. It
   anchors keys on both ends — no accounts, no passwords — and both ends show a
   key fingerprint you can compare when you want to be sure. On the same
   Wi-Fi, the app talks to the Mac directly and the relay is not involved at
@@ -247,14 +248,15 @@
     <h3>Start pairing</h3>
     <p>Still in Terminal:</p>
     <code class="command">bridle pair</code>
-    <p>A QR code appears, with a short code underneath it.</p>
+    <p>A QR code appears.</p>
   </li>
   <li>
     <h3>Point the phone at it</h3>
     <p>
       Open Rowel, tap <em>Connect</em>, and scan. If the camera is being
-      difficult, type the short code instead. Pairing is one-time — after this
-      the app reconnects on its own.
+      difficult, run <code>bridle pair --code</code>, type its code, and accept
+      the phone on the Mac once its key matches. Pairing is one-time — after
+      this the app reconnects on its own.
     </p>
   </li>
 </ol>

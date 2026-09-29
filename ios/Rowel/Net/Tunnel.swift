@@ -80,12 +80,16 @@ public enum RefusalReason: Equatable, Sendable {
     case machineError(String)
 }
 
-/// This device presented the short-code token and the Mac has not said yes yet.
-///
-/// Not a `RefusalReason`, whose every case is final: the person at the Mac
-/// compares fingerprints in `bridle pair --code`, and the next dial after they
-/// accept goes through. `Tunnel.run` retries it instead of stopping.
-struct AwaitingApproval: Error {}
+/// What the machine said instead of opening a tunnel. `Tunnel.run` switches
+/// over it, so a new kind of answer has to be handled rather than falling into
+/// the retry-forever path meant for network failures.
+enum HandshakeAnswer: Error {
+    /// Final for this bundle; see `RefusalReason`.
+    case refused(RefusalReason)
+    /// The short-code token earned a request, and the person at the Mac has not
+    /// accepted it yet (`bridle pair --code`). Not final: retried until they do.
+    case pending
+}
 
 /// What one path did in one dial round, with its structure intact.
 ///
@@ -547,22 +551,26 @@ public actor Tunnel {
                 try await connectOnce()
                 backoff = 0.5
                 try await pump()
-            } catch is AwaitingApproval {
-                teardown(reason: "awaiting approval")
-                if Task.isCancelled { return }
-                let detail = "Accept this iPhone on your Mac. It shows the key \(Pairing.keyFingerprint(identity.publicKey)) — check the Mac shows the same."
-                note(.fail, "Waiting for the Mac to accept this iPhone")
-                status = .waiting(detail: detail, retryIn: timings.approvalPoll, diagnosis: nil)
-                await sleep(timings.approvalPoll)
-                continue
-            } catch let refusal as RefusalReason {
-                note(.fail, "Refused by the Mac")
-                status = .refused(reason: refusal)
-                teardown(reason: "refused")
-                // Final for this bundle, but not for this tunnel: `start()` must
-                // be able to run it again, and it refuses while a loop is held.
-                loop = nil
-                return
+            } catch let answer as HandshakeAnswer {
+                switch answer {
+                case .pending:
+                    teardown(reason: "awaiting approval")
+                    if Task.isCancelled { return }
+                    let detail = "Accept this iPhone on your Mac. It shows the key \(Pairing.keyFingerprint(identity.publicKey)) — check the Mac shows the same."
+                    note(.fail, "Waiting for the Mac to accept this iPhone")
+                    status = .waiting(detail: detail, retryIn: timings.approvalPoll, diagnosis: nil)
+                    await sleep(timings.approvalPoll)
+                    continue
+                case .refused(let refusal):
+                    note(.fail, "Refused by the Mac")
+                    status = .refused(reason: refusal)
+                    teardown(reason: "refused")
+                    // Final for this bundle, but not for this tunnel: `start()`
+                    // must be able to run it again, and it refuses while a loop
+                    // is held.
+                    loop = nil
+                    return
+                }
             } catch {
                 teardown(reason: "\(error.localizedDescription)")
                 if Task.isCancelled { return }
@@ -601,7 +609,7 @@ public actor Tunnel {
     private func connectOnce() async throws {
         let plan = candidates()
         guard let remoteStatic = bundle.staticKey else {
-            throw RefusalReason.machineError("That pairing code has no machine key.")
+            throw HandshakeAnswer.refused(.machineError("That pairing code has no machine key."))
         }
         guard !plan.isEmpty else {
             throw CarrierError(reason: "No way to reach that Mac.", closeCode: nil)
@@ -646,14 +654,14 @@ public actor Tunnel {
     private func dial(
         _ plan: [Candidate],
         remoteStatic: Data
-    ) async -> (winner: Attempt?, failures: [String], refusal: (any Error)?) {
+    ) async -> (winner: Attempt?, failures: [String], refusal: HandshakeAnswer?) {
         let request = HandshakeRequest(name: deviceName, client: clientVersion, token: pairingToken)
         for candidate in plan { note(.attempt, "Dialling \(candidate.label)") }
 
         var winner: Attempt?
         var failures: [String] = []
         var outcomes: [PathOutcome] = []
-        var refusal: (any Error)?
+        var refusal: HandshakeAnswer?
 
         await withTaskGroup(of: Outcome.self) { group in
             for candidate in plan {
@@ -842,9 +850,8 @@ public actor Tunnel {
     private enum Outcome: @unchecked Sendable {
         case won(Attempt)
         case failed(label: String, carrier: Carrier, code: Int?, reason: String, took: TimeInterval)
-        /// The machine answered, and not with a tunnel: a `RefusalReason`, or
-        /// `AwaitingApproval`.
-        case refused(any Error)
+        /// The machine answered, and not with a tunnel.
+        case refused(HandshakeAnswer)
         case cancelled
     }
 
@@ -964,10 +971,10 @@ public actor Tunnel {
             guard answer.ok else {
                 socket.close("refused")
                 switch answer.reason {
-                case "unpaired": return .refused(RefusalReason.unpaired)
-                case "pending": return .refused(AwaitingApproval())
-                case "version": return .refused(RefusalReason.version(appIsOlder: answer.weAreTheOldEnd))
-                default: return .refused(RefusalReason.machineError(answer.reason ?? "unknown"))
+                case "unpaired": return .refused(.refused(.unpaired))
+                case "pending": return .refused(.pending)
+                case "version": return .refused(.refused(.version(appIsOlder: answer.weAreTheOldEnd)))
+                default: return .refused(.refused(.machineError(answer.reason ?? "unknown")))
                 }
             }
             if Task.isCancelled {
@@ -1048,10 +1055,17 @@ public actor Tunnel {
             status = .online(carrier: currentCarrier, machine: ready.machine, harnessUp: ready.dshReachable)
             continuation?.yield(.handshake(host: ready.host, harness: ready.harness, direct: ready.direct))
             continuation?.yield(.harness(reachable: ready.dshReachable, detail: nil))
-            // With the epoch `highestSeq` was counted in, not this ready's: the
-            // Bridle compares them, and a restarted one answers `resync`
-            // instead of passing its own new numbering off as a continuation.
-            try? write(ResumeFrame(since: highestSeq, epoch: epoch))
+            // A different process on the other end: its numbering is not ours.
+            // Settled here rather than left to the Bridle's reply to the resume
+            // below, so `highestSeq` and `epoch` always describe the same
+            // process — even if that resume is lost with the connection.
+            if let known = epoch, let fresh = ready.epoch, known != fresh {
+                highestSeq = ready.seq
+                continuation?.yield(.resync(from: ready.seq))
+            }
+            // With the epoch `highestSeq` was counted in: an older Bridle sends
+            // none and compares nothing; a current one checks it again.
+            try? write(ResumeFrame(since: highestSeq, epoch: ready.epoch ?? epoch))
             epoch = ready.epoch
             // Re-offered on every ready rather than once, because the machine
             // is what stores it and a machine can be reinstalled, restored from

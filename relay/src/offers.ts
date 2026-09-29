@@ -2,8 +2,9 @@
  * Short-code pairing offers the Relay holds on a machine's behalf.
  *
  * Anything here is public by construction: the Relay could read these bundles,
- * substitute a key, and try to sit in the middle. That is precisely why the
- * short-code flow ends with a six-digit number on both screens. Holding the
+ * substitute a key, try to sit in the middle, or present the token itself.
+ * That is why a short-code token only earns a request to pair, which a person
+ * at the Mac accepts after comparing key fingerprints. Holding the
  * bundle is a convenience for people who cannot scan, not a trust anchor.
  */
 

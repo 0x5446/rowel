@@ -196,11 +196,42 @@ final class TunnelTests: XCTestCase {
 
         let resumes = await mac.resumedFrom
         XCTAssertEqual(resumes.last, 41, "the reconnect asked for the wrong point in the log")
-        // And says which numbering 41 was counted in, so a Bridle that restarted
-        // in between answers `resync` instead of replaying its own new 42.
+        // And names the numbering 41 was counted in, so a Bridle that
+        // restarted in between cannot pass its own new 42 off as the next.
         let epochs = await mac.resumedEpochs
-        XCTAssertEqual(epochs.first, .some(nil), "the first resume has no earlier numbering to name")
-        XCTAssertEqual(epochs.last, .some(mac.epoch))
+        XCTAssertEqual(epochs, [mac.epoch, mac.epoch])
+        await tunnel.stop()
+    }
+
+    /// The Mac's Bridle restarted while the phone was away: a new process,
+    /// numbering from 1 again. The app must not resume from its old number in
+    /// the new numbering — it refetches, and follows the new process's events.
+    func testANewBridleProcessIsARefetchNotAContinuation() async throws {
+        let first = FakeBridle()
+        let board = TestSwitchboard()
+        board.route("relay.test:0", to: .machine(first))
+        var timings = TunnelTimings()
+        timings.silenceLimit = 0.3
+        timings.livenessCheck = 0.05
+        let tunnel = make(bundle: first.bundle(direct: nil), board: board, timings: timings)
+        let signals = await collectSignals(tunnel)
+        await tunnel.start()
+        try await waitForOnline(tunnel)
+        guard let machineSide = await first.served.last,
+              let appSide = board.carrier(for: "relay.test:0") else { return XCTFail("no carrier") }
+        await first.emit(seq: 500, to: machineSide)
+        try await waitFor("the event") { await signals.count >= 1 }
+
+        // Same keys, new process: a different epoch.
+        let restarted = FakeBridle(staticKeys: first.staticKeys)
+        board.route("relay.test:0", to: .machine(restarted))
+        appSide.goQuiet()
+        try await waitFor("a resume to the new process") { await restarted.resumedFrom.count >= 1 }
+
+        let resumed = await restarted.resumedFrom
+        XCTAssertEqual(resumed, [0], "the old sequence number was presented to a process that never issued it")
+        let refetched = await signals.resyncs
+        XCTAssertEqual(refetched, 1, "the app did not refetch after the Bridle restarted")
         await tunnel.stop()
     }
 
@@ -576,6 +607,7 @@ final class TunnelTests: XCTestCase {
         Task {
             for await signal in stream {
                 if case .event = signal { await counter.bump() }
+                if case .resync = signal { await counter.bumpResync() }
             }
         }
         return counter
@@ -593,7 +625,9 @@ actor Routes {
 /// Somewhere for the signal task to put what it saw.
 actor Counter {
     private(set) var count = 0
+    private(set) var resyncs = 0
     func bump() { count += 1 }
+    func bumpResync() { resyncs += 1 }
 }
 
 // MARK: - Being woken

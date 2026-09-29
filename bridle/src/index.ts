@@ -10,7 +10,7 @@ export { DshClient, assertLoopback, type DshHealth, type DshResult } from './dsh
 export { dshHomeUrl, ensureDsh, portOpen, probeDsh, type DiscoveredDsh } from './dsh/discovery.ts'
 export { EventLog, type LoggedEvent, type ReplayResult } from './tunnel/event-log.ts'
 export { thinRoster, type Trimming } from './tunnel/roster.ts'
-export { TunnelSession, type SessionOptions, type TunnelTransport } from './tunnel/session.ts'
+export { TunnelSession, deviceName, type SessionOptions, type TunnelTransport } from './tunnel/session.ts'
 export { RelayClient, toWebSocketUrl, type RelayState } from './relay-client.ts'
 export { createInvitation, publishInvitation, toHttpUrl, type Invitation } from './pair.ts'
 export { installService, uninstallService, serviceLogPath, SERVICE_LABEL } from './service.ts'

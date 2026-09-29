@@ -98,12 +98,12 @@ jobs:
 # Not here, and why:
 #
 #   relay-worker/tests/worker.test.js needs `wrangler dev` and a workerd
-#   download (relay-worker/tests/bucket.test.js does not, and runs in npm test),
 #   download, and relay-worker is not a workspace so it has no lockfile —
 #   the job would be the least reproducible thing in the repository, guarding
 #   eleven tests. The wire format it shares with protocol/src/mux.ts is already
 #   compared by check:docs above, and the worker itself is exercised in its
 #   deployed form by .github/workflows/deployed.yml.
+#   (relay-worker/tests/bucket.test.js needs neither, and runs in npm test.)
 #
 #   e2e/tests/{cli,direct,security,tunnel}.test.js need a DeepSeek Harness
 #   serving on the machine. Installing one on a runner is possible; getting it

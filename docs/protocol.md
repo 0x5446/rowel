@@ -210,7 +210,7 @@ EncryptAndHash(payload)
 |---|---|---|---|
 | `ok` | boolean | 是 | 是否接受 |
 | `version` | number | `ok=true` 时必需 | **选定的**隧道版本，双方此后都按它讲话 |
-| `reason` | string | `ok=false` 时必需 | `version` / `unpaired` / `internal` |
+| `reason` | string | `ok=false` 时必需 | `version` / `unpaired` / `internal` / `pending`。`pending` 是唯一**不是终态**的拒绝：短码申请等 Mac 上的人确认，客户端应显示本机指纹并隔几秒重拨（§3.3 第 5 步） |
 | `supported` | number[] | `reason=="version"` 时必需 | 响应方支持的版本，供客户端说出**哪一端旧了** |
 | `machine` | string | `ok=true` 时应当 | 机器名 |
 | `bridle` | string | `ok=true` 时应当 | Bridle 版本 |
@@ -497,7 +497,7 @@ Bridle 监听 `0.0.0.0:<port>`（`--direct-port`，`0` 表示由系统分配）�
 - **非 WebSocket upgrade 的请求必须返回 `426`**，且**禁止**返回任何 API 内容
 - WebSocket 消息直接是 Noise 消息，**无 mux 头**
 - 单条消息上限与隧道一致：32 MiB（`MAX_FRAME_BYTES`）
-- 未完成握手的连接同时最多 **8** 条，超出的以 `1013` 关闭；握手须在 **10 秒**内完成，否则断开。这个端口对同一网络上的任何人开放，而 Relay 那条路有每机 8 条线路的上限，这里原来没有
+- 未完成握手的连接同时最多 **8** 条，从 TCP 建连起计数；超出的在 **TCP 层直接断开**（WebSocket 升级之前，客户端看到的是连接重置，没有关闭码）。连接总数上限 **16**（8 条未认证 + 8 台已配对手机）。HTTP 升级请求和 Noise 握手都须在 **10 秒**内完成，否则断开。这个端口对同一网络上的任何人开放，而 Relay 那条路有每机 8 条线路的上限，这里原来没有
 
 广播给配对码的地址由网卡枚举得出：
 
@@ -521,12 +521,13 @@ Bridle 监听 `0.0.0.0:<port>`（`--direct-port`，`0` 表示由系统分配）�
 | `version` | 隧道版本不匹配 | 否 |
 | `unpaired` | 设备未被认识 | 否 |
 | `bad-request` | 载荷不合法 | 否 |
+| `too-large` | 应答（如导出）超过 32 MiB 帧上限，Bridle 自己产生 | 否 |
 
 其余错误码由上游 agent 定义，Bridle **必须**原样透传，**禁止**改写。
 
 ### 8.2 判定可重试
 
-`disconnected` / `timeout` / `internal` / `busy` 视为暂时性；其余视为终态。客户端**应当**只对暂时性错误自动重试。
+`disconnected` / `timeout` / `internal` / `busy` 视为暂时性；其余视为终态。客户端**应当**只对暂时性错误自动重试。握手拒绝里的 `pending`（§3.2）同样是暂时性的。
 
 ---
 
