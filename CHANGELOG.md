@@ -9,6 +9,11 @@ the same decision.
 
 ## Unreleased
 
+- **Scanning a new code after the Mac refused this phone works.** The refused
+  screen says to run `bridle pair` and scan again; doing so saved the new code
+  and kept using the connection built from the old one, which stayed refused
+  until the app was killed. A scan now always starts a fresh connection.
+
 - **Opening a conversation that is mid-answer no longer scrambles it.** The
   live stream almost always beats the history page, and what it delivered was
   folded first — so the answer being written landed *above* the messages it

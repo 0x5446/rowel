@@ -155,13 +155,18 @@ actor FakeBridle {
 
     private var channels: [ObjectIdentifier: SecureChannel] = [:]
     private var head = 0
-    /// Handshakes still to be answered "pending", as a Bridle does for a
-    /// short-code claim until the person at the Mac accepts it.
-    private var pendingAnswers = 0
+    /// Handshakes still to be refused, and with what reason.
+    private var refusals: [String] = []
 
-    /// Answer the next `times` handshakes with `pending`.
+    /// Answer the next `times` handshakes with `pending`, as a Bridle does for
+    /// a short-code claim until the person at the Mac accepts it.
     func holdForApproval(times: Int) {
-        pendingAnswers = times
+        refuse(times: times, reason: "pending")
+    }
+
+    /// Refuse the next `times` handshakes with `reason`.
+    func refuse(times: Int, reason: String) {
+        refusals = Array(repeating: reason, count: times)
     }
 
     /// What the ready frame advertises as this machine's current addresses.
@@ -180,13 +185,13 @@ actor FakeBridle {
             let responder = NoiseResponder(staticKeys: staticKeys, prologue: tunnelPrologue)
             let hello = try await carrier.receive()
             _ = try responder.readMessage(hello)
-            if pendingAnswers > 0 {
-                pendingAnswers -= 1
+            if !refusals.isEmpty {
+                let reason = refusals.removeFirst()
                 let refusal = try JSONEncoder().encode(HandshakeReply(
-                    ok: false, version: nil, reason: "pending", supported: nil, machine: nil, bridle: nil
+                    ok: false, version: nil, reason: reason, supported: nil, machine: nil, bridle: nil
                 ))
                 try await carrier.send(try responder.writeMessage(refusal).message)
-                carrier.close("pending")
+                carrier.close(reason)
                 return
             }
             let reply = try JSONEncoder().encode(HandshakeReply(

@@ -103,9 +103,14 @@ public final class AppModel {
     // MARK: - Connection
 
     /// Connect to a machine, disconnecting whatever was connected before.
-    public func connect(to machineId: String) {
+    ///
+    /// - Parameter fresh: rebuild the session even when this machine is the one
+    ///   already connected. A new pairing bundle — a rescan after the Mac
+    ///   refused this phone, or after its key changed — is only read when a
+    ///   session is built, so reusing the old one ignored it.
+    public func connect(to machineId: String, fresh: Bool = false) {
         guard let identity else { return }
-        if active?.machine.id == machineId, active?.status != .idle { return }
+        if !fresh, active?.machine.id == machineId, let status = active?.status, status.isLive { return }
         active?.stop()
         guard let machine = machines.first(where: { $0.id == machineId }) else {
             active = nil
@@ -175,7 +180,7 @@ public final class AppModel {
             pairingTokens[bundle.device] = bundle.token
         }
         persist()
-        connect(to: machine.id)
+        connect(to: machine.id, fresh: true)
         Task {
             // Ask first: registering without permission yields a token that can
             // wake nothing, and the machine would ring it for as long as the
