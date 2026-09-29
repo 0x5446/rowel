@@ -142,10 +142,13 @@ public final class MachineSession {
     private var recent: [String] = []
     /// Conversations whose `ensureLoaded` is in flight, so a reconnect landing
     /// mid-load does not start a second one.
-    private var ensuring: Set<String> = []
+    /// By object, not by session id: a conversation dropped by a resync and
+    /// opened again is a new object with the same id, and must not wait on the
+    /// load of the one it replaced.
+    private var ensuring: Set<ObjectIdentifier> = []
     /// Conversations asked to load again while a load was already running —
     /// a reconnect that beat the failure of the attempt it should replace.
-    private var ensureAgain: Set<String> = []
+    private var ensureAgain: Set<ObjectIdentifier> = []
     /// How many conversations stay folded in memory. Each keeps receiving and
     /// folding its live events, so the cost of an unbounded cache is paid in
     /// main-thread work as well as memory.
@@ -591,16 +594,16 @@ public final class MachineSession {
     /// the tail page can land and the rest of the page fail, or the commands
     /// arrive and the skills not.
     func ensureLoaded(_ conversation: Conversation) async {
-        let id = conversation.sessionId
-        guard conversations[id] === conversation else { return }
-        guard !ensuring.contains(id) else {
-            ensureAgain.insert(id)
+        let key = ObjectIdentifier(conversation)
+        guard conversations[conversation.sessionId] === conversation else { return }
+        guard !ensuring.contains(key) else {
+            ensureAgain.insert(key)
             return
         }
-        ensuring.insert(id)
-        defer { ensuring.remove(id) }
+        ensuring.insert(key)
+        defer { ensuring.remove(key) }
         repeat {
-            ensureAgain.remove(id)
+            ensureAgain.remove(key)
             if !conversation.loaded {
                 await loadHistory(conversation)
             } else if conversation.topUpOwed {
@@ -611,7 +614,7 @@ public final class MachineSession {
             if !conversation.commandsKnown || !conversation.skillsKnown {
                 await loadCommands(conversation)
             }
-        } while ensureAgain.contains(id) && conversations[id] === conversation
+        } while ensureAgain.contains(key) && conversations[conversation.sessionId] === conversation
     }
 
     /// Fetch the children of a conversation.
@@ -919,7 +922,9 @@ public final class MachineSession {
             return
         }
         try? await Task.sleep(for: unconfirmedSendWait)
-        guard isStill() else { return }
+        // A conversation dropped meanwhile (a resync) has been rebuilt from the
+        // machine's log, which already shows whether the message arrived.
+        guard isStill(), conversations[conversation.sessionId] === conversation else { return }
         drop()
         problem = "That message may not have reached the Mac — the connection dropped before it answered. Check before sending it again."
     }

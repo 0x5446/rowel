@@ -43,9 +43,11 @@ exec zsh</code></pre>
 <code class="command">bridle pair</code>
 
 <p>
-  A QR code appears with a short code under it. In the app, tap
-  <em>Connect</em> and scan the code — or type the short code if the camera is
-  being awkward. The code is good for 15 minutes and works once.
+  A QR code appears. In the app, tap <em>Connect</em> and scan it. It is good
+  for 15 minutes and works once. If the camera is being awkward, run
+  <code>bridle pair --code</code> instead and type the code it prints: the Mac
+  then shows the phone's key and asks <em>Accept? [y/N]</em> — accept only if
+  it matches the key the phone shows while it waits.
 </p>
 
 <p>

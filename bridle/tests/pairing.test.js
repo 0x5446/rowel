@@ -9,7 +9,7 @@
  */
 
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -18,6 +18,7 @@ import { generateKeyPair } from '@rowel/protocol'
 import {
   approveClaimant,
   createInvitation,
+  deviceName,
   findPeer,
   loadState,
   offerMatch,
@@ -169,20 +170,37 @@ test('a bridle pair cannot withdraw or approve an offer that replaced its own', 
   })
 })
 
-test('a lock held by a live process is waited on, and one left by a dead process is taken', async () => {
+test('a fresh lock is waited on, and one left behind long ago is taken', async () => {
   await withHome(() => {
     const state = loadState()
     const lock = `${statePath()}.lock`
-    // A dead holder: a pid that cannot exist.
+    // Abandoned: written well past the few microseconds a writer holds it.
     writeFileSync(lock, '999999999')
+    const past = (Date.now() - 60_000) / 1000
+    utimesSync(lock, past, past)
     openPairingOffer(state)
-    assert.equal(existsSync(lock), false, 'the lock was left behind')
-    // A live holder that is not this process: the parent that ran the tests.
-    writeFileSync(lock, String(process.ppid))
+    assert.equal(existsSync(lock), false, 'an abandoned lock was left behind')
+    // Held right now, whoever holds it — even a pid that no longer exists,
+    // because after a reboot a pid says nothing about the holder.
+    writeFileSync(lock, '999999999')
     const started = Date.now()
     assert.throws(() => { openPairingOffer(state) }, /held by another bridle/u)
-    assert.ok(Date.now() - started >= 1_500, 'a live holder\'s lock was not waited on')
-    assert.equal(readFileSync(lock, 'utf8'), String(process.ppid), 'a live holder\'s lock was taken or deleted')
+    assert.ok(Date.now() - started >= 1_500, 'a fresh lock was not waited on')
+    assert.equal(readFileSync(lock, 'utf8'), '999999999', 'a fresh lock was taken or deleted')
     rmSync(lock)
   })
+})
+
+test('a device name cannot draw on the terminal that asks a person to compare keys', () => {
+  // The short-code token may be presented by the Relay, which then chooses the
+  // name printed beside the fingerprint. Escape sequences and newlines could
+  // paint a fake "its key" line and hide the real one.
+  const forged = 'iPhone" asks to pair.\nIts key:  AAAA-BBBB-CCCC-DDDD\n\u001b[8m‮'
+  const shown = deviceName(forged)
+  assert.equal(/[\u0000-\u001f\u007f-\u009f​-‏‪-‮]/u.test(shown), false, `control or format characters survived: ${JSON.stringify(shown)}`)
+  assert.equal(shown.includes('\n'), false)
+  assert.ok(Array.from(deviceName('x'.repeat(500))).length <= 64, 'a name has no length limit')
+  assert.equal(deviceName('\u0007\u001b\u200b'), 'iPhone', 'a name made only of control characters should fall back')
+  assert.equal(deviceName(undefined), 'iPhone')
+  assert.equal(deviceName('Alex’s iPhone 17 👍'), 'Alex’s iPhone 17 👍', 'an ordinary name was mangled')
 })

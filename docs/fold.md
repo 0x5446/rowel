@@ -234,7 +234,7 @@ command/done: line = running.removeValue(forKey: data.commandId)
 
 ### 4.1 尾页（`prepend = false`）
 
-按顺序折叠每个 `events[].event`，`view` 取 `events[].view`，然后按到达顺序回放尾页到达**之前**收到的实时事件（`receiveLive` 在 `loaded == false` 时只缓冲，不折叠）。重叠部分由 `seen` 去重。
+按顺序折叠每个 `events[].event`，`view` 取 `events[].view`，然后按到达顺序回放尾页到达**之前**收到的实时事件（`receiveLive` 在尾页到达前——`awaitingPage`——只缓冲，不折叠；取历史失败后不再缓冲）。重叠部分由 `seen` 去重。
 
 先缓冲是因为打开一个正在运行的会话时，实时流几乎总比历史页先到：直接折叠会把正在写的气泡建在它之后的历史**前面**，历史再追加到后面——`seen` 能去重，却无法把折叠顺序排回来。取历史失败时缓冲照样回放（`historyFailed`），不为一页不会来的历史扣着已到的事件。
 

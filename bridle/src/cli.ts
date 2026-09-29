@@ -322,6 +322,13 @@ async function pair(options: Options): Promise<void> {
     say('or keep this invitation and start it before scanning.')
     say('')
   }
+  if (flagBoolean(options, 'code') && runtime === undefined) {
+    // The running Bridle is what records the phone's request; without one the
+    // phone would wait for a question this command can never ask.
+    say('"bridle pair --code" needs a running bridle. Start one with "bridle start", then run this again.')
+    process.exitCode = 1
+    return
+  }
   const invitation = createInvitation(state, runtime?.direct ?? [])
   if (!flagBoolean(options, 'code')) {
     await printInvitation(invitation, state, flagBoolean(options, 'link'))
@@ -360,6 +367,23 @@ async function pairByCode(state: ReturnType<typeof loadState>, invitation: Invit
   say(`expires:                           ${new Date(invitation.expiresAt).toLocaleTimeString()}`)
   say('')
   say('Waiting for the phone… (Ctrl-C to give up)')
+  // Giving up withdraws the code. Left open, a phone that typed it would wait
+  // on "accept this iPhone on your Mac" for the rest of its fifteen minutes,
+  // with nothing on the Mac left to ask.
+  const giveUp = (): void => {
+    withdrawOffer(state, code)
+    process.exit(130)
+  }
+  process.once('SIGINT', giveUp)
+  try {
+    await awaitClaim(state, code)
+  } finally {
+    process.removeListener('SIGINT', giveUp)
+  }
+}
+
+/** Poll for the phone that typed `code`, and ask the person about it. */
+async function awaitClaim(state: ReturnType<typeof loadState>, code: string): Promise<void> {
   let asked: string | undefined
   for (;;) {
     await new Promise((resolve) => setTimeout(resolve, CLAIM_POLL_MS))
@@ -381,8 +405,11 @@ async function pairByCode(state: ReturnType<typeof loadState>, invitation: Invit
     if (claimant === undefined || claimant.key === asked) continue
     asked = claimant.key
     say('')
-    say(`"${claimant.name}" asks to pair with this Mac.`)
-    say(`its key:  ${keyFingerprint(Buffer.from(claimant.key, 'base64url'))}`)
+    // The key first, and the name quoted: the name is whatever the asker sent,
+    // and the asker may be the Relay. `session.ts` already strips control
+    // characters from it; quoting keeps anything odd that remains visible.
+    say(`A phone asks to pair with this Mac. Its key:  ${keyFingerprint(Buffer.from(claimant.key, 'base64url'))}`)
+    say(`It calls itself ${JSON.stringify(claimant.name)}.`)
     say('The phone shows its own key while it waits. Accept only if the two are the same:')
     say('anyone holding the code could be asking, including the Relay.')
     const answer = (await readLine('Accept? [y/N] ')).trim().toLowerCase()
@@ -392,9 +419,12 @@ async function pairByCode(state: ReturnType<typeof loadState>, invitation: Invit
       return
     }
     if (approveClaimant(state, claimant.key, code)) {
-      say(`Paired with ${claimant.name}. The phone connects on its next try, within a few seconds.`)
+      say(`Paired with ${JSON.stringify(claimant.name)}. The phone connects on its next try, within a few seconds.`)
       return
     }
+    // Ask again about whoever is claiming now — even the same phone, which
+    // may have been displaced for a moment while the person was deciding.
+    asked = undefined
     say('That request changed or expired while you were deciding; still waiting.')
   }
 }

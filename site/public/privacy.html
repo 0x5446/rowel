@@ -76,7 +76,8 @@
   While a pairing code is outstanding — <strong>at most 15 minutes</strong>, and
   usually a few seconds — the relay holds the pairing bundle so the app can
   fetch it with the short code. That bundle contains your machine's name, its
-  public key, its local network addresses, and a one-time token. It is dropped
+  public key, its local network addresses, and a one-time token that can only
+  <em>ask</em> to pair — someone at the Mac has to accept it. It is dropped
   as soon as the code is claimed or expires.
 </p>
 

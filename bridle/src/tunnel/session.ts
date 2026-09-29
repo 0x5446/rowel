@@ -74,6 +74,27 @@ interface HandshakeReply {
   bridle?: string
 }
 
+/** Longest device name kept, in characters. */
+const MAX_DEVICE_NAME = 64
+
+/**
+ * The name a device reported, made safe to store and to print on the Mac.
+ *
+ * Before any trust is established the name comes from whoever holds a token —
+ * for the short code, possibly the Relay — and `bridle pair --code` prints it
+ * right beside the fingerprint a person compares. With control characters in
+ * it, a name could draw a fake fingerprint line and hide the real one. So it
+ * loses every control and format character (`\p{C}`: escapes, newlines,
+ * bidi overrides, zero-width marks) and is cut to a bounded length.
+ * @param raw - the `name` field of the handshake payload.
+ * @returns a printable one-line name; `iPhone` when nothing is left.
+ */
+export function deviceName(raw: unknown): string {
+  if (typeof raw !== 'string') return 'iPhone'
+  const cleaned = Array.from(raw.replace(/\p{C}/gu, '').trim()).slice(0, MAX_DEVICE_NAME).join('').trim()
+  return cleaned.length > 0 ? cleaned : 'iPhone'
+}
+
 /** Concurrent dsh calls one phone may have outstanding. */
 const MAX_INFLIGHT = 64
 
@@ -182,7 +203,7 @@ export class TunnelSession {
       this.refuse('version', [...TUNNEL_VERSIONS])
       return
     }
-    const name = typeof request.name === 'string' && request.name.length > 0 ? request.name : 'iPhone'
+    const name = deviceName(request.name)
     // Re-read the file before deciding. `bridle pair` and `bridle revoke` run in
     // a different process, and both have to take effect on the next handshake
     // rather than on the next restart — one grants access, the other removes it.

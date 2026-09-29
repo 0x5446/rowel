@@ -333,7 +333,7 @@ function mutateDisk(mutate: (disk: BridleState) => void): BridleState {
 
 /** How long a writer waits for another one before giving up. */
 const LOCK_WAIT_MS = 2_000
-/** A lock with no readable holder older than this was left by a process that died writing it. */
+/** A lock older than this was left by a writer that died holding it. */
 const LOCK_STALE_MS = 10_000
 
 /**
@@ -373,56 +373,37 @@ function withStateLock<T>(body: () => T): T {
 }
 
 /**
- * Remove a lock whose holder is gone.
+ * Remove a lock left by a writer that died holding it.
  *
- * By whether the process that wrote it still exists, not by its age: a live
- * holder paused for a while (a laptop lid, a debugger) must keep its lock, or
- * two writers end up inside at once. Age decides only for a lock whose holder
- * cannot be read — written by something that died between create and write.
+ * By age alone. A lock is held for one read and one write — microseconds — so
+ * one older than {@link LOCK_STALE_MS} is abandoned. Asking whether the pid in
+ * it is alive looked more precise and was worse: after a reboot that pid can
+ * belong to some unrelated process, and the lock is then never reclaimed —
+ * every handshake fails until someone deletes the file by hand.
+ *
+ * Read-then-unlink is not atomic: two writers recovering the same dead lock in
+ * the same instant could, in principle, see one remove the lock the other has
+ * just taken. Node has no cross-process flock to close that gap, and it needs
+ * a writer to die mid-write and two more to race within microseconds.
  * @param lock - the lock file.
- * @returns whether it was removed, so the caller should try again at once.
+ * @returns whether it was removed (or is already gone), so the caller should try again at once.
  */
 function reclaimIfAbandoned(lock: string): boolean {
   let holder: string
+  let age: number
   try {
     holder = readFileSync(lock, 'utf8')
+    age = Date.now() - statSync(lock).mtimeMs
   } catch {
     return true // released between our create and this read
   }
-  const pid = Number(holder)
-  const abandoned = Number.isInteger(pid) && pid > 0
-    ? !processExists(pid)
-    : lockAge(lock) > LOCK_STALE_MS
-  if (!abandoned) return false
-  // Read-then-unlink is not atomic: two writers recovering the same dead
-  // holder's lock in the same instant could, in principle, see one remove the
-  // lock the other has just taken. Node has no cross-process flock to close
-  // that gap, and it needs a Bridle to have died mid-write *and* two writers
-  // to race for the lock within microseconds of each other.
+  if (age <= LOCK_STALE_MS) return false
   try {
     if (readFileSync(lock, 'utf8') === holder) unlinkSync(lock)
   } catch {
     // Someone else cleared it first; either way, try again.
   }
   return true
-}
-
-function processExists(pid: number): boolean {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (error) {
-    // EPERM: it exists, it just is not ours to signal.
-    return (error as NodeJS.ErrnoException).code === 'EPERM'
-  }
-}
-
-function lockAge(lock: string): number {
-  try {
-    return Date.now() - statSync(lock).mtimeMs
-  } catch {
-    return 0
-  }
 }
 
 function writeDisk(state: BridleState): void {

@@ -2,6 +2,10 @@
 
 给在本仓库里干活的 agent（DSH / Codex / Claude 都算）。这里只写两件事：跑什么门禁，以及**多个会话同时在这一个 checkout 里干活时怎么不互相踩**。项目本身的约定在 `CONTRIBUTING.md`，架构在 `docs/`。
 
+## 提交
+
+**不加 `Co-Authored-By` 尾行**（`CONTRIBUTING.md`：GitHub 会把共同作者算成贡献者，去掉只能重写历史）。agent 的默认署名规则与此冲突时，以本仓库为准。2026-09-29 就因此重写过一次 main。
+
 ## 门禁
 
 ```bash

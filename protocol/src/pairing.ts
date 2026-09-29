@@ -1,13 +1,13 @@
 /**
  * Pairing payloads. Two paths, both ending in a mutually authenticated tunnel:
  *
- * - **QR** carries the Bridle's static public key directly, so the phone knows
- *   the responder identity before the first byte and a hostile Relay cannot
- *   interpose. This is the default and needs no confirmation step.
+ * - **QR** carries the Bridle's static public key and a token that leaves the
+ *   Mac only inside the QR, so a hostile Relay can neither interpose nor pair
+ *   itself. This is the default and needs no confirmation step.
  * - **Short code** is for people who cannot scan. The phone fetches the bundle
- *   from the Relay, which could lie, so both ends then display a six-digit
- *   number derived from the completed handshake hash. Equal numbers rule out an
- *   interposed party, the same trick as Bluetooth numeric comparison.
+ *   from the Relay, which could lie or use it itself, so its token only earns a
+ *   request: the Mac shows the requesting device's key fingerprint and a person
+ *   accepts only if it matches the one the phone shows (`bridle pair --code`).
  */
 
 import { createHash, randomBytes } from 'node:crypto'
@@ -105,9 +105,10 @@ export function decodePairingLink(link: string): PairingBundle {
 }
 
 /**
- * Six-digit confirmation number for the short-code path. Derived from the
- * completed handshake hash, so it is identical on both ends exactly when no one
- * sits in the middle.
+ * Six-digit number derived from the completed handshake hash — identical on
+ * both ends exactly when no one sits in the middle. Kept with its test vectors,
+ * but not part of either pairing flow: the Mac never computed it, and the
+ * short-code path is guarded by a fingerprint check instead (docs/protocol.md §2.5).
  * @param handshakeHash - the Noise handshake hash of the established channel.
  * @returns a zero-padded six-digit string.
  */

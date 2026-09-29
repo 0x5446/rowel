@@ -168,7 +168,7 @@ export interface ResumeFrame {
  */
 export interface ResyncFrame {
   t: 'resync'
-  /** First sequence the Bridle can still serve. */
+  /** Events resume after this sequence; the app keeps it as its high-water mark. */
   from: number
 }
 
