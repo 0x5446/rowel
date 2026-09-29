@@ -112,6 +112,13 @@ public final class Conversation {
     /// after higher ones. `seen` can drop a duplicate; it cannot put a fold back
     /// in order. So they wait for the page and are replayed behind it.
     private var early: [(event: JSONValue, view: JSONValue?)] = []
+    /// Whether live events are being held for a history page. Cleared by the
+    /// page, and by a failed fetch — after which live events fold as they come.
+    private var awaitingPage = true
+    /// Bumped by `reset()`. A history call started before a reset must not
+    /// land after it: its page describes the log as it was, and folding it
+    /// into the refetched conversation is exactly the disorder a reset is for.
+    public private(set) var generation = 0
 
     /// Streaming bubbles by `turn.step`.
     private var assistantIndex: [String: Int] = [:]
@@ -141,6 +148,8 @@ public final class Conversation {
 
     /// Replace everything with a freshly loaded tail page.
     public func reset() {
+        generation += 1
+        awaitingPage = true
         early = []
         topUpOwed = false
         items = []
@@ -200,7 +209,7 @@ public final class Conversation {
     /// Fold one event from the live stream — now, or once the history it
     /// belongs after has arrived. See `early`.
     public func receiveLive(event: JSONValue, view: JSONValue?) {
-        guard loaded else {
+        guard !awaitingPage else {
             early.append((event: event, view: view))
             return
         }
@@ -214,6 +223,7 @@ public final class Conversation {
     }
 
     private func replayEarly() {
+        awaitingPage = false
         let held = early
         early = []
         for entry in held { apply(event: entry.event, view: entry.view) }
@@ -333,7 +343,10 @@ public final class Conversation {
         case "tool/call":
             openToolCard(data, view: view, at: at)
         case "tool/result":
-            closeToolCard(data, view: view, at: at)
+            // A result with no card to land on is not folded, so its sequence
+            // is not spent either: were its call to arrive later, the result
+            // re-delivered behind it has to be able to land.
+            if !closeToolCard(data, view: view, at: at) { seen.remove(seq) }
         case "todo/write":
             todos = (data["todos"]?.arrayValue ?? []).compactMap { item in
                 guard let content = item["content"]?.stringValue,
@@ -485,11 +498,12 @@ public final class Conversation {
         items.append(.tool(card))
     }
 
-    private func closeToolCard(_ data: JSONValue, view: JSONValue?, at: Date) {
+    @discardableResult
+    private func closeToolCard(_ data: JSONValue, view: JSONValue?, at: Date) -> Bool {
         let block = data.path("message", "content")?.arrayValue?.first
         let callId = data.path("message", "source", "callId")?.stringValue
             ?? block?["toolCallId"]?.stringValue
-        guard let callId, let index = toolIndex[callId], case .tool(var card) = items[index] else { return }
+        guard let callId, let index = toolIndex[callId], case .tool(var card) = items[index] else { return false }
         card.running = false
         card.finishedAt = at
         card.failed = data["error"] != nil && data["error"]?.isNull == false
@@ -499,6 +513,7 @@ public final class Conversation {
             card.presentation = Conversation.resultPresentation(result, current: card.presentation)
         }
         items[index] = .tool(card)
+        return true
     }
 
     /// Mark any still-streaming bubble finished. A turn can end without a final

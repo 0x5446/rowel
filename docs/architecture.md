@@ -287,15 +287,15 @@ app 自己那把锁（`ios/Rowel/Store/AppLock.swift`）不解决这件事，它
 | `cancel {id}` | app→bridle | 放弃在途请求 |
 | `respond {id, message}` | app→bridle | 回答审批/提问 |
 | `ev {seq, stream, frame}` | bridle→app | 下行事件，带隧道级序号 |
-| `resume {since}` | app→bridle | 重连后补齐 |
-| `resync {from}` | bridle→app | 缓冲不够了，重新拉状态 |
+| `resume {since, epoch}` | app→bridle | 重连后补齐；`epoch` 是上一次连接 `ready.epoch` |
+| `resync {from}` | bridle→app | 有事件没送到：缓冲不够、Bridle 重启过、或某个事件超大被丢，重新拉状态 |
 | `ready` `status` `ping` `pong` `fault` | 双向 | 生命周期 |
 
 ### 6.1 无损重连
 
-Bridle 持有一个环形缓冲（`tunnel/event-log.ts`），事件带单调递增 `seq`。重连时 app 发 `resume{since}`，Bridle 重放缺口。
+Bridle 持有一个环形缓冲（`tunnel/event-log.ts`），事件带单调递增 `seq`。重连时 app 发 `resume{since, epoch}`，Bridle 重放缺口。序号每个 Bridle 进程从 1 重来，所以 `epoch`（进程纪元，随 `ready` 下发）不符时 Bridle 不重放、改发 `resync`——否则新进程会把自己的新事件当成无缝续接。
 
-**缓冲不够时不静默丢弃，而是发 `resync{from}`。**app 收到后重新拉取**屏幕上正在显示的**会话历史，而不是全部。
+**任何丢失都不静默，一律发 `resync{from}`**：缓冲够不到、纪元不符、以及某个事件超过 32 MiB 被丢弃（这一条必须由 Bridle 主动说——被丢的恰是最后一条时，app 收不到后续序号，无从发现缺口）。app 收到后重新拉取**屏幕上正在显示的**会话历史，而不是全部；其余缓存的会话直接丢弃，下次打开时重建。
 
 > 这一条是刻意的：调研显示"重连丢东西 / 静默挂死"是整个品类的第一痛点。静默丢帧会让折叠结果与真相不一致，而且永远不会自愈。显式告知虽然更吵，但可自愈。
 

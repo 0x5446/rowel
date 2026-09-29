@@ -92,7 +92,7 @@ export async function startStack(options: StackOptions = {}): Promise<Stack> {
   let relay: RelayServer | undefined
   let relayUrl = options.relayUrl
   if (relayUrl === undefined) {
-    relay = new RelayServer({ port: 0, host: '127.0.0.1' })
+    relay = new RelayServer({ port: 0, host: '127.0.0.1', recordWakes: true })
     relayUrl = `http://127.0.0.1:${String(await relay.listen())}`
   }
 

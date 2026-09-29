@@ -139,7 +139,7 @@ test('a request that arrives while the relay is down is rung when it comes back'
   // A relay this test owns, so it can be taken away and put back on the same
   // port — which is what a deploy, a restart, or a dropped uplink looks like
   // from the Bridle's side.
-  const first = new RelayServer({ port: 0, host: '127.0.0.1' })
+  const first = new RelayServer({ port: 0, host: '127.0.0.1', recordWakes: true })
   const port = await first.listen()
   const relayUrl = `http://127.0.0.1:${port}`
 
@@ -166,7 +166,7 @@ test('a request that arrives while the relay is down is rung when it comes back'
   // `onWaiting` fires once and the request is deduped afterwards, so a Bridle
   // that dropped the wake here would never ring for this question at all. It
   // has to be owed, and paid when there is somewhere to pay it.
-  const second = new RelayServer({ port, host: '127.0.0.1' })
+  const second = new RelayServer({ port, host: '127.0.0.1', recordWakes: true })
   await second.listen()
   t.after(() => second.close())
   await waitFor(() => stack.relayClient.connectionState === 'online', 30_000, 'the relay to come back')
@@ -207,7 +207,7 @@ test('a question answered while the relay was down does not ring afterwards', { 
   // back, would buzz a phone about a question its owner had already answered
   // in the browser — and the notification would open a card that is no longer
   // there. The decision has to be re-derived, not replayed.
-  const first = new RelayServer({ port: 0, host: '127.0.0.1' })
+  const first = new RelayServer({ port: 0, host: '127.0.0.1', recordWakes: true })
   const port = await first.listen()
   const relayUrl = `http://127.0.0.1:${port}`
 
@@ -233,7 +233,7 @@ test('a question answered while the relay was down does not ring afterwards', { 
   agent.emit(request('approval/resolved', 's1'))
   await waitFor(() => stack.core.pendingRequests.length === 0, 5_000, 'the request to be cleared')
 
-  const second = new RelayServer({ port, host: '127.0.0.1' })
+  const second = new RelayServer({ port, host: '127.0.0.1', recordWakes: true })
   await second.listen()
   t.after(() => second.close())
   await waitFor(() => stack.relayClient.connectionState === 'online', 30_000, 'the relay to come back')

@@ -64,6 +64,8 @@ function core(overrides = {}, dshExtra = {}) {
     feed: (f) => { for (const p of pumps) if (p.stream === 'mux') p.onFrame(f) },
     /** The mux downlink coming back, as it does when dsh restarts. */
     reconnect: () => { for (const p of pumps) if (p.stream === 'mux') p.onStatus(true) },
+    /** The mux downlink dropping. */
+    disconnect: () => { for (const p of pumps) if (p.stream === 'mux') p.onStatus(false, 'gone') },
   }
 }
 
@@ -399,4 +401,23 @@ test('an export too big for the tunnel is refused without reading it all into me
   assert.equal(answer?.result.ok, false)
   assert.equal(answer?.result.error.code, 'too-large')
   assert.ok(served < 30, `read ${String(served)} MB of an archive it could never send`)
+})
+
+test('a downlink that drops again before dsh re-sends does not clear what is still pending', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const { machine, feed, reconnect, disconnect } = core()
+  await machine.start()
+  feed(frame('approval/requested', 's1', { approvalId: 'a1', toolName: 'Bash' }))
+  const told = []
+  const unsubscribe = machine.events.subscribe((event) => { told.push(event.frame) })
+
+  reconnect()
+  t.mock.timers.tick(500)
+  disconnect()
+  t.mock.timers.tick(5_000)
+
+  assert.equal(machine.pendingRequests.length, 1, 'silence on a dead downlink was taken for dsh forgetting the request')
+  assert.deepEqual(told, [], 'the phone was told a live approval had been answered')
+  unsubscribe()
+  machine.stop()
 })

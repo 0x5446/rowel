@@ -17,9 +17,9 @@ the same decision.
   loading the whole archive (three times over) before refusing it. On the
   hosted Relay, a phone and a Mac behind the same home address no longer share
   one rate-limit bucket, and wakes are rate-limited per machine with the
-  machine name capped at 64 characters. The self-hosted Node relay's record of
-  wakes is capped, and the deployment notes now say plainly that it does not
-  send notifications.
+  machine name capped at 64 characters. The self-hosted Node relay no longer
+  keeps the APNs tokens its wakes carry, and the deployment notes now say
+  plainly that it does not send notifications.
 
 - **The screen keeps up while the agent writes a long file into a code
   block.** A code block was drawn as one piece of text, laid out whole every

@@ -339,8 +339,9 @@ async function pair(options: Options): Promise<void> {
  * foreground until the phone turns up, the offer lapses, or the answer is no.
  */
 async function pairByCode(state: ReturnType<typeof loadState>, invitation: Invitation): Promise<void> {
+  const code = invitation.code
   if (process.stdin.isTTY !== true) {
-    withdrawOffer(state)
+    withdrawOffer(state, code)
     say('"bridle pair --code" has to ask you to accept the phone, so it needs a terminal.')
     say('Scan the QR from "bridle pair" instead, or run this where you can answer.')
     process.exitCode = 1
@@ -349,7 +350,7 @@ async function pairByCode(state: ReturnType<typeof loadState>, invitation: Invit
   try {
     await publishInvitation(state, invitation)
   } catch (error) {
-    withdrawOffer(state)
+    withdrawOffer(state, code)
     say(`The Relay did not take the code: ${error instanceof Error ? error.message : String(error)}`)
     say('Scan the QR from "bridle pair" instead — it does not need the Relay.')
     process.exitCode = 1
@@ -364,13 +365,14 @@ async function pairByCode(state: ReturnType<typeof loadState>, invitation: Invit
     await new Promise((resolve) => setTimeout(resolve, CLAIM_POLL_MS))
     reloadState(state)
     const offer = state.offer
-    if (offer === undefined) {
-      // Taken by a scan of the QR from another `bridle pair`, or withdrawn.
+    if (offer?.code !== code) {
+      // Used by a scan of its QR, withdrawn, or replaced by a newer
+      // `bridle pair` — whose offer is not this command's to judge.
       say('This invitation is no longer open.')
       return
     }
     if (offer.expiresAt <= Date.now()) {
-      withdrawOffer(state)
+      withdrawOffer(state, code)
       say('The code expired before a phone accepted it. Run "bridle pair --code" again.')
       process.exitCode = 1
       return
@@ -385,11 +387,11 @@ async function pairByCode(state: ReturnType<typeof loadState>, invitation: Invit
     say('anyone holding the code could be asking, including the Relay.')
     const answer = (await readLine('Accept? [y/N] ')).trim().toLowerCase()
     if (answer !== 'y' && answer !== 'yes') {
-      withdrawOffer(state)
+      withdrawOffer(state, code)
       say('Refused. The code no longer works.')
       return
     }
-    if (approveClaimant(state, claimant.key)) {
+    if (approveClaimant(state, claimant.key, Date.now(), code)) {
       say(`Paired with ${claimant.name}. The phone connects on its next try, within a few seconds.`)
       return
     }

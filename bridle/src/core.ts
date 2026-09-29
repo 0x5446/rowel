@@ -400,6 +400,12 @@ export class BridleCore {
   }
 
   private onStream(stream: 'mux' | 'host', up: boolean, detail?: string): void {
+    if (!up && stream === 'mux' && this.sweepTimer !== undefined) {
+      // Gone again before dsh could re-send: silence on a dead downlink says
+      // nothing about what is still pending. The next connection starts over.
+      clearTimeout(this.sweepTimer)
+      this.sweepTimer = undefined
+    }
     if (up && stream === 'mux' && this.waiting.size > 0) {
       // dsh re-sends what is still pending as soon as a subscriber arrives;
       // give it a moment, then drop whatever it did not.

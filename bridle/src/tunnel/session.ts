@@ -21,7 +21,7 @@ import {
   type ServerFrame,
   MAX_FRAME_BYTES,
 } from '@rowel/protocol'
-import { acceptPeer, claimOffer, findPeer, offerMatch, rowelHome, touchPeer, updateState } from '../identity.ts'
+import { findPeer, redeemOffer, rowelHome, touchPeer, updateState } from '../identity.ts'
 import type { BridleCore, DshStatus } from '../core.ts'
 import type { LoggedEvent } from './event-log.ts'
 import { thinHistory } from './history.ts'
@@ -189,19 +189,17 @@ export class TunnelSession {
     this.core.refreshState()
     const known = findPeer(this.core.state, remoteStatic)
     if (known === undefined) {
-      const presented = request.token === undefined ? undefined : offerMatch(this.core.state, request.token)
-      if (presented === undefined) {
+      const outcome = request.token === undefined ? undefined : redeemOffer(this.core.state, remoteStatic, name, request.token)
+      if (outcome === undefined) {
         this.refuse('unpaired')
         return
       }
-      if (presented === 'typed') {
+      if (outcome === 'claimed') {
         // The Relay held the bundle this token came from, so the token says
         // nothing about who is on the other end. A person at the Mac decides.
-        claimOffer(this.core.state, remoteStatic, name)
         this.refuse('pending')
         return
       }
-      acceptPeer(this.core.state, remoteStatic, name)
     } else {
       touchPeer(this.core.state, remoteStatic)
     }

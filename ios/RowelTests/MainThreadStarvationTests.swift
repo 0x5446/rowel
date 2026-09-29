@@ -303,9 +303,11 @@ final class MainThreadStarvationTests: XCTestCase {
     //
     // Unlike the others this one asserts, because it separates cleanly: one
     // `Text` per code block delivered ~5% of frames with ~1 s stalls here, and
-    // the sliced block ~92% with stalls under 100 ms. The bounds sit between
-    // the two with room for a loaded machine. K is not asserted — its signal
-    // (5–10%) is smaller than what a busy host adds to it.
+    // the sliced block ~92% with stalls under 100 ms. The bounds (35% dropped,
+    // 350 ms) sit above the worst reading seen on a heavily loaded host (21%,
+    // 230 ms) and still catch anything a third of the way back to the old
+    // layout. K is not
+    // asserted — its signal (5–10%) is smaller than what a busy host adds.
     func testL_longCodeBlockAtWireRate() {
         var scale = BubbleScale.giant
         scale.openFenceBytes = 60_000
@@ -318,8 +320,8 @@ final class MainThreadStarvationTests: XCTestCase {
                 hz: 200, reasoningCount: 0, textCount: 400, textDelta: Corpus.codeLine
             )
             guard idle.dropRate == 0 else { continue }
-            XCTAssertLessThan(busy.dropRate, 0.5, "streaming into a long code block starves the screen again (attempt \(attempt))")
-            XCTAssertLessThan(busy.maxGapMs, 500, "a stall this long is the one-Text-per-block layout again (attempt \(attempt))")
+            XCTAssertLessThan(busy.dropRate, 0.35, "streaming into a long code block starves the screen again (attempt \(attempt))")
+            XCTAssertLessThan(busy.maxGapMs, 350, "a stall this long is the one-Text-per-block layout again (attempt \(attempt))")
             return
         }
         XCTFail("three measurements in a row had a busy idle baseline; nothing was measured")
