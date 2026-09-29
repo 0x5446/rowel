@@ -26,6 +26,7 @@ import {
   RelayClient,
   clearRuntime,
   competingDaemon,
+  VERSION,
   loadState,
   overrideState,
   rememberInstance,
@@ -57,8 +58,6 @@ export interface BridlePluginConfig {
   advertise?: string[]
 }
 
-/** The version reported to a paired app; overridden by the build. */
-const VERSION = '0.1.2'
 
 /**
  * Cordis entry point.

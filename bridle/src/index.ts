@@ -4,6 +4,7 @@
  */
 
 export { BridleCore, type DshStatus } from './core.ts'
+export { VERSION } from './version.ts'
 export { DirectServer, DIRECT_PATH, localAddresses, dialableAddresses } from './direct-server.ts'
 export type { AgentClient, AgentHealth, AgentResult, AgentStream } from './agents/types.ts'
 export { DshClient, assertLoopback, type DshHealth, type DshResult } from './dsh/client.ts'
