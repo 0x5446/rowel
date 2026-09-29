@@ -152,13 +152,17 @@ public struct ResumeFrame: TunnelFrame {
     public let t = "resume"
     /// Highest sequence the app already holds; `0` asks for a fresh subscription.
     public let since: Int
+    /// The `ready.epoch` of the connection `since` was counted on, so a Bridle
+    /// that restarted — and restarted its numbering — answers `resync`.
+    public let epoch: String?
 
-    public init(since: Int) {
+    public init(since: Int, epoch: String? = nil) {
         self.since = since
+        self.epoch = epoch
     }
 
     var members: [(String, JSONValue?)] {
-        [("t", .string(t)), ("since", .number(Double(since)))]
+        [("t", .string(t)), ("since", .number(Double(since))), ("epoch", epoch.map(JSONValue.string))]
     }
 }
 
@@ -351,6 +355,8 @@ public struct ReadyFrame: Sendable {
     public let direct: [String]?
     /// Highest event sequence the Bridle has produced.
     public let seq: Int
+    /// Which Bridle process's numbering `seq` belongs to. `nil` from an older Bridle.
+    public var epoch: String? = nil
 }
 
 /// One downlink frame, tagged with a tunnel-level sequence.
@@ -366,7 +372,8 @@ public enum ServerFrame: Sendable {
     case ready(ReadyFrame)
     case response(id: String, result: Result<JSONValue, CallError>)
     case event(EventFrame)
-    /// The replay buffer no longer reaches back far enough; refetch state.
+    /// Events were lost to this app — the replay buffer no longer reaches back,
+    /// the Bridle restarted, or an event was too large to carry. Refetch state.
     case resync(from: Int)
     /// The local harness went away or came back.
     case status(reachable: Bool, detail: String?)
@@ -401,7 +408,8 @@ public extension ServerFrame {
                 },
                 host: value["host"],
                 direct: value["direct"]?.arrayValue.map { $0.compactMap(\.stringValue) },
-                seq: value["seq"]?.intValue ?? 0
+                seq: value["seq"]?.intValue ?? 0,
+                epoch: value["epoch"]?.stringValue
             ))
         case "res":
             guard let id = value["id"]?.stringValue else { throw FrameError(reason: "response has no id") }

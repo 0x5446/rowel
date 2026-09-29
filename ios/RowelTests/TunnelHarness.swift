@@ -145,6 +145,10 @@ actor FakeBridle {
     /// which sockets were opened and in what order.
     private(set) var served: [LoopbackCarrier] = []
     private(set) var resumedFrom: [Int] = []
+    /// The `epoch` each resume carried, in order; nil when it carried none.
+    private(set) var resumedEpochs: [String?] = []
+    /// This process's event numbering, as the ready frame names it.
+    let epoch = UUID().uuidString
     private(set) var handshakes = 0
     /// Every `wake` frame received, oldest first; nil for a withdrawal.
     private(set) var wakes: [String?] = []
@@ -200,6 +204,7 @@ actor FakeBridle {
                 "dshReachable": .bool(true),
                 "direct": .array(direct.map(JSONValue.string)),
                 "seq": .number(Double(head)),
+                "epoch": .string(epoch),
             ])
             while true {
                 let bytes = try await carrier.receive()
@@ -209,6 +214,7 @@ actor FakeBridle {
                 switch value["t"]?.stringValue {
                 case "resume":
                     resumedFrom.append(value["since"]?.intValue ?? 0)
+                    resumedEpochs.append(value["epoch"]?.stringValue)
                 case "wake":
                     wakes.append(value["token"]?.stringValue)
                 case "ping":

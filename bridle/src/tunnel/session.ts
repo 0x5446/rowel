@@ -267,6 +267,7 @@ export class TunnelSession {
       // listener that no longer exists.
       direct: this.core.directAddresses(),
       seq: this.core.events.head,
+      epoch: this.core.events.epoch,
     })
     // Whatever the machine is already waiting on, said before anything else.
     //
@@ -315,7 +316,7 @@ export class TunnelSession {
         void this.handleRespond(frame.id, frame.message)
         return
       case 'resume':
-        this.handleResume(frame.since)
+        this.handleResume(frame.since, frame.epoch)
         return
       case 'wake':
         this.rememberToken(frame.token)
@@ -359,9 +360,9 @@ export class TunnelSession {
     })
   }
 
-  private handleResume(since: number): void {
+  private handleResume(since: number, epoch?: string): void {
     this.unsubscribe?.()
-    const result = this.core.events.replay(since)
+    const result = this.core.events.replay(since, epoch)
     if (result.kind === 'resync') {
       this.lastSent = result.from
       this.sendFrame({ t: 'resync', from: result.from })
@@ -534,13 +535,20 @@ export class TunnelSession {
    * has no upper bound at all.
    *
    * A response can fail on its own, so it does. An event cannot — there is no
-   * request waiting on it — so it is dropped and logged, which loses one frame
-   * instead of the connection. The app notices the sequence gap either way.
+   * request waiting on it — so it is dropped, which loses one frame instead of
+   * the connection, and the app is told to refetch. It cannot notice the gap
+   * itself: if the dropped event was the last one, no later sequence arrives.
    */
   private sendOversize(frame: ServerFrame, size: number): void {
     const megabytes = (size / (1024 * 1024)).toFixed(1)
     const ceiling = (MAX_FRAME_BYTES / (1024 * 1024)).toFixed(0)
     this.options.log?.(`dropping a ${megabytes} MB ${frame.t} frame; the ceiling is ${ceiling} MB`)
+    if (frame.t === 'ev') {
+      // Not for the `seq: 0` snapshot of pending requests: it is not a position
+      // in the log, and `from: 0` would throw away the app's resume point.
+      if (frame.seq > 0) this.sendFrame({ t: 'resync', from: frame.seq })
+      return
+    }
     if (frame.t !== 'res') return
     this.sendFrame({
       t: 'res',

@@ -297,7 +297,7 @@ Bridle **必须**中止对应的上游请求。未知 id **必须**静默忽略�
 
 **`resume`** — 重连后补齐
 
-| `t` = `"resume"` | `since` = 已持有的最高事件序号；`0` 表示全新订阅 |
+| `t` = `"resume"` | `since` = 已持有的最高事件序号；`0` 表示全新订阅 | `epoch`（可选）= `since` 所属那次连接的 `ready.epoch`；首连省略 |
 
 **`wake`** — 告诉机器：我不在线时往哪儿敲
 
@@ -331,6 +331,7 @@ App **必须**应答 Bridle 的每个 `ping`。Bridle 连续 2.5 个 ping 周期
 | `host` | any | 可达时为 agent 的 `host.describe` 值；不可达时省略 |
 | `direct` | string[]，可选 | 本机当前可直连的地址，优先在前。空数组表示直连监听已关（app 应清掉存量地址）；缺省表示 Bridle 太老不发（app 保留存量地址） |
 | `seq` | number | Bridle 已产生的最高事件序号 |
+| `epoch` | string，可选 | 本 Bridle 进程的事件编号纪元。序号每个进程从 1 重来，App 在下一次 `resume` 里原样带回，Bridle 据此判断 `since` 是不是自己数的。旧 Bridle 不发 |
 
 **`res`** — `req` 的应答
 
@@ -343,9 +344,11 @@ App **必须**应答 Bridle 的每个 `ping`。Bridle 连续 2.5 个 ping 周期
 
 | `t` = `"ev"` | `seq` = 隧道级单调序号 | `stream` = `"mux"` \| `"host"` | `frame` = agent 的 `server-request` 帧，原样 |
 
-**`resync`** — 重放缓冲不足
+**`resync`** — 有事件没送到这个 App
 
-| `t` = `"resync"` | `from` = Bridle 还能提供的最早序号 |
+| `t` = `"resync"` | `from` = 此后的事件照常送达 |
+
+三种情况发它：重放缓冲够不到 `since`；`resume.epoch` 不是本进程的（Bridle 重启过）；某个事件超过 32 MiB 被丢弃（`from` = 被丢事件的序号）。最后一种**必须**由 Bridle 主动说——被丢的恰是最后一条时，App 收不到任何后续序号，无从发现缺口。
 
 App 收到后**必须**重新拉取**当前屏幕上**的状态，而不是全部。
 
@@ -373,8 +376,9 @@ Bridle **必须**限制单条隧道的在途 `req` 数量。当前实现为 **64
 
 - `seq` 由 Bridle 分配，**每条隧道内**单调递增，从 1 开始
 - Bridle 持有环形缓冲；默认容量 **2000** 条（`EventLog` 构造参数可覆盖，测试用小值验证溢出路径）
-- `resume{since}` 时：若 `since >= 缓冲最早序号 - 1`，重放 `since` 之后全部；否则发 `resync{from}`
-- **禁止**静默丢弃
+- `resume{since, epoch}` 时：`epoch` 存在且不等于本进程的，或 `since` 大于当前最高序号 → `resync{from: 最高序号}`；否则若 `since >= 缓冲最早序号 - 1`，重放 `since` 之后全部；否则 `resync{from}`
+- **禁止**静默丢弃：超大事件丢弃后立即发 `resync`（`seq: 0` 的待处理请求快照除外——它不是日志中的位置）
+- 旧 App 不带 `epoch`：只有 `since` 大于当前最高序号才能识别重启。"新进程已数过旧水位"的窗口对旧 App 仍在，随 App 更新消失
 
 ### 4.6 版本策略
 

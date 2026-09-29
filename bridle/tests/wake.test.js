@@ -338,6 +338,8 @@ async function pairedSession(t) {
     session,
     sent,
     say: (frame) => { session.receive(channel.encrypt(encodeFrame(frame))) },
+    machine,
+    frames: () => sent.slice(1).map((bytes) => decodeFrame(channel.decrypt(bytes))),
     pings: () => sent.slice(1).map((bytes) => decodeFrame(channel.decrypt(bytes))).filter((f) => f.t === 'ping').length,
     closedWhy: () => closedWhy,
   }
@@ -361,4 +363,17 @@ test('a phone that stops answering is let go instead of counted as listening', a
   assert.equal(phone.closedWhy(), undefined, 'a phone answering its pings was dropped')
   t.mock.timers.tick(25_000)
   assert.equal(phone.closedWhy(), 'peer silent')
+})
+
+test('an event too large to carry is replaced by an instruction to refetch', async (t) => {
+  const phone = await pairedSession(t)
+  phone.say({ t: 'resume', since: 0 })
+  const before = phone.sent.length
+  // Past the 32 MiB tunnel ceiling. Dropping it silently left the bubble it
+  // belonged to unfinished forever, and when it was the last event there was
+  // no later sequence number from which the gap could even be noticed.
+  phone.machine.events.append('mux', { payload: { type: 'session/event', blob: 'x'.repeat(33 * 1024 * 1024) } })
+  const frames = phone.frames().slice(before - 1)
+  assert.deepEqual(frames.map((f) => f.t), ['resync'])
+  assert.equal(frames[0].from, phone.machine.events.head)
 })
