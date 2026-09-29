@@ -49,6 +49,24 @@ needs consent — then drives the tap and records:
 The phone is the simulator, recorded with `xcrun simctl io recordVideo` — no
 camera and no physical device, so a take is repeatable.
 
+## The App Review walkthrough
+
+A second cut from the same machinery, for App Review rather than a feed: the
+app from its first launch — the first-run screen, the setup it asks for on the
+Mac, pairing, notifications — through reading a conversation and answering a
+permission request.
+
+```sh
+ios/demo.sh --review               # raw/review.mov, driven by ReviewTour.swift
+node review.mjs                    # out/rowel-review.mp4
+```
+
+The simulator has no camera, so it pairs through the `rowel://pair` link
+Bridle prints, opened by `demo.sh` when the test drops a marker. It is a real
+first launch: the app is uninstalled and the simulator rebooted before the
+take, because an alert left from the last one otherwise sits over the first
+screen of the next.
+
 ## The Mac half: safe now, still not useful
 
 `ios/demo.sh --mac` records the harness's window too, through

@@ -18,13 +18,15 @@ Hello, and thank you for the review.
 All six items follow. They have also been added to the App Review Information
 Notes field for future submissions, as requested.
 
-1. Screen recording (physical iPhone 17, iOS 26, captured from app launch
-through the typical flow): https://rowel.novabox.ai/review/demo-1.0.mp4
+1. Screen recording, from first launch through the typical flow — the app in
+the iOS Simulator, paired live with a real Mac:
+https://rowel.novabox.ai/review/demo-1.0.mp4
 The app has no account registration or login, no user-generated content
 visible to other users, and no paid content, so those flows do not exist to
-record. What the recording shows: launching the app, the conversation list
-arriving from the paired Mac, opening a conversation, sending a request, the
-agent stopping on a permission card, tapping Allow, and the work resuming.
+record. What the recording shows: the first-run screen, the setup on the Mac,
+pairing, the conversation list arriving from the paired Mac, opening a
+conversation, the agent stopping on a permission card, tapping Allow, and the
+work resuming.
 
 2. Purpose and target audience: Rowel is for developers who run the DeepSeek
 Harness ("dsh") coding agent on their own Mac. The problem it solves: the
