@@ -193,14 +193,14 @@ test('a fresh lock is waited on, and one left behind long ago is taken', async (
 
 test('a device name cannot draw on the terminal that asks a person to compare keys', () => {
   // The short-code token may be presented by the Relay, which then chooses the
-  // name printed beside the fingerprint. Escape sequences and newlines could
-  // paint a fake "its key" line and hide the real one.
-  const forged = 'iPhone" asks to pair.\nIts key:  AAAA-BBBB-CCCC-DDDD\n\u001b[8m‮'
+  // name printed beside the fingerprint. Escape sequences, newlines, bidi
+  // overrides and zero-width marks could paint a fake "its key" line and hide
+  // the real one. Written as escapes so no editor can quietly drop them.
+  const forged = 'iPhone" asks to pair.\nIts key:  AAAA-BBBB-CCCC-DDDD\n\u001b[8m\u202e\u200b'
   const shown = deviceName(forged)
-  assert.equal(/[\u0000-\u001f\u007f-\u009f​-‏‪-‮]/u.test(shown), false, `control or format characters survived: ${JSON.stringify(shown)}`)
-  assert.equal(shown.includes('\n'), false)
+  assert.equal(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e]/u.test(shown), false, `control or format characters survived: ${JSON.stringify(shown)}`)
   assert.ok(Array.from(deviceName('x'.repeat(500))).length <= 64, 'a name has no length limit')
   assert.equal(deviceName('\u0007\u001b\u200b'), 'iPhone', 'a name made only of control characters should fall back')
   assert.equal(deviceName(undefined), 'iPhone')
-  assert.equal(deviceName('Alex’s iPhone 17 👍'), 'Alex’s iPhone 17 👍', 'an ordinary name was mangled')
+  assert.equal(deviceName('Alex\u2019s iPhone 17 \u{1F44D}'), 'Alex\u2019s iPhone 17 \u{1F44D}', 'an ordinary name was mangled')
 })

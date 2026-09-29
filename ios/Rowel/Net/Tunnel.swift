@@ -1032,6 +1032,7 @@ public actor Tunnel {
             // asks from the machine's own head, so it gets what happens next
             // rather than a replay of a conversation it is about to fetch in
             // full; on a reconnect it asks from where it left off.
+            let reconnecting = everConnected
             if !everConnected {
                 highestSeq = ready.seq
                 everConnected = true
@@ -1059,13 +1060,16 @@ public actor Tunnel {
             // Settled here rather than left to the Bridle's reply to the resume
             // below, so `highestSeq` and `epoch` always describe the same
             // process — even if that resume is lost with the connection.
-            if let known = epoch, let fresh = ready.epoch, known != fresh {
+            // Any change counts, including to or from none: a Bridle too old to
+            // send an epoch replaced by one that does is a new process too —
+            // the path every Mac upgrading from 0.1.4 takes once.
+            if reconnecting, ready.epoch != epoch {
                 highestSeq = ready.seq
                 continuation?.yield(.resync(from: ready.seq))
             }
-            // With the epoch `highestSeq` was counted in: an older Bridle sends
-            // none and compares nothing; a current one checks it again.
-            try? write(ResumeFrame(since: highestSeq, epoch: ready.epoch ?? epoch))
+            // With the epoch `highestSeq` now counts in; an older Bridle sends
+            // none, and the frame then carries none.
+            try? write(ResumeFrame(since: highestSeq, epoch: ready.epoch))
             epoch = ready.epoch
             // Re-offered on every ready rather than once, because the machine
             // is what stores it and a machine can be reinstalled, restored from

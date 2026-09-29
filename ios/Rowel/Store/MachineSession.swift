@@ -601,7 +601,10 @@ public final class MachineSession {
             return
         }
         ensuring.insert(key)
-        defer { ensuring.remove(key) }
+        defer {
+            ensuring.remove(key)
+            ensureAgain.remove(key)
+        }
         repeat {
             ensureAgain.remove(key)
             if !conversation.loaded {
