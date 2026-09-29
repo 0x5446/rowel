@@ -235,6 +235,36 @@ final class TunnelTests: XCTestCase {
         await tunnel.stop()
     }
 
+    /// The upgrade every Mac on 0.1.4 goes through once: a Bridle that sends
+    /// no epoch replaced by one that does. That is a new process too.
+    func testUpgradingFromABridleWithoutEpochsIsARefetch() async throws {
+        let old = FakeBridle(sendsEpoch: false)
+        let board = TestSwitchboard()
+        board.route("relay.test:0", to: .machine(old))
+        var timings = TunnelTimings()
+        timings.silenceLimit = 0.3
+        timings.livenessCheck = 0.05
+        let tunnel = make(bundle: old.bundle(direct: nil), board: board, timings: timings)
+        let signals = await collectSignals(tunnel)
+        await tunnel.start()
+        try await waitForOnline(tunnel)
+        guard let machineSide = await old.served.last,
+              let appSide = board.carrier(for: "relay.test:0") else { return XCTFail("no carrier") }
+        await old.emit(seq: 500, to: machineSide)
+        try await waitFor("the event") { await signals.count >= 1 }
+
+        let upgraded = FakeBridle(staticKeys: old.staticKeys)
+        board.route("relay.test:0", to: .machine(upgraded))
+        appSide.goQuiet()
+        try await waitFor("a resume to the upgraded Bridle") { await upgraded.resumedFrom.count >= 1 }
+
+        let resumed = await upgraded.resumedFrom
+        XCTAssertEqual(resumed, [0], "the old Bridle's sequence number was presented to the new process")
+        let refetched = await signals.resyncs
+        XCTAssertEqual(refetched, 1)
+        await tunnel.stop()
+    }
+
     /// The failure that made reopening the app cost half a minute of dead
     /// taps: iOS suspends the process, quietly kills the socket, and hands
     /// back a connection that *looks* twenty seconds old — too fresh for the

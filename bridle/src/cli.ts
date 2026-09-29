@@ -317,17 +317,17 @@ async function start(options: Options): Promise<void> {
 async function pair(options: Options): Promise<void> {
   const state = loadState()
   const runtime = readRuntime()
-  if (runtime === undefined) {
-    say('No bridle is running on this machine. Start one with "bridle start" first,')
-    say('or keep this invitation and start it before scanning.')
-    say('')
-  }
   if (flagBoolean(options, 'code') && runtime === undefined) {
     // The running Bridle is what records the phone's request; without one the
     // phone would wait for a question this command can never ask.
     say('"bridle pair --code" needs a running bridle. Start one with "bridle start", then run this again.')
     process.exitCode = 1
     return
+  }
+  if (runtime === undefined) {
+    say('No bridle is running on this machine. Start one with "bridle start" first,')
+    say('or keep this invitation and start it before scanning.')
+    say('')
   }
   const invitation = createInvitation(state, runtime?.direct ?? [])
   if (!flagBoolean(options, 'code')) {

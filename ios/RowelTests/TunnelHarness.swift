@@ -147,8 +147,9 @@ actor FakeBridle {
     private(set) var resumedFrom: [Int] = []
     /// The `epoch` each resume carried, in order; nil when it carried none.
     private(set) var resumedEpochs: [String?] = []
-    /// This process's event numbering, as the ready frame names it.
-    let epoch = UUID().uuidString
+    /// This process's event numbering, as the ready frame names it; nil for a
+    /// Bridle too old to send one.
+    let epoch: String?
     private(set) var handshakes = 0
     /// Every `wake` frame received, oldest first; nil for a withdrawal.
     private(set) var wakes: [String?] = []
@@ -172,10 +173,11 @@ actor FakeBridle {
     /// What the ready frame advertises as this machine's current addresses.
     let direct: [String]
 
-    init(name: String = "a-mac", staticKeys: StaticKeyPair = .generate(), direct: [String] = []) {
+    init(name: String = "a-mac", staticKeys: StaticKeyPair = .generate(), direct: [String] = [], sendsEpoch: Bool = true) {
         self.name = name
         self.staticKeys = staticKeys
         self.direct = direct
+        self.epoch = sendsEpoch ? UUID().uuidString : nil
     }
 
     /// Accept a handshake and then read whatever the app sends.
@@ -209,7 +211,7 @@ actor FakeBridle {
                 "dshReachable": .bool(true),
                 "direct": .array(direct.map(JSONValue.string)),
                 "seq": .number(Double(head)),
-                "epoch": .string(epoch),
+                "epoch": epoch.map(JSONValue.string) ?? .null,
             ])
             while true {
                 let bytes = try await carrier.receive()

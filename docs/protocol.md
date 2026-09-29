@@ -297,7 +297,7 @@ Bridle **必须**中止对应的上游请求。未知 id **必须**静默忽略�
 
 **`resume`** — 重连后补齐
 
-| `t` = `"resume"` | `since` = 已持有的最高事件序号；`0` 表示全新订阅 | `epoch`（可选）= `since` 所属那次连接的 `ready.epoch`；首连省略 |
+| `t` = `"resume"` | `since` = 已持有的最高事件序号；`0` 表示全新订阅 | `epoch`（可选）= 刚收到的 `ready.epoch`，即 `since` 所属的纪元（纪元变了，App 先把 `since` 重置为 `ready.seq` 并自行重拉）；对方是不发 `epoch` 的旧 Bridle 时省略 |
 
 **`wake`** — 告诉机器：我不在线时往哪儿敲
 
