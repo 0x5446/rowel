@@ -48,6 +48,14 @@ public enum TunnelStatus: Equatable, Sendable {
     case waiting(detail: String, retryIn: TimeInterval, diagnosis: DialDiagnosis?)
     /// The machine will not accept this device. No amount of retrying fixes it.
     case refused(reason: RefusalReason)
+
+    /// Connected or still trying — as opposed to stopped, or refused.
+    public var isLive: Bool {
+        switch self {
+        case .connecting, .online, .waiting: return true
+        case .idle, .refused: return false
+        }
+    }
 }
 
 /// Which path a live tunnel took.
@@ -120,11 +128,11 @@ public enum TunnelSignal: Sendable {
     case resync(from: Int)
     /// The machine's harness went away or came back.
     case harness(reachable: Bool, detail: String?)
-    /// A fresh handshake completed; `confirmation` is the six-digit number.
+    /// A fresh handshake completed.
     /// `direct` is where the machine says it can be dialled locally right now —
     /// nil from a Bridle too old to say. `harness` is which dsh this identity
     /// fronts and where it lives — same vintage rule.
-    case handshake(confirmation: String, host: JSONValue?, harness: HarnessInfo?, direct: [String]?)
+    case handshake(host: JSONValue?, harness: HarnessInfo?, direct: [String]?)
     /// One line about what the connection is doing, for the diagnostics screen.
     case note(ConnectionNote)
 }
@@ -296,10 +304,6 @@ public actor Tunnel {
         didSet { if status != oldValue { continuation?.yield(.status(status)) } }
     }
 
-    /// The six-digit number to compare against the Mac's screen, for a pairing
-    /// that came in by typed code rather than by QR.
-    private(set) public var confirmation: String?
-
     /// - Parameters:
     ///   - bundle: the pairing bundle for this machine.
     ///   - identity: this device's long-term key pair.
@@ -335,9 +339,11 @@ public actor Tunnel {
         self.timings = timings
     }
 
-    /// The signal stream. Call once; the second caller gets an empty stream.
+    /// The signal stream. One consumer at a time: a second call ends the first
+    /// stream and takes over, and `stop()` ends it.
     public func signals() -> AsyncStream<TunnelSignal> {
-        AsyncStream { continuation in
+        continuation?.finish()
+        return AsyncStream { continuation in
             self.continuation = continuation
             continuation.yield(.status(status))
         }
@@ -373,6 +379,8 @@ public actor Tunnel {
         watcher = nil
         teardown(reason: "closed by the app")
         status = .idle
+        continuation?.finish()
+        continuation = nil
     }
 
     /// Retry now instead of waiting out the backoff. Called when the app comes
@@ -549,6 +557,9 @@ public actor Tunnel {
                 note(.fail, "Refused by the Mac")
                 status = .refused(reason: refusal)
                 teardown(reason: "refused")
+                // Final for this bundle, but not for this tunnel: `start()` must
+                // be able to run it again, and it refuses while a loop is held.
+                loop = nil
                 return
             } catch {
                 teardown(reason: "\(error.localizedDescription)")
@@ -594,6 +605,16 @@ public actor Tunnel {
             throw CarrierError(reason: "No way to reach that Mac.", closeCode: nil)
         }
         let (winner, failures, refusal) = await dial(plan, remoteStatic: remoteStatic)
+        // `stop()` may have landed while the dial was out. Adopting what came
+        // back would put a stopped tunnel back online, with a socket that keeps
+        // the Mac believing someone is listening — which silences its pushes.
+        // The window is narrow (a racer that won just before the cancel), too
+        // narrow to provoke in the test harness, where a cancelled dial simply
+        // loses; this check is what closes it.
+        if Task.isCancelled {
+            winner?.socket.close("stopped")
+            throw CancellationError()
+        }
 
         // A refusal outranks a win. It means the machine has an opinion about
         // this device — unpaired, or a protocol it cannot speak — and adopting
@@ -786,7 +807,6 @@ public actor Tunnel {
         lastFrameAt = Date()
         startWatchdog()
         pairingToken = nil
-        confirmation = Pairing.confirmationNumber(handshakeHash: attempt.channel.handshakeHash)
         status = .online(
             carrier: attempt.carrier,
             machine: attempt.reply.machine ?? bundle.name,
@@ -1022,7 +1042,7 @@ public actor Tunnel {
                 learned = true
             }
             status = .online(carrier: currentCarrier, machine: ready.machine, harnessUp: ready.dshReachable)
-            continuation?.yield(.handshake(confirmation: confirmation ?? "", host: ready.host, harness: ready.harness, direct: ready.direct))
+            continuation?.yield(.handshake(host: ready.host, harness: ready.harness, direct: ready.direct))
             continuation?.yield(.harness(reachable: ready.dshReachable, detail: nil))
             // With the epoch `highestSeq` was counted in, not this ready's: the
             // Bridle compares them, and a restarted one answers `resync`
@@ -1055,7 +1075,12 @@ public actor Tunnel {
         case .pong:
             break
         case .fault(let code, let message):
-            status = .refused(reason: code == "unpaired" ? .unpaired : .machineError(message))
+            // The Bridle does not send this today. Should one arrive, closing is
+            // the honest answer: the reconnect loop owns what the status says,
+            // and setting `.refused` here was overwritten by `.waiting` a moment
+            // later anyway. A real refusal comes in the handshake.
+            note(.fail, "The Mac reported a fault: \(code) — \(message)")
+            carrier?.close("fault: \(code)")
         case .unknown:
             // Frames a newer Bridle sends. Ignoring them is what lets the
             // protocol grow without stranding installed apps.

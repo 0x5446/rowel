@@ -229,7 +229,7 @@ final class LoadingTests: XCTestCase {
         ]))))
         XCTAssertNotNil(session.approvals["s1"])
 
-        session.receiveForTesting(.handshake(confirmation: "", host: nil, harness: nil, direct: nil))
+        session.receiveForTesting(.handshake(host: nil, harness: nil, direct: nil))
 
         XCTAssertNil(session.approvals["s1"], "a card from before the reconnect outlived it")
     }

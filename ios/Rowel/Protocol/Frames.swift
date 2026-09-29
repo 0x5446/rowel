@@ -116,20 +116,6 @@ public struct RequestFrame: TunnelFrame {
     }
 }
 
-/// Abandon an in-flight request; the Bridle aborts its fetch to the harness.
-public struct CancelFrame: TunnelFrame {
-    public let t = "cancel"
-    public let id: String
-
-    public init(id: String) {
-        self.id = id
-    }
-
-    var members: [(String, JSONValue?)] {
-        [("t", .string(t)), ("id", .string(id))]
-    }
-}
-
 /// Answer an approval or a question (`POST /api/respond` on the far side).
 public struct RespondFrame: TunnelFrame {
     public let t = "respond"

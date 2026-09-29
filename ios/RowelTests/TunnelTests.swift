@@ -68,6 +68,26 @@ final class TunnelTests: XCTestCase {
         await tunnel.stop()
     }
 
+    /// Refused is final for a bundle, not for the tunnel: the app rescans and
+    /// starts again. The loop used to stay held after a refusal, so `start()`
+    /// did nothing and only killing the app recovered.
+    func testATunnelThatWasRefusedCanBeStartedAgain() async throws {
+        let mac = FakeBridle()
+        await mac.refuse(times: 1, reason: "unpaired")
+        let board = TestSwitchboard()
+        board.route("relay.test:0", to: .machine(mac))
+        let tunnel = make(bundle: mac.bundle(direct: nil), board: board, timings: TunnelTimings())
+
+        await tunnel.start()
+        try await waitFor("the refusal") {
+            if case .refused = await tunnel.status { return true }
+            return false
+        }
+        await tunnel.start()
+        try await waitForOnline(tunnel)
+        await tunnel.stop()
+    }
+
     /// And the property that ordering used to buy, which the head start has to
     /// keep: at home the relay is not dialled at all.
     func testALocalAddressWinsAndTheRelayIsNeverDialled() async throws {

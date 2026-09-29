@@ -87,8 +87,6 @@ public final class MachineSession {
     /// distinction matters: one is "your Mac is asleep", the other is "dsh isn't
     /// running", and they need different words and different fixes.
     public private(set) var harnessDetail: String?
-    /// The six-digit number to compare with the Mac, for a typed-code pairing.
-    public private(set) var confirmation: String?
     /// Tools waiting on a decision, by session.
     public private(set) var approvals: [String: ApprovalRequest] = [:]
     /// Questions waiting on an answer, by session.
@@ -189,6 +187,7 @@ public final class MachineSession {
         guard pump == nil else { return }
         pump = Task { [tunnel] in
             let stream = await tunnel.signals()
+            guard !Task.isCancelled else { return }
             await tunnel.start()
             for await signal in stream {
                 if Task.isCancelled { return }
@@ -201,9 +200,16 @@ public final class MachineSession {
         // Text that already arrived is folded before the door closes, so
         // stopping on a stream costs the transcript nothing.
         flushHeld()
-        pump?.cancel()
+        let running = pump
+        running?.cancel()
         pump = nil
-        Task { [tunnel] in await tunnel.stop() }
+        // After the pump has wound down, not beside it. Two unordered tasks let
+        // a stop that followed a start reach the tunnel first — and the start
+        // then brought up a tunnel nobody was reading, redialling forever.
+        Task { [tunnel] in
+            await running?.value
+            await tunnel.stop()
+        }
     }
 
     /// Reconnect now rather than waiting out the backoff.
@@ -298,7 +304,7 @@ public final class MachineSession {
         case .harness(let reachable, let detail):
             harnessKnown = true
             harnessDetail = reachable ? nil : (detail ?? "dsh isn’t running on that Mac.")
-        case .handshake(let number, let host, let harness, let direct):
+        case .handshake(let host, let harness, let direct):
             // A new connection starts with the machine re-sending everything
             // still waiting on a person, right behind this signal. Cards held
             // from before may have been answered — or died with a restarted
@@ -306,7 +312,6 @@ public final class MachineSession {
             // them down; the machine's re-send puts back the ones that are real.
             approvals = [:]
             questions = [:]
-            confirmation = number.isEmpty ? nil : number
             harnessInfo = harness
             if let host, let described = MachineDescription(host) {
                 machineInfo = described
