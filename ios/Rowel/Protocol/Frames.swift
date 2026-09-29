@@ -262,7 +262,8 @@ public struct HandshakeReply: Codable, Sendable {
     public let ok: Bool
     /// The version both ends will speak. Present when `ok`.
     public let version: Int?
-    /// Refusal reason when `ok` is false: `version`, `unpaired`, or `internal`.
+    /// Refusal reason when `ok` is false: `version`, `unpaired`, `internal`, or
+    /// `pending` — a short-code claim waiting for the Mac, the one that is not final.
     public let reason: String?
     /// What the machine can speak, when it refused for `version`. Lets this end
     /// say *which* side is the old one rather than "something went wrong".

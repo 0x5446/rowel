@@ -47,6 +47,27 @@ final class TunnelTests: XCTestCase {
         await tunnel.stop()
     }
 
+    /// A short-code claim is refused as `pending` until the person at the Mac
+    /// accepts it. That refusal must not be final — the first build that got
+    /// it stopped dialling and left the phone on an error while the Mac said
+    /// yes.
+    func testAClaimWaitingForTheMacKeepsAskingUntilItIsAccepted() async throws {
+        let mac = FakeBridle()
+        await mac.holdForApproval(times: 2)
+        let board = TestSwitchboard()
+        board.route("relay.test:0", to: .machine(mac))
+        var timings = TunnelTimings()
+        timings.approvalPoll = 0.05
+        let tunnel = make(bundle: mac.bundle(direct: nil), board: board, timings: timings)
+
+        await tunnel.start()
+        try await waitForOnline(tunnel)
+
+        let served = await mac.served.count
+        XCTAssertEqual(served, 3, "two pending answers, then the accepted one")
+        await tunnel.stop()
+    }
+
     /// And the property that ordering used to buy, which the head start has to
     /// keep: at home the relay is not dialled at all.
     func testALocalAddressWinsAndTheRelayIsNeverDialled() async throws {

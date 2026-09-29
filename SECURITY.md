@@ -206,29 +206,31 @@ misreading the specification the same way.
 Things that are wrong, or weaker than they look, that are worth knowing before
 you spend time on them.
 
-**The short-code path depends on you comparing a fingerprint.** Pairing by QR
-code is immune to a hostile relay, because the code itself carries the machine's
-public key. The short-code path is not: the relay holds the pairing bundle and
-could substitute a key of its own.
+**The short-code path depends on you comparing a fingerprint — and now cannot
+skip it.** Pairing by QR code needs nothing from the relay: the code carries
+the machine's public key and a token that leaves the Mac only inside that code,
+so a hostile relay can neither stand in for the machine nor pair itself.
 
-What catches that is the key fingerprint. The Mac prints it — `bridle pair` and
-`bridle status` both show it on the `identity` line — and the app shows the
-fingerprint of the key it actually received. A relay that swapped the key cannot
-make those agree, because it does not hold the machine's private key. If they
-match, you are talking to the machine; if they differ, forget it and pair again.
+The short-code path is different. The relay holds the bundle a typed code
+fetches, so it could read the token in it, swap in a key of its own, or present
+the token itself. Until September 2026 that token was the *same* one the QR
+carried, and presenting it paired the presenter outright — so a hostile relay
+could pair itself with any machine whose owner had run `bridle pair`, whichever
+path the owner then used. The two are now separate tokens, and the short-code
+token only earns a *request*: the Bridle records the requesting phone, refuses
+it, and `bridle pair --code` shows that phone's key fingerprint and asks
+`Accept? [y/N]`. The app shows its own fingerprint while it waits. Accept only
+if the two match. One comparison covers both attacks: a relay pairing itself
+shows its own key, and a relay sitting in the middle presents its own key to
+the Mac as well.
 
-**This check is not automatic.** Nothing refuses a connection on your behalf, so
-a short-code pairing where nobody looks is a short-code pairing that trusts the
-relay. The QR code needs no such discipline.
+The comparison is still a person's job — nothing can do it for you — but the
+flow no longer finishes without one. `bridle start` and plain `bridle pair`
+only show the QR; the short code exists only behind `--code`.
 
-There is a second, unimplemented defence worth naming so that nobody looks for
-it: a six-digit confirmation number derived from the handshake hash, which would
-also bind the check to that particular session rather than only to the key.
-`confirmationNumber` exists in `protocol/src/pairing.ts` and is called by the app
-and nowhere else — the Bridle never computes it. Until an August 2026 fix the
-app told people to compare it against something the Mac has never printed, which
-was worse than offering nothing: it sent them looking for a number that was not
-there. The app now points at the fingerprint instead.
+The six-digit confirmation number derived from the handshake hash
+(`confirmationNumber` in `protocol/src/pairing.ts`) remains unimplemented on
+the Mac and is not part of either flow.
 
 **The short code is 8 characters from a 28-character alphabet** — about 38.5 bits
 — with a small modulo bias toward the first four letters. It is single-use and

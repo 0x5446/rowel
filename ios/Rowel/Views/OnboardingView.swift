@@ -193,7 +193,7 @@ struct PairingFlow: View {
     private var codeSheet: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: Metrics.gutter) {
-                Text("Type the code your Mac shows under the QR.")
+                Text("Type the code from “bridle pair --code” on your Mac.")
                     .font(.system(size: 15))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -213,7 +213,7 @@ struct PairingFlow: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
-                Text("After it connects, both screens show the same six digits. Check they match.")
+                Text("Your Mac then asks whether to accept this iPhone and shows a key. Accept only if it is this one: \(model.deviceFingerprint)")
                     .font(.footnote)
                     .foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)

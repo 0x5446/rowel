@@ -50,12 +50,34 @@ export interface PairedPeer {
 
 /** A pairing offer waiting to be claimed. */
 export interface PairingOffer {
-  /** One-time token embedded in the QR payload. */
+  /**
+   * One-time token embedded in the QR payload. **Never leaves this machine**
+   * except inside that QR, so presenting it proves the phone scanned the code.
+   */
   token: string
+  /**
+   * The token inside the bundle the Relay holds for the short code. The Relay
+   * can read it, so it proves nothing about who presents it: a phone that
+   * does is recorded as {@link PairingOffer.claimant} and waits for a person
+   * at the Mac to accept it.
+   */
+  codeToken: string
   /** Typed alternative to scanning. */
   code: string
   /** Epoch milliseconds after which the offer is refused. */
   expiresAt: number
+  /** The latest device to present `codeToken`, awaiting approval on the Mac. */
+  claimant?: PairingClaimant
+}
+
+/** A device that asked to pair through the short code. */
+export interface PairingClaimant {
+  /** Raw static public key, base64url. */
+  key: string
+  /** Device name the app reported. */
+  name: string
+  /** Epoch milliseconds of its latest attempt. */
+  at: number
 }
 
 /** The complete persisted state. */
@@ -161,6 +183,14 @@ export function loadState(): BridleState {
     const parsed = JSON.parse(raw) as BridleState
     if (parsed.version > STATE_VERSION) {
       throw new Error(`${path} was written by a newer Bridle (format ${String(parsed.version)})`)
+    }
+    // An offer from before the two-token split carries one token that went
+    // both into the QR and to the Relay — so the Relay may be holding the one
+    // token this Bridle would accept without asking anybody. Drop it; the
+    // person makes a new one with `bridle pair`.
+    if (parsed.offer !== undefined && typeof parsed.offer.codeToken !== 'string') {
+      delete parsed.offer
+      mutateDisk((disk) => { delete disk.offer })
     }
     if (RETIRED_RELAY_URLS.includes(parsed.relayUrl)) {
       parsed.relayUrl = DEFAULT_RELAY_URL
@@ -394,6 +424,7 @@ export function signingKeys(state: BridleState): SigningKeyPair {
 export function openPairingOffer(state: BridleState, now: number = Date.now()): PairingOffer {
   const offer: PairingOffer = {
     token: mintPairingToken(),
+    codeToken: mintPairingToken(),
     code: mintShortCode(),
     expiresAt: now + PAIRING_TTL_MS,
   }
@@ -402,18 +433,69 @@ export function openPairingOffer(state: BridleState, now: number = Date.now()): 
 }
 
 /**
- * Whether a claimed token matches the outstanding, unexpired offer.
+ * Which of the outstanding offer's tokens a phone presented, if either.
  * @param state - loaded state.
  * @param token - token presented by the app.
  * @param now - current epoch milliseconds.
- * @returns true when the offer is live and the token matches.
+ * @returns `scanned` for the QR token, `typed` for the short-code token,
+ *   undefined for anything else or an expired offer.
  */
-export function offerAccepts(state: BridleState, token: string, now: number = Date.now()): boolean {
+export function offerMatch(state: BridleState, token: string, now: number = Date.now()): 'scanned' | 'typed' | undefined {
   const offer = state.offer
-  if (offer === undefined || offer.expiresAt <= now) return false
-  // The token is high-entropy and single-use; a length-varying compare here
+  if (offer === undefined || offer.expiresAt <= now) return undefined
+  // The tokens are high-entropy and single-use; a length-varying compare here
   // leaks nothing an attacker cannot already measure by trying.
-  return offer.token === token
+  if (offer.token === token) return 'scanned'
+  if (offer.codeToken === token) return 'typed'
+  return undefined
+}
+
+/**
+ * Record a device that presented the short-code token, for a person to judge.
+ *
+ * Only the latest is kept. Whoever holds the Relay's copy of the bundle can
+ * claim, so a claim is a request, not a grant — and the person accepting it
+ * compares the fingerprint they are shown against the one on their phone.
+ * @param state - loaded state; the change is written through {@link updateState}.
+ * @param key - the device's raw static public key.
+ * @param name - the device name it reported.
+ * @param now - current epoch milliseconds.
+ */
+export function claimOffer(state: BridleState, key: Buffer, name: string, now: number = Date.now()): void {
+  const encoded = key.toString('base64url')
+  if (state.offer?.claimant?.key === encoded && now - state.offer.claimant.at < CLAIM_REFRESH_MS) return
+  updateState(state, (disk) => {
+    if (disk.offer !== undefined) disk.offer.claimant = { key: encoded, name, at: now }
+  })
+}
+
+/** How often a waiting claimant's retries are written back, at most. */
+const CLAIM_REFRESH_MS = 30_000
+
+/**
+ * Accept the device waiting on the short code — only if it is still the one
+ * the person was shown.
+ * @param state - loaded state; the change is written through {@link updateState}.
+ * @param key - base64url key of the claimant the person approved.
+ * @param now - current epoch milliseconds.
+ * @returns whether that device is now paired.
+ */
+export function approveClaimant(state: BridleState, key: string, now: number = Date.now()): boolean {
+  return updateState(state, (disk) => {
+    const claimant = disk.offer?.claimant
+    if (claimant === undefined || claimant.key !== key || (disk.offer?.expiresAt ?? 0) <= now) return false
+    disk.peers.push({ key: claimant.key, name: claimant.name, pairedAt: now, lastSeen: now })
+    delete disk.offer
+    return true
+  })
+}
+
+/**
+ * Withdraw the outstanding offer: a refused claim, or a person who gave up.
+ * @param state - loaded state; the change is written through {@link updateState}.
+ */
+export function withdrawOffer(state: BridleState): void {
+  updateState(state, (disk) => { delete disk.offer })
 }
 
 /**

@@ -58,9 +58,10 @@ A QR code appears in the terminal. Point the app at it. The first run of `bridle
 does this for you, so this command is for adding a second phone.
 
 Over SSH, where a terminal may not draw a QR code, add `--link` to print the raw
-pairing link. There is also an 8-character short code underneath, for when the
-camera is not an option — but read the note in [SECURITY.md](SECURITY.md) about
-that path first; it is currently the weaker of the two.
+pairing link. When the camera is not an option, `bridle pair --code` prints an
+8-character code to type instead and waits: the Mac then shows the phone's key
+and asks you to accept it, and you check it against the key the phone shows.
+[SECURITY.md](SECURITY.md) says why that step exists.
 
 ### 3. Keep it running
 
@@ -75,7 +76,7 @@ takes it back off.
 
 ```
 bridle                    start (and pair, on the first run)
-bridle pair               a fresh pairing QR and short code
+bridle pair               a fresh pairing QR (--code: a code to type)
 bridle status             machine, relay, harness, paired devices
 bridle devices            list paired devices
 bridle revoke <prefix>    remove one
