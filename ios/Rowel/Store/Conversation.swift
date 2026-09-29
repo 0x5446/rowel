@@ -119,9 +119,9 @@ public final class Conversation {
     /// land after it: its page describes the log as it was, and folding it
     /// into the refetched conversation is exactly the disorder a reset is for.
     public private(set) var generation = 0
-    /// Set when a history fetch failed and live events have been folded with
-    /// nothing under them; the next successful load starts from a reset.
-    public private(set) var foldedWithoutHistory = false
+    /// Whether live events have been folded with no history under them — the
+    /// fetch failed and stopped holding them. The next load starts from a reset.
+    public var foldedWithoutHistory: Bool { !awaitingPage && !loaded }
 
     /// Streaming bubbles by `turn.step`.
     private var assistantIndex: [String: Int] = [:]
@@ -152,7 +152,6 @@ public final class Conversation {
     /// Replace everything with a freshly loaded tail page.
     public func reset() {
         generation += 1
-        foldedWithoutHistory = false
         awaitingPage = true
         early = []
         topUpOwed = false
@@ -223,7 +222,6 @@ public final class Conversation {
     /// The history could not be fetched. What arrived live is still true, and
     /// holding it back for a page that is not coming would only lose it.
     public func historyFailed() {
-        foldedWithoutHistory = true
         replayEarly()
     }
 

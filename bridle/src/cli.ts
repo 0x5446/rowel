@@ -391,7 +391,7 @@ async function pairByCode(state: ReturnType<typeof loadState>, invitation: Invit
       say('Refused. The code no longer works.')
       return
     }
-    if (approveClaimant(state, claimant.key, Date.now(), code)) {
+    if (approveClaimant(state, claimant.key, code)) {
       say(`Paired with ${claimant.name}. The phone connects on its next try, within a few seconds.`)
       return
     }

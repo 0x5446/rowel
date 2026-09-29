@@ -54,7 +54,6 @@ interface Counts {
 /** Short codes one machine is currently holding, and when each lapses. */
 type OfferSlots = Record<string, number>
 
-/** One token bucket. */
 /** Why an attach was refused, in the close codes docs/protocol.md §8 defines. */
 export interface AttachRefusal {
   ok: false

@@ -92,10 +92,6 @@ export interface RelayStats {
 }
 
 /** The switchboard. */
-
-/** How many wakes {@link RelayServer.wakes} keeps. */
-const WAKE_LOG_LIMIT = 100
-
 export class RelayServer {
   private readonly http: Server
   private readonly bridleSockets = new WebSocketServer({ noServer: true, maxPayload: MAX_PAYLOAD })
@@ -345,9 +341,9 @@ export class RelayServer {
 
   /**
    * The wakes Bridles have asked for, oldest first — kept only when the relay
-   * was built with `recordWakes` (the tests), and then only the latest
-   * {@link WAKE_LOG_LIMIT}. Anything else would have this relay, which also
-   * runs as a long-lived standby, holding every APNs token it ever saw.
+   * was built with `recordWakes` (the tests). Anything else would have this
+   * relay, which also runs as a long-lived standby, holding every APNs token
+   * it ever saw.
    */
   readonly wakes: Record<string, unknown>[] = []
 
@@ -368,7 +364,6 @@ export class RelayServer {
       if (this.options.recordWakes !== true) return
       try {
         this.wakes.push(JSON.parse(message.payload.toString('utf8')) as Record<string, unknown>)
-        if (this.wakes.length > WAKE_LOG_LIMIT) this.wakes.splice(0, this.wakes.length - WAKE_LOG_LIMIT)
       } catch {
         // A malformed wake is the Bridle's problem, not a reason to drop it.
       }

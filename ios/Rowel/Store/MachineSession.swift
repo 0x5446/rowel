@@ -818,10 +818,14 @@ public final class MachineSession {
     /// Load the page before what is held.
     public func loadOlder(_ conversation: Conversation) async {
         guard conversation.hasMore, let before = conversation.oldestSeq, !conversation.loading else { return }
+        let generation = conversation.generation
         conversation.loading = true
-        defer { conversation.loading = false }
+        defer { if conversation.generation == generation { conversation.loading = false } }
         do {
             let page = try await harness.history(sessionId: conversation.sessionId, beforeSeq: before, maxMessages: historyPageSize)
+            // Same rule as every other page: one asked for before a reset
+            // describes a log that has since been refetched.
+            guard conversation.generation == generation else { return }
             conversation.absorb(page: page, prepend: true)
         } catch {
             // Scrolling back is optional. A failure leaves what is on screen

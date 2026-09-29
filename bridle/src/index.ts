@@ -20,7 +20,6 @@ export { holdsIdentity, listInstances, rememberInstance, type InstanceSummary } 
 export {
   DEFAULT_DSH_URL,
   DEFAULT_RELAY_URL,
-  acceptPeer,
   approveClaimant,
   findPeer,
   loadState,

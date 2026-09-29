@@ -70,7 +70,7 @@ test('the token a Relay can read earns a request to pair, never a pairing', { sk
   assert.equal(stack.state.offer?.claimant?.key, claimer.keys.publicKey.toString('base64url'))
 
   // A person at the Mac compared the fingerprints and said yes.
-  assert.ok(approveClaimant(stack.state, claimer.keys.publicKey.toString('base64url')))
+  assert.ok(approveClaimant(stack.state, claimer.keys.publicKey.toString('base64url'), invitation.code))
   await claimer.connect()
   assert.equal(stack.state.peers.length, 1)
 })

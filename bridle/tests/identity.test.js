@@ -10,11 +10,11 @@ import { join } from 'node:path'
 import test from 'node:test'
 import { deviceIdFor, generateKeyPair } from '@rowel/protocol'
 import {
-  acceptPeer,
   findPeer,
   loadState,
   offerMatch,
   openPairingOffer,
+  redeemOffer,
   overrideState,
   reloadState,
   revokePeer,
@@ -24,6 +24,15 @@ import {
   staticKeys,
   touchPeer,
 } from '../lib/index.js'
+
+/**
+ * Pair a device the way a scanned QR does: open an offer and redeem its token.
+ * @returns what `redeemOffer` returned.
+ */
+function pair(state, key, name, now = Date.now()) {
+  const offer = openPairingOffer(state, now)
+  return redeemOffer(state, key, name, offer.token, now)
+}
 
 /**
  * Run a body against a throwaway ROWEL_HOME.
@@ -130,7 +139,7 @@ test('pairing consumes the offer, so one invitation admits one device', () => {
     const state = loadState()
     const offer = openPairingOffer(state)
     const device = generateKeyPair().publicKey
-    acceptPeer(state, device, 'Alex iPhone')
+    pair(state, device, 'Alex iPhone')
     assert.equal(offerMatch(state, offer.token), undefined)
     assert.equal(findPeer(state, device)?.name, 'Alex iPhone')
   })
@@ -140,9 +149,9 @@ test('pairing the same device twice updates it instead of duplicating it', () =>
   withHome(() => {
     const state = loadState()
     const device = generateKeyPair().publicKey
-    acceptPeer(state, device, 'iPhone')
+    pair(state, device, 'iPhone')
     openPairingOffer(state)
-    acceptPeer(state, device, 'iPhone 17 Pro')
+    pair(state, device, 'iPhone 17 Pro')
     assert.equal(state.peers.length, 1)
     assert.equal(state.peers[0].name, 'iPhone 17 Pro')
   })
@@ -152,7 +161,7 @@ test('a paired device survives a reload and can be touched', () => {
   withHome(() => {
     const state = loadState()
     const device = generateKeyPair().publicKey
-    acceptPeer(state, device, 'iPad', 1000)
+    pair(state, device, 'iPad', 1000)
     touchPeer(state, device, 2000)
     assert.equal(loadState().peers[0].lastSeen, 2000)
   })
@@ -162,9 +171,9 @@ test('revoking by prefix removes exactly one device', () => {
   withHome(() => {
     const state = loadState()
     const first = generateKeyPair().publicKey
-    acceptPeer(state, first, 'iPhone')
+    pair(state, first, 'iPhone')
     openPairingOffer(state)
-    acceptPeer(state, generateKeyPair().publicKey, 'iPad')
+    pair(state, generateKeyPair().publicKey, 'iPad')
     const removed = revokePeer(state, first.toString('base64url').slice(0, 8))
     assert.equal(removed?.name, 'iPhone')
     assert.equal(loadState().peers.length, 1)
@@ -178,7 +187,7 @@ test('a revoke made by another process survives this one writing afterwards', ()
     // ran in another terminal. Writing its whole snapshot back used to bring
     // the revoked phone back from the dead.
     const phone = generateKeyPair().publicKey
-    acceptPeer(loadState(), phone, 'phone')
+    pair(loadState(), phone, 'phone')
     const daemon = loadState()
     const cli = loadState()
 
@@ -193,7 +202,7 @@ test('a revoke made by another process survives this one writing afterwards', ()
 test('an offer opened by another process is not erased by this one writing', () => {
   withHome(() => {
     const phone = generateKeyPair().publicKey
-    acceptPeer(loadState(), phone, 'phone')
+    pair(loadState(), phone, 'phone')
     const daemon = loadState()
     const offer = openPairingOffer(loadState())
 
@@ -211,7 +220,7 @@ test('an environment override is used but never written to the file', () => {
     try {
       const state = loadState()
       assert.equal(state.relayUrl, 'ws://127.0.0.1:8787')
-      acceptPeer(state, generateKeyPair().publicKey, 'phone')
+      pair(state, generateKeyPair().publicKey, 'phone')
       assert.equal(state.relayUrl, 'ws://127.0.0.1:8787', 'the override outlives a write')
     } finally {
       if (previous === undefined) delete process.env.ROWEL_RELAY_URL

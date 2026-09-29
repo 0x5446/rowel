@@ -397,4 +397,32 @@ final class LoadingTests: XCTestCase {
 
         XCTAssertEqual(conversation.items.filter { $0.id.hasPrefix("m") }.map(\.id), ["m2", "m8"], "history landed behind the live message")
     }
+
+    /// Scrolling back while a resync lands: the older page asked for before
+    /// the reset must not stand in for the refetch. It used to mark the
+    /// conversation loaded, so the tail was never fetched again and every live
+    /// event after it stayed held.
+    func testAnOlderPageInFlightDuringAResyncIsDropped() async throws {
+        let transport = ScriptedTransport()
+        await transport.answer("session.history", page([said("tail", seq: 50)], hasMore: true))
+        await transport.answer("session.history", page([said("above", seq: 40)], hasMore: true))
+        await transport.answer("session.list", .object(["items": .array([])]))
+        let session = machine(transport)
+        let conversation = session.conversation("s1")
+        try await until("the opening page") { await transport.count("session.history") == 2 && !conversation.loading }
+
+        await transport.hold("session.history")
+        let older = Task { await session.loadOlder(conversation) }
+        try await until("the scroll-back request") { await transport.count("session.history") == 3 }
+        session.receiveForTesting(.resync(from: 0))
+        await transport.release("session.history", page([said("much older", seq: 10)], hasMore: true))
+        await older.value
+        try await until("the refetch") { await transport.count("session.history") == 4 }
+        await transport.release("session.history", page([said("fresh tail", seq: 60)]))
+        try await until("the fresh tail") { conversation.items.contains { $0.id == "m60" } }
+
+        XCTAssertFalse(conversation.items.contains { $0.id == "m10" }, "a page from before the resync was folded into it")
+        session.receiveForTesting(live(said("after", seq: 61)))
+        XCTAssertTrue(conversation.items.contains { $0.id == "m61" }, "live events stayed held after the resync")
+    }
 }

@@ -528,14 +528,7 @@ export function redeemOffer(state: BridleState, key: Buffer, name: string, token
   return updateState(state, (disk) => {
     const presented = offerMatch(disk, token, now)
     if (presented === 'scanned') {
-      const existing = disk.peers.find(peer => peer.key === encoded)
-      if (existing !== undefined) {
-        existing.name = name
-        existing.lastSeen = now
-      } else {
-        disk.peers.push({ key: encoded, name, pairedAt: now, lastSeen: now })
-      }
-      delete disk.offer
+      addPeer(disk, encoded, name, now)
       return 'paired'
     }
     if (presented === 'typed' && disk.offer !== undefined) {
@@ -554,20 +547,34 @@ const CLAIM_REFRESH_MS = 30_000
  * the person was shown.
  * @param state - loaded state; the change is written through {@link updateState}.
  * @param key - base64url key of the claimant the person approved.
- * @param now - current epoch milliseconds.
  * @param code - the short code of the offer the person was looking at; a
  *   different offer on disk means theirs was replaced, and nothing is approved.
+ * @param now - current epoch milliseconds.
  * @returns whether that device is now paired.
  */
-export function approveClaimant(state: BridleState, key: string, now: number = Date.now(), code?: string): boolean {
+export function approveClaimant(state: BridleState, key: string, code: string, now: number = Date.now()): boolean {
   return updateState(state, (disk) => {
     const claimant = disk.offer?.claimant
-    if (code !== undefined && disk.offer?.code !== code) return false
+    if (disk.offer?.code !== code) return false
     if (claimant === undefined || claimant.key !== key || (disk.offer?.expiresAt ?? 0) <= now) return false
-    disk.peers.push({ key: claimant.key, name: claimant.name, pairedAt: now, lastSeen: now })
-    delete disk.offer
+    addPeer(disk, claimant.key, claimant.name, now)
     return true
   })
+}
+
+/**
+ * Pair a device on the on-disk copy and consume the offer. A device paired
+ * before is updated rather than listed twice.
+ */
+function addPeer(disk: BridleState, key: string, name: string, now: number): void {
+  const existing = disk.peers.find(peer => peer.key === key)
+  if (existing !== undefined) {
+    existing.name = name
+    existing.lastSeen = now
+  } else {
+    disk.peers.push({ key, name, pairedAt: now, lastSeen: now })
+  }
+  delete disk.offer
 }
 
 /**
@@ -576,32 +583,12 @@ export function approveClaimant(state: BridleState, key: string, now: number = D
  * @param code - withdraw only the offer with this short code, so a `bridle
  *   pair` that lost track of time cannot take down a newer one.
  */
-export function withdrawOffer(state: BridleState, code?: string): void {
+export function withdrawOffer(state: BridleState, code: string): void {
   updateState(state, (disk) => {
-    if (code === undefined || disk.offer?.code === code) delete disk.offer
+    if (disk.offer?.code === code) delete disk.offer
   })
 }
 
-/**
- * Record a newly paired device and consume the offer.
- * @param state - loaded state; the change is written through {@link updateState}.
- * @param key - the device's raw static public key.
- * @param name - the device name reported by the app.
- * @param now - current epoch milliseconds.
- */
-export function acceptPeer(state: BridleState, key: Buffer, name: string, now: number = Date.now()): void {
-  const encoded = key.toString('base64url')
-  updateState(state, (disk) => {
-    const existing = disk.peers.find(peer => peer.key === encoded)
-    if (existing !== undefined) {
-      existing.name = name
-      existing.lastSeen = now
-    } else {
-      disk.peers.push({ key: encoded, name, pairedAt: now, lastSeen: now })
-    }
-    delete disk.offer
-  })
-}
 
 /**
  * Look up an already-paired device.
