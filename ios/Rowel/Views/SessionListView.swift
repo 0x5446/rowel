@@ -559,23 +559,28 @@ private struct GroupHeader: View {
     /// nil for a section that cannot fold — the one holding whatever is waiting
     /// on an answer, which has no business being hidden.
     let open: Bool?
-    var tint: Color = .secondary
+    var tint: Color = .primary
     let toggle: () -> Void
 
+    // Sized just under a row's title, not as a caption. Folded, these headers
+    // are the whole screen — the only way into every conversation — and at
+    // 12pt in grey they read as fine print over an empty page. Still a step
+    // below the 16pt titles, so an open group keeps its rows in front.
     var body: some View {
         Button(action: toggle) {
-            HStack(spacing: 6) {
+            HStack(spacing: 8) {
                 Image(systemName: open == nil ? "hand.raised.fill" : "chevron.right")
-                    .font(.system(size: 10, weight: .bold))
+                    .font(.system(size: 11, weight: .bold))
                     .rotationEffect(.degrees(open == true ? 90 : 0))
                     .foregroundStyle(open == nil ? AnyShapeStyle(tint) : AnyShapeStyle(.tertiary))
+                    .frame(width: 12)
                 Text(title)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: 15, weight: .semibold))
                     .lineLimit(1)
                 Text("\(count)")
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.system(size: 13, weight: .medium))
                     .monospacedDigit()
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
                 Spacer(minLength: 0)
             }
             .foregroundStyle(tint)
@@ -583,7 +588,7 @@ private struct GroupHeader: View {
             // folder names someone typed, and shouting them back changes what
             // they say.
             .textCase(nil)
-            .padding(.vertical, 5)
+            .padding(.vertical, 8)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
