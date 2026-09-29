@@ -68,6 +68,13 @@ class Cli {
 }
 
 /**
+ * Wait for this, not for the pairing link: the link is printed before the
+ * Bridle has registered with the Relay, and a phone arriving in that gap is
+ * turned away by the Relay. The app redials; this test's phone does not.
+ */
+const RELAY_UP = /relay online as/u
+
+/**
  * A throwaway home plus a private Relay, torn down with the test.
  * @param {import('node:test').TestContext} t - the test context.
  * @returns {Promise<{cli: Cli, home: string, relayUrl: string, relay: RelayServer}>} the fixture.
@@ -97,14 +104,17 @@ test('the first run pairs a phone with no configuration at all', { skip, timeout
 
   const started = await cli.spawn(
     ['start', '--relay', relayUrl, '--dsh', DSH_URL, '--no-auto-start'],
-    /rowel:\/\/pair#/u,
+    RELAY_UP,
   )
   t.after(() => { started.child.kill('SIGKILL') })
 
   const out = started.out()
   assert.match(out, /Rowel Bridle/u, 'the banner names the product and version')
   assert.match(out, new RegExp(`harness {3}${DSH_URL.replaceAll('.', String.raw`\.`)}`, 'u'), 'it reports which harness it found')
-  assert.match(out, /code: +[BCDFGHJKMNPQRSTVWXYZ23456789]{4}-[BCDFGHJKMNPQRSTVWXYZ23456789]{4}/u, 'a typed code is offered too')
+  // The short code is not printed here: its bundle goes to the Relay, so it
+  // lives behind `bridle pair --code`, which waits to ask the person.
+  assert.match(out, /bridle pair --code/u, 'the way to a typed code is pointed at')
+  assert.doesNotMatch(out, /code: +[BCDFGHJKMNPQRSTVWXYZ23456789]{4}-/u, 'a Relay-held code was offered without asking')
 
   const phone = new RowelPhone({ bundle: bundleFrom(out), prefer: 'relay', name: 'First iPhone' })
   t.after(() => { phone.close() })
@@ -120,7 +130,7 @@ test('the first run pairs a phone with no configuration at all', { skip, timeout
 
 test('a second device is added from another terminal while the bridle runs', { skip, timeout: 120_000 }, async (t) => {
   const { cli, relayUrl } = await fixture(t)
-  const started = await cli.spawn(['start', '--relay', relayUrl, '--dsh', DSH_URL, '--no-auto-start'], /rowel:\/\/pair#/u)
+  const started = await cli.spawn(['start', '--relay', relayUrl, '--dsh', DSH_URL, '--no-auto-start'], RELAY_UP)
   t.after(() => { started.child.kill('SIGKILL') })
 
   const first = new RowelPhone({ bundle: bundleFrom(started.out()), prefer: 'relay', name: 'iPhone' })
@@ -144,7 +154,7 @@ test('a second device is added from another terminal while the bridle runs', { s
 
 test('status and doctor describe a healthy machine', { skip, timeout: 120_000 }, async (t) => {
   const { cli, relayUrl } = await fixture(t)
-  const started = await cli.spawn(['start', '--relay', relayUrl, '--dsh', DSH_URL, '--no-auto-start'], /rowel:\/\/pair#/u)
+  const started = await cli.spawn(['start', '--relay', relayUrl, '--dsh', DSH_URL, '--no-auto-start'], RELAY_UP)
   t.after(() => { started.child.kill('SIGKILL') })
   const phone = new RowelPhone({ bundle: bundleFrom(started.out()), prefer: 'relay', name: 'Status iPhone' })
   t.after(() => { phone.close() })
@@ -165,7 +175,7 @@ test('status and doctor describe a healthy machine', { skip, timeout: 120_000 },
 
 test('a revoked device is refused, and the CLI says so plainly', { skip, timeout: 120_000 }, async (t) => {
   const { cli, relayUrl } = await fixture(t)
-  const started = await cli.spawn(['start', '--relay', relayUrl, '--dsh', DSH_URL, '--no-auto-start'], /rowel:\/\/pair#/u)
+  const started = await cli.spawn(['start', '--relay', relayUrl, '--dsh', DSH_URL, '--no-auto-start'], RELAY_UP)
   t.after(() => { started.child.kill('SIGKILL') })
   const bundle = bundleFrom(started.out())
   const phone = new RowelPhone({ bundle, prefer: 'relay', name: 'Doomed iPhone' })
@@ -234,7 +244,7 @@ test('a heartbeat that cannot write its snapshot does not kill the daemon', { sk
   const { cli, relayUrl } = await fixture(t)
   const started = await cli.spawn(
     ['start', '--relay', relayUrl, '--dsh', DSH_URL, '--no-auto-start'],
-    /rowel:\/\/pair#/u,
+    RELAY_UP,
   )
   t.after(() => { started.child.kill('SIGKILL') })
 
