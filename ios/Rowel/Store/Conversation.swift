@@ -47,12 +47,17 @@ public final class Conversation {
     /// Skills this session offers, from `skill.list`. Fetched once; skills do
     /// not appear mid-sentence, and a request per keystroke would.
     public var skills: [SlashCommand] = []
+    /// Whether `skills` is the machine's answer rather than the empty default.
+    public var skillsKnown = false
     /// Commands the *machine* will run for this session, from `commands/list`.
     ///
     /// Kept apart from the skills because sending them is a different act: a
     /// skill is text the model reads, a command is handed to `commands/execute`.
     /// `machineLine(for:)` is the whole of that decision.
     public var machineCommands: [SlashCommand] = []
+    /// Whether `machineCommands` is the machine's answer. Until it is, a slash
+    /// line cannot be routed as a command — so it is fetched again on reconnect.
+    public var commandsKnown = false
 
     /// Everything the composer offers after a slash, commands first.
     ///
@@ -95,6 +100,18 @@ public final class Conversation {
     public private(set) var oldestSeq: Int?
     /// True once a history page has landed, so the view can tell empty from unloaded.
     public private(set) var loaded = false
+    /// Set while the rest of the opening page is still owed. The tail arrives
+    /// first and small; the remainder follows as a second request, and a
+    /// connection that drops between the two must not leave it owed forever.
+    public var topUpOwed = false
+    /// Live events that arrived before the tail page did, in arrival order.
+    ///
+    /// Folded as they came, they built the bubble being streamed *before* the
+    /// history it belongs after: the page then appended its older events behind
+    /// the live ones, and chunks with lower sequence numbers were concatenated
+    /// after higher ones. `seen` can drop a duplicate; it cannot put a fold back
+    /// in order. So they wait for the page and are replayed behind it.
+    private var early: [(event: JSONValue, view: JSONValue?)] = []
 
     /// Streaming bubbles by `turn.step`.
     private var assistantIndex: [String: Int] = [:]
@@ -124,6 +141,8 @@ public final class Conversation {
 
     /// Replace everything with a freshly loaded tail page.
     public func reset() {
+        early = []
+        topUpOwed = false
         items = []
         assistantIndex = [:]
         toolIndex = [:]
@@ -143,7 +162,12 @@ public final class Conversation {
             // itself append-only, which is the only order it is correct in.
             let older = Conversation(sessionId: sessionId)
             older.absorb(page: page, prepend: false)
-            let carried = older.items
+            // Minus anything already on screen. A thinned page drops the chunks
+            // of a message it holds whole, so the page above can still carry
+            // them — and folded on their own they are a second, unfinished copy
+            // of a bubble that is already here complete.
+            let held = Set(items.map(\.id))
+            let carried = older.items.filter { !held.contains($0.id) }
             items.insert(contentsOf: carried, at: 0)
             reindex()
             seen.formUnion(older.seen)
@@ -152,6 +176,7 @@ public final class Conversation {
                 guard let event = entry["event"] else { continue }
                 apply(event: event, view: entry["view"])
             }
+            replayEarly()
         }
         if let first = entries.first?["event"]?["seq"]?.intValue {
             oldestSeq = min(oldestSeq ?? first, first)
@@ -163,6 +188,35 @@ public final class Conversation {
             absorbProjections(projections)
         }
         loaded = true
+    }
+
+    /// Show a title this device just set, until the machine's own projection
+    /// says otherwise. Not through `applyProjection`: a watermark raised for a
+    /// local guess would outrank every later rename made on the Mac.
+    public func retitle(_ title: String) {
+        self.title = title
+    }
+
+    /// Fold one event from the live stream — now, or once the history it
+    /// belongs after has arrived. See `early`.
+    public func receiveLive(event: JSONValue, view: JSONValue?) {
+        guard loaded else {
+            early.append((event: event, view: view))
+            return
+        }
+        apply(event: event, view: view)
+    }
+
+    /// The history could not be fetched. What arrived live is still true, and
+    /// holding it back for a page that is not coming would only lose it.
+    public func historyFailed() {
+        replayEarly()
+    }
+
+    private func replayEarly() {
+        let held = early
+        early = []
+        for entry in held { apply(event: entry.event, view: entry.view) }
     }
 
     /// Apply the projection baseline that rides the tail history page.
@@ -529,6 +583,16 @@ public final class Conversation {
     public func showPending(text: String, id: String) {
         pending.append((id: id, text: text.trimmingCharacters(in: .whitespacesAndNewlines)))
         append(.user(UserTurn(id: id, text: text, images: [], synthetic: false, at: Date())))
+    }
+
+    /// Whether an optimistic message is still waiting for the machine's copy.
+    public func isPending(id: String) -> Bool {
+        pending.contains { $0.id == id }
+    }
+
+    /// Whether a provisional queue entry is still the one on screen.
+    public func isQueued(id: String) -> Bool {
+        queue.contains { $0.id == id }
     }
 
     /// Drop an optimistic message whose send failed.

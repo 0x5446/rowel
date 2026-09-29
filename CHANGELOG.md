@@ -9,6 +9,28 @@ the same decision.
 
 ## Unreleased
 
+- **Opening a conversation that is mid-answer no longer scrambles it.** The
+  live stream almost always beats the history page, and what it delivered was
+  folded first — so the answer being written landed *above* the messages it
+  follows, and a tool result that arrived live was dropped. Live events now
+  wait for the page and are folded behind it. A page that fills in above no
+  longer adds a second, never-finishing copy of a reply already on screen.
+
+- **A conversation opened during a dropout finishes loading when the
+  connection returns**, instead of spinning until the app is restarted — and
+  its command list is fetched again, so `/permission` goes to the Mac rather
+  than to the model as words. A refetch after a long gap now reloads only the
+  conversation on screen (the app keeps at most eight in memory), where it
+  used to reload every conversation opened since launch.
+
+- **A message cut off by a dropout is not reported as unsent when it may have
+  arrived.** If the connection died after the message left the phone, the
+  bubble stays until the Mac's copy replaces it; only if nothing comes within
+  30 seconds does the app say it may not have reached the Mac. Approval and
+  question cards from before a reconnect are cleared and rebuilt from what the
+  Mac is still waiting on, and renaming a conversation on the phone no longer
+  stops later renames on the Mac from showing.
+
 - **Nothing is lost when the Bridle restarts, or when one event is too big to
   send.** Event numbers start again at 1 in every Bridle process, and a phone
   reconnecting after a restart asked to resume from its old number — which the

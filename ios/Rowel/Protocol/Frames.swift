@@ -301,9 +301,18 @@ public struct CallError: Error, Equatable, Sendable {
         self.details = details
     }
 
-    /// Whether retrying the same call could plausibly succeed.
-    public var isTransient: Bool {
-        ["disconnected", "timeout", "internal", "agent-busy"].contains(code)
+    /// The connection went away — before the call was sent (`disconnected`) or
+    /// after, while its answer was on the way (`interrupted`). A reconnect is
+    /// coming either way, so a read can simply be asked again then.
+    public var isConnectionLoss: Bool {
+        code == "disconnected" || code == "interrupted"
+    }
+
+    /// The call left this device and its answer did not come back, so whether
+    /// it took effect is unknown. A write in this state must not be reported as
+    /// "didn't send": it may well have, and sending it again would do it twice.
+    public var outcomeUnknown: Bool {
+        code == "interrupted" || code == "timeout"
     }
 }
 

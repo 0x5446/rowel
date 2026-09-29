@@ -139,6 +139,16 @@ public final class MachineSession {
     public private(set) var defaultModel: ModelOption?
 
     private var conversations: [String: Conversation] = [:]
+    /// Conversation ids, most recently opened first. The first is the one on
+    /// screen; see `conversation(_:)` and the `.resync` case.
+    private var recent: [String] = []
+    /// Conversations whose `ensureLoaded` is in flight, so a reconnect landing
+    /// mid-load does not start a second one.
+    private var ensuring: Set<String> = []
+    /// How many conversations stay folded in memory. Each keeps receiving and
+    /// folding its live events, so the cost of an unbounded cache is paid in
+    /// main-thread work as well as memory.
+    private static let heldConversations = 8
     private var pump: Task<Void, Never>?
     private let notifier: Notifier
     private let defaults: UserDefaults
@@ -231,6 +241,13 @@ public final class MachineSession {
             status = value
             if case .online = value, !wasOnline {
                 Task { await self.refreshSessions() }
+                // Whatever an outage interrupted — a history page, the rest of
+                // one, the command list — is owed now. The calls fail fast
+                // while offline and were swallowed then on the promise that the
+                // reconnect would retry; this is that retry.
+                for conversation in conversations.values {
+                    Task { await self.ensureLoaded(conversation) }
+                }
             }
             // Old evidence may not testify about a new outage: `dshReachable`
             // was a fact about a tunnel that no longer exists, and a stale
@@ -266,9 +283,15 @@ public final class MachineSession {
             // The gap was too big to replay. Everything on screen is now
             // suspect, so refetch it — and only it.
             _ = from
+            let onScreen = recent.first
+            for id in conversations.keys where id != onScreen { conversations[id] = nil }
+            recent = onScreen.map { [$0] } ?? []
             Task {
                 await self.refreshSessions()
-                for conversation in self.conversations.values {
+                // The others were dropped rather than refetched: each would
+                // cost two history calls now, for a screen nobody is looking
+                // at, and opening one again rebuilds it from scratch anyway.
+                if let onScreen, let conversation = self.conversations[onScreen] {
                     await self.loadHistory(conversation, reset: true)
                 }
             }
@@ -276,6 +299,13 @@ public final class MachineSession {
             harnessKnown = true
             harnessDetail = reachable ? nil : (detail ?? "dsh isn’t running on that Mac.")
         case .handshake(let number, let host, let harness, let direct):
+            // A new connection starts with the machine re-sending everything
+            // still waiting on a person, right behind this signal. Cards held
+            // from before may have been answered — or died with a restarted
+            // dsh — while this phone was away, and nothing else would take
+            // them down; the machine's re-send puts back the ones that are real.
+            approvals = [:]
+            questions = [:]
             confirmation = number.isEmpty ? nil : number
             harnessInfo = harness
             if let host, let described = MachineDescription(host) {
@@ -309,7 +339,7 @@ public final class MachineSession {
                 return
             }
             flushHeld()
-            existing(sessionId)?.apply(event: event, view: payload["view"])
+            existing(sessionId)?.receiveLive(event: event, view: payload["view"])
             touch(sessionId, event: event)
         case "approval/requested":
             let request = ApprovalRequest(
@@ -399,7 +429,7 @@ public final class MachineSession {
         held = []
         for entry in batch {
             // No `touch`: it answers to `user/message`, and a chunk is never one.
-            existing(entry.sessionId)?.apply(event: entry.event, view: entry.view)
+            existing(entry.sessionId)?.receiveLive(event: entry.event, view: entry.view)
         }
     }
 
@@ -508,7 +538,13 @@ public final class MachineSession {
     // MARK: - Reads
 
     /// The conversation for a session, creating and loading it on first ask.
+    ///
+    /// Also the record of which one is on screen: the conversation view asks
+    /// for its conversation every time it appears, so the most recent ask is
+    /// the one being looked at.
     public func conversation(_ sessionId: String) -> Conversation {
+        recent.removeAll { $0 == sessionId }
+        recent.insert(sessionId, at: 0)
         if let held = conversations[sessionId] { return held }
         let summary = sessions.first { $0.id == sessionId }
         let fresh = Conversation(sessionId: sessionId, title: summary?.title, cwd: summary?.cwd)
@@ -519,19 +555,44 @@ public final class MachineSession {
         // the person before its contents arrived.
         fresh.loading = true
         conversations[sessionId] = fresh
-        Task { await loadHistory(fresh, reset: false) }
+        for dropped in recent.dropFirst(MachineSession.heldConversations) {
+            conversations[dropped] = nil
+        }
+        recent = Array(recent.prefix(MachineSession.heldConversations))
+        Task { await ensureLoaded(fresh) }
         // Independently of the history: the machine knows which model this
         // session is on before it has ever run one, and a wrong model is worth
         // seeing before spending a turn on it rather than after.
         Task { await loadModel(fresh) }
-        // Once, on open. Discovery is the whole point of this list — the
-        // commands work today by typing their names — so a failure here is a
-        // missing convenience, not a broken session, and is swallowed.
-        Task { await loadCommands(fresh) }
         // Once on open, so the menu can say whether there is anything to look
         // at without making someone tap to find out there is not.
         Task { await loadSubagents(fresh) }
         return fresh
+    }
+
+    /// Bring a conversation up to date with whatever it is still missing.
+    ///
+    /// The one way a conversation gets loaded — on open, and again after every
+    /// reconnect — so a part that failed because the connection was down is
+    /// fetched when it comes back, instead of leaving a spinner or an empty
+    /// command list until the app is killed. Each part is tracked on its own:
+    /// the tail page can land and the rest of the page fail, or the commands
+    /// arrive and the skills not.
+    func ensureLoaded(_ conversation: Conversation) async {
+        let id = conversation.sessionId
+        guard conversations[id] === conversation, !ensuring.contains(id) else { return }
+        ensuring.insert(id)
+        defer { ensuring.remove(id) }
+        if !conversation.loaded {
+            await loadHistory(conversation, reset: false)
+        } else if conversation.topUpOwed {
+            conversation.loading = true
+            defer { conversation.loading = false }
+            try? await topUp(conversation)
+        }
+        if !conversation.commandsKnown || !conversation.skillsKnown {
+            await loadCommands(conversation)
+        }
     }
 
     /// Fetch the children of a conversation.
@@ -556,8 +617,14 @@ public final class MachineSession {
     private func loadCommands(_ conversation: Conversation) async {
         async let skills = try? harness.skills(sessionId: conversation.sessionId)
         async let commands = try? harness.commands(sessionId: conversation.sessionId)
-        if let found = await skills { conversation.skills = found }
-        if let found = await commands { conversation.machineCommands = found }
+        if let found = await skills {
+            conversation.skills = found
+            conversation.skillsKnown = true
+        }
+        if let found = await commands {
+            conversation.machineCommands = found
+            conversation.commandsKnown = true
+        }
     }
 
     private func existing(_ sessionId: String) -> Conversation? {
@@ -593,7 +660,7 @@ public final class MachineSession {
             if machineInfo == nil, let described = try? await harness.describe() {
                 machineInfo = MachineDescription(described)
             }
-        } catch let error as CallError where error.code == "disconnected" {
+        } catch let error as CallError where error.isConnectionLoss {
             // The reconnect will refresh again. Saying so would be noise.
         } catch {
             problem = (error as? LocalizedError)?.errorDescription ?? "Could not read the conversation list."
@@ -661,19 +728,31 @@ public final class MachineSession {
             // The top-up happens inside `loading`, so the "load earlier"
             // control stays quiet until the conversation holds the same page
             // it always used to start with.
-            if blank, conversation.hasMore, let before = conversation.oldestSeq {
-                let rest = try await harness.history(
-                    sessionId: conversation.sessionId,
-                    beforeSeq: before,
-                    maxMessages: historyPageSize - firstPaintMessages
-                )
-                conversation.absorb(page: rest, prepend: true)
+            if blank, conversation.hasMore {
+                conversation.topUpOwed = true
+                try await topUp(conversation)
             }
-        } catch let error as CallError where error.code == "disconnected" {
-            // Same reasoning as the list: the reconnect retries.
+        } catch let error as CallError where error.isConnectionLoss {
+            // The reconnect retries — `ensureLoaded`, on the way back online.
         } catch {
+            conversation.historyFailed()
             conversation.note((error as? LocalizedError)?.errorDescription ?? "Could not load this conversation.", kind: .failure)
         }
+    }
+
+    /// Fetch the rest of the opening page, behind a tail that already landed.
+    private func topUp(_ conversation: Conversation) async throws {
+        guard let before = conversation.oldestSeq else {
+            conversation.topUpOwed = false
+            return
+        }
+        let rest = try await harness.history(
+            sessionId: conversation.sessionId,
+            beforeSeq: before,
+            maxMessages: historyPageSize - firstPaintMessages
+        )
+        conversation.absorb(page: rest, prepend: true)
+        conversation.topUpOwed = false
     }
 
     /// Ask which model this session is on.
@@ -766,8 +845,9 @@ public final class MachineSession {
             do {
                 try await harness.prompt(sessionId: sessionId, text: text, images: images, steer: false)
             } catch {
-                conversation.dropQueued(id: queuedId)
-                problem = (error as? LocalizedError)?.errorDescription ?? "That message didn’t send."
+                await settleFailedSend(error, in: conversation, isStill: { conversation.isQueued(id: queuedId) }) {
+                    conversation.dropQueued(id: queuedId)
+                }
             }
             return
         }
@@ -776,9 +856,40 @@ public final class MachineSession {
         do {
             try await harness.prompt(sessionId: sessionId, text: text, images: images, steer: steer)
         } catch {
-            conversation.dropPending(id: pendingId)
-            problem = (error as? LocalizedError)?.errorDescription ?? "That message didn’t send."
+            await settleFailedSend(error, in: conversation, isStill: { conversation.isPending(id: pendingId) }) {
+                conversation.dropPending(id: pendingId)
+            }
         }
+    }
+
+    /// How long a message whose send was cut off waits for the machine to show
+    /// it arrived, before this device says it did not. Long enough to cover a
+    /// reconnect and its replay; tests shorten it.
+    var unconfirmedSendWait: Duration = .seconds(30)
+
+    /// Deal with a send that did not come back cleanly.
+    ///
+    /// "Didn't send" is only true when nothing left this device. A send cut off
+    /// after it was written may have reached the machine, and telling someone
+    /// it did not is how the same instruction gets given twice. So that copy
+    /// stays up: when the machine's own `user/message` arrives — on the
+    /// reconnect's replay, usually within seconds — it replaces it as usual.
+    /// Only if nothing comes in `unconfirmedSendWait` is it taken back.
+    private func settleFailedSend(
+        _ error: Error,
+        in conversation: Conversation,
+        isStill: () -> Bool,
+        drop: () -> Void
+    ) async {
+        guard (error as? CallError)?.outcomeUnknown == true else {
+            drop()
+            problem = (error as? LocalizedError)?.errorDescription ?? "That message didn’t send."
+            return
+        }
+        try? await Task.sleep(for: unconfirmedSendWait)
+        guard isStill() else { return }
+        drop()
+        problem = "That message may not have reached the Mac — the connection dropped before it answered. Check before sending it again."
     }
 
     /// Run a slash command against one session.
@@ -1168,7 +1279,7 @@ public final class MachineSession {
         do {
             try await harness.rename(sessionId: sessionId, title: title)
             update(sessionId) { $0.title = title }
-            existing(sessionId)?.applyProjection(key: "title", value: .string(title), seq: Int.max)
+            existing(sessionId)?.retitle(title)
         } catch {
             problem = (error as? LocalizedError)?.errorDescription ?? "Could not rename that conversation."
         }
