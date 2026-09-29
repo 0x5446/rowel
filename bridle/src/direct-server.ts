@@ -9,7 +9,8 @@
  * this address first and falls back to the Relay when it does not answer.
  */
 
-import { createServer, type Server } from 'node:http'
+import { createServer, type IncomingMessage, type Server } from 'node:http'
+import type { Socket } from 'node:net'
 import { networkInterfaces } from 'node:os'
 import { WebSocketServer, type WebSocket } from 'ws'
 import { MAX_FRAME_BYTES } from '@rowel/protocol'
@@ -43,6 +44,8 @@ export class DirectServer {
   private readonly http: Server
   private readonly wss: WebSocketServer
   private readonly sessions = new Set<TunnelSession>()
+  /** TCP connections that have not completed a handshake, from their first byte. */
+  private readonly strangers = new Set<Socket>()
 
   /**
    * @param core - the machine being served.
@@ -62,11 +65,23 @@ export class DirectServer {
     this.http.headersTimeout = HANDSHAKE_TIMEOUT_MS
     this.http.requestTimeout = HANDSHAKE_TIMEOUT_MS
     this.http.maxConnections = MAX_UNAUTHENTICATED + MAX_PHONES
+    // Counted from the TCP connection, not from the upgrade: a stranger who
+    // never finishes the HTTP request would otherwise hold a place in the
+    // connection limit while never being counted as one, and eight of them
+    // plus eight more could fill every place a phone needs.
+    this.http.on('connection', (socket: Socket) => {
+      if (this.strangers.size >= MAX_UNAUTHENTICATED) {
+        socket.destroy()
+        return
+      }
+      this.strangers.add(socket)
+      socket.once('close', () => { this.strangers.delete(socket) })
+    })
     // The tunnel's own ceiling, as on the relay path. This listener answers
     // anyone on the network before they have proved anything, so a message
     // allowance twice the tunnel's was only room for a stranger to fill.
     this.wss = new WebSocketServer({ server: this.http, path: DIRECT_PATH, maxPayload: MAX_FRAME_BYTES })
-    this.wss.on('connection', (socket: WebSocket) => { this.attach(socket) })
+    this.wss.on('connection', (socket: WebSocket, request: IncomingMessage) => { this.attach(socket, request.socket) })
     // `ws` re-emits the HTTP server's failures, and an 'error' event with no
     // listener takes the process down. This one is a guest inside dsh.
     this.wss.on('error', (error: Error) => { this.options.log?.(`direct tunnel: ${error.message}`) })
@@ -140,16 +155,12 @@ export class DirectServer {
     this.http.close()
   }
 
-  private attach(socket: WebSocket): void {
+  private attach(socket: WebSocket, connection: Socket): void {
     // Anyone on the same Wi-Fi can open a socket here, paired or not. The relay
     // path caps circuits per machine; this one had no cap and no deadline, so
     // a stranger could hold any number of silent sockets open indefinitely —
-    // inside dsh's own process, with the plugin.
-    const strangers = [...this.sessions].filter(session => session.peerKey === undefined).length
-    if (strangers >= MAX_UNAUTHENTICATED) {
-      socket.close(1013, 'too many unauthenticated connections')
-      return
-    }
+    // inside dsh's own process, with the plugin. The count is kept per TCP
+    // connection (see the constructor); this is where one stops being a stranger.
     const deadline = setTimeout(() => {
       if (session.peerKey === undefined) session.dispose('no handshake in time')
     }, HANDSHAKE_TIMEOUT_MS)
@@ -159,7 +170,10 @@ export class DirectServer {
       close: () => { socket.close() },
     }, {
       version: this.options.version,
-      onAuthenticated: (_key, name) => { this.options.log?.(`${name} attached over the local network`) },
+      onAuthenticated: (_key, name) => {
+        this.strangers.delete(connection)
+        this.options.log?.(`${name} attached over the local network`)
+      },
       onClosed: () => {
         clearTimeout(deadline)
         this.sessions.delete(session)

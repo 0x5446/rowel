@@ -394,6 +394,11 @@ function reclaimIfAbandoned(lock: string): boolean {
     ? !processExists(pid)
     : lockAge(lock) > LOCK_STALE_MS
   if (!abandoned) return false
+  // Read-then-unlink is not atomic: two writers recovering the same dead
+  // holder's lock in the same instant could, in principle, see one remove the
+  // lock the other has just taken. Node has no cross-process flock to close
+  // that gap, and it needs a Bridle to have died mid-write *and* two writers
+  // to race for the lock within microseconds of each other.
   try {
     if (readFileSync(lock, 'utf8') === holder) unlinkSync(lock)
   } catch {

@@ -734,6 +734,10 @@ public final class MachineSession {
     /// page follows behind it while they read — the same prepend the "load
     /// earlier" button does, without the button.
     func loadHistory(_ conversation: Conversation) async {
+        // After a failed attempt, what is on screen is live events with no
+        // history under them. The page will carry those same events in their
+        // place, so start clean rather than appending it behind them.
+        if conversation.foldedWithoutHistory { conversation.reset() }
         let generation = conversation.generation
         conversation.loading = true
         defer { if conversation.generation == generation { conversation.loading = false } }
