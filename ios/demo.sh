@@ -25,6 +25,10 @@
 #   ios/demo.sh              set up an approval, record the phone
 #   ios/demo.sh --mac        record the harness window as well
 #   ios/demo.sh --arm        set up the approval and stop, to record by hand
+#   ios/demo.sh --review     the App Review walkthrough instead: first launch,
+#                            pairing, the list, a conversation, an approval
+#                            (ReviewTour.swift) — raw/review.mov, then
+#                            `node review.mjs` in marketing/video
 #
 # Output: marketing/video/raw/phone.mov, ready for the Remotion edit.
 #
@@ -64,7 +68,7 @@ recorders=()
 cleanup() {
   local pid
   for pid in "${recorders[@]:-}"; do
-    [ -n "$pid" ] && kill -INT "$pid" 2>/dev/null
+    [ -n "$pid" ] && { kill -INT "$pid" 2>/dev/null || true; }
   done
 }
 trap cleanup EXIT INT TERM
@@ -167,6 +171,10 @@ record() {
   local udid
   udid=$(xcrun simctl list devices available | grep -m1 "$device (" | sed -E 's/.*\(([0-9A-F-]{36})\).*/\1/')
   [ -n "$udid" ] || fail "no simulator called '$device'."
+  # The walkthrough is a first launch, so it starts from a cold device: a
+  # system alert left over from an earlier take (an unanswered "Open in
+  # Rowel?") otherwise floats over the first screen of the next one.
+  [ "$test" = ReviewTour ] && { xcrun simctl shutdown "$udid" 2>/dev/null || true; }
   xcrun simctl boot "$udid" 2>/dev/null || true
   open -a Simulator
   # Regenerate first. The project file is not committed, so a driver added
@@ -177,8 +185,11 @@ record() {
   # A test runner left over from before the rename sits on the home screen and
   # ends up in the shot.
   xcrun simctl uninstall "$udid" ai.novabox.reins.uitests.xctrunner 2>/dev/null || true
+  # A first launch is recorded as one: no notification permission already
+  # granted, nothing remembered from the last take.
+  [ "$test" = ReviewTour ] && { xcrun simctl uninstall "$udid" ai.novabox.rowel 2>/dev/null || true; }
   mkdir -p "$out"
-  rm -f "$out/phone.mov" "$out/mac.mov"
+  rm -f "$out/$movie" "$out/mac.mov"
 
   # A window of its own for the harness, when the Mac half was asked for.
   # Sized here because a window capture records the window at its own size, so
@@ -210,10 +221,10 @@ record() {
     || fail "the test bundle would not build"
 
   say "recording"
-  rm -f "$out/beats.json"
+  rm -f "$out/$beats"
   # The phone on the home screen, so the notification has somewhere to land.
   xcrun simctl terminate "$udid" ai.novabox.rowel >/dev/null 2>&1 || true
-  xcrun simctl io "$udid" recordVideo --codec h264 --force "$out/phone.mov" &
+  xcrun simctl io "$udid" recordVideo --codec h264 --force "$out/$movie" &
   local phone_pid=$!
   recorders+=("$phone_pid")
   local mac_pid=""
@@ -263,13 +274,23 @@ JSON
   # `pipefail` so a build that never ran the test is not reported as success
   # by the grep at the end of the pipe. That is how the first take produced
   # eighteen seconds of a home screen and said nothing was wrong.
+  # The walkthrough pairs on screen: it drops a marker once the setup screen
+  # has been shown, and the link is opened into the app from here.
+  rm -f "$out/pair-now"
+  if [ "$test" = ReviewTour ]; then
+    ( for _ in $(seq 1 600); do
+        if [ -f "$out/pair-now" ]; then xcrun simctl openurl "$udid" "$link"; break; fi
+        sleep 0.5
+      done ) &
+    recorders+=("$!")
+  fi
   set +e
   set -o pipefail
   TEST_RUNNER_ROWEL_PAIR_LINK="$link" TEST_RUNNER_ROWEL_SHOTS_OUT="$out" \
     xcodebuild test-without-building \
     -project Rowel.xcodeproj -scheme RowelUI -destination "id=$udid" \
     -derivedDataPath build/demo \
-    -only-testing:RowelUITests/Demo 2>&1 | grep -E "Test Case|error:"
+    -only-testing:"RowelUITests/$test" 2>&1 | grep -E "Test Case|error:"
   local status=$?
   set +o pipefail
   set -e
@@ -289,11 +310,11 @@ JSON
     wait "$mac_pid" 2>/dev/null || true
   fi
 
-  [ -s "$out/phone.mov" ] || fail "the simulator recording is empty"
-  if [ -s "$out/beats.json" ]; then
-    python3 "$root/marketing/video/beats.py" "$out/beats.json" "$started" "$notified"
-    say "beats (seconds into phone.mov):"
-    sed 's/^/    /' "$out/beats.json"
+  [ -s "$out/$movie" ] || fail "the simulator recording is empty"
+  if [ -s "$out/$beats" ]; then
+    python3 "$root/marketing/video/beats.py" "$out/$beats" "$started" "$notified"
+    say "beats (seconds into $movie):"
+    sed 's/^/    /' "$out/$beats"
   fi
   say "raw footage in marketing/video/raw"
   for f in "$out"/*.mov; do
@@ -305,9 +326,13 @@ JSON
 }
 
 want_mac=0
+test=Demo
+movie=phone.mov
+beats=beats.json
 case "${1:-}" in
   --arm) arm; exit 0 ;;
   --mac) want_mac=1 ;;
+  --review) test=ReviewTour; movie=review.mov; beats=review-beats.json ;;
 esac
 arm
 record

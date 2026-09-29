@@ -95,7 +95,7 @@ const [command, ...rest] = process.argv.slice(2)
  * version it never touched. iOS only, and only the states that accept work.
  */
 const EDITABLE = new Set([
-  'PREPARE_FOR_SUBMISSION', 'DEVELOPER_REJECTED', 'REJECTED',
+  'PREPARE_FOR_SUBMISSION', 'READY_FOR_REVIEW', 'DEVELOPER_REJECTED', 'REJECTED',
   'METADATA_REJECTED', 'INVALID_BINARY', 'WAITING_FOR_REVIEW', 'IN_REVIEW',
   'PENDING_DEVELOPER_RELEASE',
 ])
@@ -201,15 +201,25 @@ switch (command) {
     // Review" and "Submit to App Review" as two separate acts, and so does
     // this. Anything already open is reused: a second container for the same
     // app is rejected, and the error names neither the existing one nor why.
+    // That includes a rejected one — it still holds the version, and sending
+    // it again is what "Resubmit to App Review" does.
     const version = await inflight()
-    const open = await call('GET', `/v1/apps/${APP_ID}/reviewSubmissions?filter[state]=READY_FOR_REVIEW`)
-    const submission = open.data[0] ?? (await call('POST', '/v1/reviewSubmissions', {
+    const open = await call('GET', `/v1/apps/${APP_ID}/reviewSubmissions?filter[state]=UNRESOLVED_ISSUES,READY_FOR_REVIEW`)
+    const submission = open.data.find(s => s.attributes.state === 'UNRESOLVED_ISSUES') ?? open.data[0] ?? (await call('POST', '/v1/reviewSubmissions', {
       data: {
         type: 'reviewSubmissions', attributes: { platform: 'IOS' },
         relationships: { app: { data: { type: 'apps', id: APP_ID } } },
       },
     })).data
     const items = await call('GET', `/v1/reviewSubmissions/${submission.id}/items`)
+    // A rejected item has to be marked resolved before its container will go
+    // again; until then Apple answers "Version is not ready to be submitted
+    // yet, please try again later", which no amount of waiting fixes.
+    for (const item of items.data.filter(i => i.attributes.state === 'REJECTED')) {
+      await call('PATCH', `/v1/reviewSubmissionItems/${item.id}`, {
+        data: { type: 'reviewSubmissionItems', id: item.id, attributes: { resolved: true } },
+      })
+    }
     if (items.data.length === 0) {
       await call('POST', '/v1/reviewSubmissionItems', {
         data: {
