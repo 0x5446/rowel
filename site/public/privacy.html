@@ -57,11 +57,11 @@
 <table>
   <tr>
     <th>Machine ID</th>
-    <td>Random, made when Bridle is installed — the hash of its public key, not derived from your hardware.</td>
+    <td>Random, made the first time Bridle runs — the hash of its public key, not derived from your hardware.</td>
   </tr>
   <tr>
     <th>Machine name</th>
-    <td>In the clear, so the app can show which Mac it is connecting to. It defaults to your computer's name; change <code>machineName</code> in <code>~/.rowel/bridle.json</code> if that says more than you would like. Anyone who knows your machine ID can ask the relay for this name and your Bridle version.</td>
+    <td>In the clear, so the app can show which Mac it is connecting to. It defaults to your computer's name; change <code>machineName</code> in <code>~/.rowel/bridle.json</code> if that says more than you would like. Anyone who knows your machine ID can ask the relay for this name and your Bridle version while Bridle is connected.</td>
   </tr>
   <tr>
     <th>Bridle version</th>
@@ -97,8 +97,8 @@
 <h3>During pairing</h3>
 
 <p>
-  Pairing by QR code goes from your screen to your camera; the relay is not
-  involved. Pairing by typed code (<code>bridle pair --code</code>) puts a
+  Pairing by QR code: the invitation goes from your screen to your camera and
+  never passes through the relay. Pairing by typed code (<code>bridle pair --code</code>) puts a
   pairing bundle on the relay so the app can fetch it: your machine's name,
   ID, public key, local network addresses, and a one-time token that can only
   <em>ask</em> to pair — you accept the phone at the Mac. The bundle is kept
@@ -109,14 +109,16 @@
 <h2>What the relay stores</h2>
 
 <p>
-  The relay is a Cloudflare Worker. The objects that carry your traffic store
-  nothing. What is written to storage:
+  The relay is a Cloudflare Worker. The objects that carry your traffic write
+  nothing to storage; while a connection is open, Cloudflare holds its machine
+  ID, name, version and circuit numbers alongside it, and drops them when it
+  closes. What is written to storage:
 </p>
 
 <table>
   <tr>
     <th>While a Mac is online</th>
-    <td>One row: its machine ID, name, Bridle version, when it connected, and how many phones are attached. Deleted when it disconnects — or within ten minutes, if the disconnect is missed.</td>
+    <td>One row: its machine ID, name, Bridle version, when it connected, and how many phones are attached. Deleted when it disconnects; a sweep every ten minutes removes rows whose connection went without a clean close.</td>
   </tr>
   <tr>
     <th>While a typed code is outstanding</th>
@@ -136,10 +138,12 @@
 </p>
 
 <p>
-  Logs are switched off. The relay's code prints a line in two rare cases — two
-  Bridles fighting over one machine ID, and a notification Apple refused — and
-  those lines are visible only to someone watching the live stream at that
-  moment. Nothing is kept.
+  Logs are switched off. The relay's code prints a line in two cases: when a
+  machine reconnects while its previous connection is still registered (a
+  laptop waking up, or two Bridles fighting over one machine ID — the line
+  includes the machine ID), and when a notification fails to send. Those lines
+  are visible only to someone watching the live stream at that moment. Nothing
+  is kept.
 </p>
 
 <h2>Cloudflare</h2>
@@ -182,9 +186,10 @@
 <p>
   <strong>Your conversations are not stored on the phone.</strong> The session
   list and messages are fetched from your Mac and held in memory; closing the
-  app discards them. The exception is a notification the app posts while
-  connected — the first line of a question and the conversation's title — which
-  stays in Notification Center until you clear it.
+  app discards them. The exception is the notifications the app posts while it
+  is still connected in the background — a question's text, the name of a tool
+  asking permission, or “Finished”, with the conversation's title and the Mac's
+  name — which stay in Notification Center until you clear them.
 </p>
 
 <p>
@@ -266,7 +271,8 @@
   The production relay's entire state is in
   <code>relay-worker/src/exchange.ts</code>, <code>pair-code.ts</code> and
   <code>switchboard.ts</code> (the self-hostable Node relay's is in
-  <code>relay/src/registry.ts</code> and <code>offers.ts</code>). An end-to-end
+  <code>relay/src/registry.ts</code> and <code>offers.ts</code>, plus in-memory
+  rate limits per IP). An end-to-end
   test, <em>the relay only ever sees ciphertext</em>
   (<code>e2e/tests/security.test.js</code>), taps the phone's traffic through
   the Node relay and fails if a method name, a session id, the machine's name
