@@ -1,6 +1,6 @@
 {
   "name": "@rowel/relay",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Rowel Relay \u2014 a content-blind switchboard between phones and the Bridles on people's machines.",
   "license": "MIT",
   "type": "module",

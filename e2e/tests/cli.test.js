@@ -147,6 +147,38 @@ test('pair with nothing running becomes the bridle, so the scan is answered', { 
   assert.equal(started.child.exitCode, null, 'it keeps running after the phone is in')
 })
 
+test('pair --code with nothing running becomes the bridle and asks at the Mac', { skip, timeout: 120_000 }, async (t) => {
+  // The other half of the fresh install: the app's "Enter a code instead".
+  // The code path asks its question in a terminal, so it gets one: Python's
+  // pty module runs it on a pseudo-terminal and relays stdin. (Not script(1),
+  // which refuses the socket Node hands a child as its stdin.)
+  const { cli, relayUrl } = await fixture(t)
+  const onTerminal = 'import pty, sys; sys.exit(pty.spawn(sys.argv[1:]) >> 8)'
+  const child = spawn('python3', ['-c', onTerminal, process.execPath, CLI, 'pair', '--code', '--relay', relayUrl, '--dsh', DSH_URL, '--no-auto-start'], {
+    env: { ...process.env, ROWEL_HOME: cli.home, ROWEL_INSTANCES: join(cli.home, 'instances-index.json') },
+  })
+  t.after(() => { child.kill('SIGKILL') })
+  let out = ''
+  child.stdout.on('data', chunk => { out += String(chunk) })
+  await waitFor(() => /Type this code in the Rowel app:\s+\S+/u.test(out), 30_000, `the code to be printed:\n${out}`)
+  assert.match(out, /No bridle is running here, so this one will/u)
+  const code = /Type this code in the Rowel app:\s+(\S+)/u.exec(out)?.[1] ?? ''
+
+  // What the app does with a typed code: collect the bundle, then ask to pair.
+  const claimed = await (await fetch(`${relayUrl}/v1/pair/claim?code=${encodeURIComponent(code)}`)).json()
+  const phone = new RowelPhone({ bundle: claimed.bundle, prefer: 'relay', name: 'Typed iPhone' })
+  t.after(() => { phone.close() })
+  await assert.rejects(() => phone.connect(), (error) => error.reason === 'pending')
+
+  await waitFor(() => /Accept\? \[y\/N\]/u.test(out), 15_000, `the question at the Mac:\n${out}`)
+  child.stdin.write('y\n')
+  await waitFor(() => /Paired with "Typed iPhone"/u.test(out), 15_000, `the acceptance:\n${out}`)
+  const ready = await phone.connect()
+  assert.equal(ready.dshReachable, true)
+  await waitFor(() => /Bridle keeps running here/u.test(out), 5_000, 'it says it stays')
+  assert.equal(child.exitCode, null, 'it keeps running after the phone is in')
+})
+
 test('a second device is added from another terminal while the bridle runs', { skip, timeout: 120_000 }, async (t) => {
   const { cli, relayUrl } = await fixture(t)
   const started = await cli.spawn(['start', '--relay', relayUrl, '--dsh', DSH_URL, '--no-auto-start'], RELAY_UP)

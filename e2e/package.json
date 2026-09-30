@@ -1,6 +1,6 @@
 {
   "name": "@rowel/e2e",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "End-to-end tests: a reference phone driving a real Bridle, a real Relay, and a real DeepSeek Harness.",
   "license": "MIT",
   "private": true,

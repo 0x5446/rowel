@@ -74,10 +74,11 @@ bridle pair
 It starts Bridle if none is running, prints a QR code, and stays running. In
 the app, tap *Connect a Mac*, then *I've run it — scan the code*. With Bridle
 already running (a service, or dsh's plugin), it just prints a fresh code.
+`--code` does the same, for typing instead of scanning.
 
 Over SSH, where a terminal may not draw a QR code, add `--link` to print the raw
-pairing link. When the camera is not an option, `bridle pair --code` (with Bridle
-already running) prints an 8-character code to type instead and waits: the Mac then shows the phone's key
+pairing link. When the camera is not an option, `bridle pair --code` prints an
+8-character code to type instead and waits: the Mac then shows the phone's key
 and asks you to accept it, and you check it against the key the phone shows.
 [SECURITY.md](SECURITY.md) says why that step exists.
 

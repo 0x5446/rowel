@@ -7,6 +7,14 @@ Versions are the tags `install.sh` can install. `ROWEL_REF` in that script names
 the one it installs by default, so a release here and a change to that line are
 the same decision.
 
+## 0.1.7 — 2026-09-30
+
+- **`bridle pair --code` works on a fresh install too.** The app's "Enter a
+  code instead" sends people to it, and with no Bridle running it only said
+  one was needed. It now becomes that Bridle, as `bridle pair` does since
+  0.1.6: it publishes the code once it is registered at the Relay, asks you to
+  accept the phone in the same terminal, and keeps running after.
+
 ## 0.1.6 — 2026-09-30
 
 - **`bridle pair` works on a fresh install.** It is what the installer, the

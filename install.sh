@@ -35,7 +35,7 @@ REPO="${ROWEL_REPO:-https://github.com/0x5446/rowel.git}"
 # a relay that had been retired. Nothing downstream can catch it, because from
 # here a stale tag and a current one look identical. Bump this in the same
 # commit as the CHANGELOG heading; they are one decision, not two.
-REF="${ROWEL_REF:-v0.1.6}"
+REF="${ROWEL_REF:-v0.1.7}"
 SRC_DIR="${ROWEL_SRC:-$HOME/.rowel/src}"
 
 # Colour only when a human is watching. Piped output stays plain.

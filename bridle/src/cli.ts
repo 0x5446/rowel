@@ -131,6 +131,33 @@ function flagBoolean(options: Options, name: string): boolean {
 }
 
 async function start(options: Options): Promise<void> {
+  const launched = await launch(options)
+  if (launched === undefined) return
+  const { state, directAddresses } = launched
+  if (state.peers.length === 0 || flagBoolean(options, 'pair')) {
+    say('')
+    const invitation = createInvitation(state, directAddresses)
+    await printInvitation(invitation, state, flagBoolean(options, 'link'))
+  } else {
+    say(`paired    ${String(state.peers.length)} device${state.peers.length === 1 ? '' : 's'} · run "bridle pair" to add another`)
+  }
+  await new Promise<never>(() => {})
+}
+
+/** A Bridle brought up in this process, and what pairing needs from it. */
+interface Launched {
+  state: ReturnType<typeof loadState>
+  directAddresses: string[]
+  relay: RelayClient
+}
+
+/**
+ * Bring a Bridle up in this process — dsh, the local listener, the Relay, the
+ * heartbeat — and return once it is running; it keeps running after. Split
+ * from `start` so `bridle pair --code` can be that Bridle and still ask its
+ * question in the same terminal. Undefined when it refused to start.
+ */
+async function launch(options: Options): Promise<Launched | undefined> {
   const startedAt = Date.now()
   const state = loadState()
 
@@ -143,7 +170,7 @@ async function start(options: Options): Promise<void> {
     say(`a Bridle for this identity is already running (pid ${String(incumbent.pid)}, ${incumbent.version}) — likely the dsh plugin or an installed service.`)
     say('Stop that one first, or give this one its own home with ROWEL_HOME.')
     process.exitCode = 1
-    return
+    return undefined
   }
   // Claimed now, not when the relay comes up: `ensureDsh` below may start dsh,
   // and a dsh that carries the plugin would otherwise read an unclaimed home
@@ -189,7 +216,7 @@ async function start(options: Options): Promise<void> {
       say(`${homeOverride} does not declare its address — add a webserver entry (host + port) to`)
       say(`${join(homeOverride, 'profiles/web/cordis.patch.yml')}, or bind by URL with --dsh.`)
       process.exitCode = 1
-      return
+      return undefined
     }
     if (flagString(options, 'dsh-home') !== undefined && state.dshHome !== homeOverride) {
       updateState(state, (disk) => { disk.dshHome = homeOverride })
@@ -293,14 +320,6 @@ async function start(options: Options): Promise<void> {
   const heartbeat = setInterval(() => { publish() }, 5_000)
   heartbeat.unref()
 
-  if (state.peers.length === 0 || flagBoolean(options, 'pair')) {
-    say('')
-    const invitation = createInvitation(state, directAddresses)
-    await printInvitation(invitation, state, flagBoolean(options, 'link'))
-  } else {
-    say(`paired    ${String(state.peers.length)} device${state.peers.length === 1 ? '' : 's'} · run "bridle pair" to add another`)
-  }
-
   const shutdown = (): void => {
     clearInterval(heartbeat)
     relay.stop()
@@ -311,29 +330,42 @@ async function start(options: Options): Promise<void> {
   }
   process.on('SIGINT', shutdown)
   process.on('SIGTERM', shutdown)
-  await new Promise<never>(() => {})
+  return { state, directAddresses, relay }
 }
 
 async function pair(options: Options): Promise<void> {
   const state = loadState()
   const runtime = readRuntime()
-  if (flagBoolean(options, 'code') && runtime === undefined) {
-    // The running Bridle is what records the phone's request; without one the
-    // phone would wait for a question this command can never ask.
-    say('"bridle pair --code" needs a running bridle. Run "bridle" in another terminal (or "bridle service install"), then run this again.')
-    process.exitCode = 1
-    return
-  }
   if (runtime === undefined) {
-    // A printed invitation is answered by the running Bridle, not by this
-    // command — so with none running, a phone that scanned it waited on
-    // nothing. `bridle pair` is what the installer, the app and the site all
-    // say to run after installing, so here it becomes that Bridle: the same
-    // as `bridle --pair`, in the foreground, invitation first.
-    say('No bridle is running here, so this one will — it shows the code and keeps running.')
+    // An invitation is answered by the running Bridle, not by this command —
+    // so with none running, a phone that scanned it, or typed its code,
+    // waited on nothing. `bridle pair` is what the installer, the app and the
+    // site all say to run after installing, so here it becomes that Bridle,
+    // in the foreground, and stays.
+    if (!flagBoolean(options, 'code')) {
+      say('No bridle is running here, so this one will — it shows the code and keeps running.')
+      say('')
+      await start({ command: 'start', flags: new Map([...options.flags, ['pair', true]]) })
+      return
+    }
+    // Checked before starting anything: the code path asks its question here.
+    if (process.stdin.isTTY !== true) {
+      say('"bridle pair --code" has to ask you to accept the phone, so it needs a terminal.')
+      process.exitCode = 1
+      return
+    }
+    say('No bridle is running here, so this one will — it asks about the phone, then keeps running.')
     say('')
-    await start({ command: 'start', flags: new Map([...options.flags, ['pair', true]]) })
-    return
+    const launched = await launch(options)
+    if (launched === undefined) return
+    // The phone's claim reaches this Bridle through the Relay, so publish the
+    // code once it is registered there rather than into a gap.
+    await relayOnline(launched.relay)
+    say('')
+    await pairByCode(launched.state, createInvitation(launched.state, launched.directAddresses))
+    say('')
+    say('Bridle keeps running here. Ctrl-C to stop it; "bridle service install" keeps it running after login.')
+    await new Promise<never>(() => {})
   }
   const invitation = createInvitation(state, runtime?.direct ?? [])
   if (!flagBoolean(options, 'code')) {
@@ -380,7 +412,9 @@ async function pairByCode(state: ReturnType<typeof loadState>, invitation: Invit
     withdrawOffer(state, code)
     process.exit(130)
   }
-  process.once('SIGINT', giveUp)
+  // First in line: when this process is also the Bridle, its own shutdown
+  // exits on the same signal and would leave the code open.
+  process.prependOnceListener('SIGINT', giveUp)
   try {
     await awaitClaim(state, code)
   } finally {
@@ -432,6 +466,14 @@ async function awaitClaim(state: ReturnType<typeof loadState>, code: string): Pr
     // may have been displaced for a moment while the person was deciding.
     asked = undefined
     say('That request changed or expired while you were deciding; still waiting.')
+  }
+}
+
+/** Wait, briefly, for a Bridle started in this process to register at the Relay. */
+async function relayOnline(relay: RelayClient): Promise<void> {
+  const deadline = Date.now() + 15_000
+  while (relay.connectionState !== 'online' && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 200))
   }
 }
 
