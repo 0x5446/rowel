@@ -1,7 +1,7 @@
 /*
- * The front page. The other pages (help, get, privacy) keep `style.css`: they
- * are long reading, and a reading page wants a narrow column on paper. This
- * one is a pitch, so it gets the dark stage and the product in front.
+ * The whole site, one stylesheet: the front page's sections, and `.prose` for
+ * the reading pages (help, get, privacy, 404) — the same dark stage, the same
+ * bar and footer, so following a link does not land on a different product.
  *
  * No web fonts and no framework: the system font on Apple devices is SF Pro,
  * which is the typeface of the product being shown, and a page that makes one
@@ -52,7 +52,7 @@ code {
 .wrap { max-width: var(--wrap); margin: 0 auto; padding: 0 24px; }
 /* Grid children may shrink below their content, or one unbroken command line
    widens the whole column past a phone's screen. */
-.hero-inner > *, .highlight > *, .duo > *, .bento > *, .steps > * { min-width: 0; }
+.hero-inner > *, .highlight > *, .duo > *, .bento > *, .setup .steps > * { min-width: 0; }
 
 .grad {
   background: var(--grad);
@@ -160,8 +160,9 @@ code {
 }
 
 h1 {
-  margin: 1.4rem 0 0;
-  font-size: clamp(2.5rem, 5.4vw, 4.4rem);
+  margin: 0.6rem 0 0;
+  font-size: clamp(2.3rem, 4.6vw, 3.7rem);
+  text-wrap: balance;
   line-height: 1.04;
   font-weight: 750;
   letter-spacing: -0.035em;
@@ -214,6 +215,15 @@ h1 {
   color: var(--ink-faint);
   font-size: 0.88rem;
 }
+.requires { margin: 0.9rem 0 0; color: var(--ink-faint); font-size: 0.85rem; }
+.requires a { color: var(--ink-soft); }
+.eyebrow {
+  margin: 1.5rem 0 0;
+  font: 600 0.95rem var(--mono);
+  letter-spacing: 0.02em;
+  color: var(--a2);
+}
+.eyebrow a { color: inherit; text-decoration-color: rgba(34, 211, 238, 0.4); text-underline-offset: 0.2em; }
 .trust li::before { content: "✓"; margin-right: 0.45rem; color: var(--a2); }
 
 .hero-phone { display: flex; flex-direction: column; align-items: center; }
@@ -262,6 +272,7 @@ main { padding-bottom: 40px; }
 .highlight p, .duo p { margin: 1.2rem 0 0; color: var(--ink-soft); font-size: 1.1rem; max-width: 30rem; }
 .shot.focus-bottom { object-position: bottom; }
 
+.highlight .links { display: flex; flex-wrap: wrap; gap: 0.6rem 1.6rem; }
 .highlight .links a { color: var(--ink); font-weight: 500; text-decoration: none; border-bottom: 1px solid var(--line-strong); }
 .highlight .links a:hover { border-color: var(--a2); }
 
@@ -385,7 +396,7 @@ main { padding-bottom: 40px; }
 
 /* ---- Setup ---- */
 
-.steps {
+.setup .steps {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 16px;
@@ -393,7 +404,7 @@ main { padding-bottom: 40px; }
   padding: 0;
   list-style: none;
 }
-.steps li {
+.setup .steps li {
   padding: 28px;
   background: var(--bg-raise);
   border: 1px solid var(--line);
@@ -410,11 +421,11 @@ main { padding-bottom: 40px; }
   font-weight: 700;
   font-size: 0.9rem;
 }
-.steps h3 { margin: 1rem 0 0; font-size: 1.15rem; letter-spacing: -0.01em; }
-.steps p { margin: 0.8rem 0 0; color: var(--ink-soft); font-size: 0.95rem; }
-.steps .term { margin-top: 1rem; font-size: 0.8rem; }
+.setup .steps h3 { margin: 1rem 0 0; font-size: 1.15rem; letter-spacing: -0.01em; }
+.setup .steps p { margin: 0.8rem 0 0; color: var(--ink-soft); font-size: 0.95rem; }
+.setup .steps .term { margin-top: 1rem; font-size: 0.8rem; }
 /* A narrow column wraps the command rather than hiding half of it behind a scroll. */
-.steps .term code { white-space: normal; overflow-wrap: anywhere; }
+.setup .steps .term code { white-space: normal; overflow-wrap: anywhere; }
 
 /* ---- FAQ ---- */
 
@@ -468,6 +479,84 @@ main { padding-bottom: 40px; }
 .foot nav a { color: var(--ink-soft); text-decoration: none; font-size: 0.9rem; }
 .foot nav a:hover { color: var(--ink); }
 
+/* ---- Reading pages ---- */
+
+.page-head { max-width: 46rem; margin: 0 auto; padding: 72px 24px 8px; }
+.page-head h1 { margin: 0; font-size: clamp(2.2rem, 4.6vw, 3.4rem); line-height: 1.06; }
+.lede { margin: 1rem 0 0; color: var(--ink-soft); font-size: 1.2rem; line-height: 1.5; }
+
+.prose { max-width: 46rem; margin: 0 auto; padding: 16px 24px 24px; color: #c9ced8; }
+.prose h2 {
+  margin: 3.2rem 0 0.8rem;
+  color: var(--ink);
+  font-size: 1.6rem;
+  line-height: 1.2;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+.prose h3 { margin: 2rem 0 0.5rem; color: var(--ink); font-size: 1.15rem; font-weight: 650; }
+.prose p, .prose li { line-height: 1.7; }
+.prose p { margin: 0.9rem 0; }
+.prose ul, .prose ol { padding-left: 1.3rem; }
+.prose li { margin: 0.4rem 0; }
+.prose strong { color: var(--ink); }
+.prose a { color: var(--a2); text-underline-offset: 0.18em; }
+.prose pre {
+  margin: 1.1rem 0;
+  padding: 1rem 1.2rem;
+  overflow-x: auto;
+  background: var(--bg-raise);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  font: 0.86rem/1.6 var(--mono);
+}
+.prose pre code { background: none; padding: 0; }
+/* The install line and its kin: a terminal prompt, like the front page's. */
+.prose .command {
+  display: block;
+  margin: 1.1rem 0;
+  padding: 0.85rem 1rem;
+  overflow-x: auto;
+  white-space: nowrap;
+  background: var(--bg-raise);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  font-size: 0.9rem;
+}
+.prose .command::before { content: "$ "; color: var(--a2); }
+.prose table { width: 100%; margin: 1.3rem 0; border-collapse: collapse; font-size: 0.95rem; }
+.prose th, .prose td { padding: 0.7rem 0.8rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+.prose th { color: var(--ink); font-weight: 600; }
+.prose .note {
+  margin: 1.6rem 0;
+  padding: 1.1rem 1.3rem;
+  background: var(--bg-raise);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--a1);
+  border-radius: 12px;
+}
+.prose .note p { margin: 0.4rem 0; }
+.prose .steps { list-style: none; padding: 0; counter-reset: step; }
+.prose .steps > li { position: relative; margin: 1.6rem 0; padding-left: 2.8rem; }
+.prose .steps > li::before {
+  counter-increment: step;
+  content: counter(step);
+  position: absolute;
+  left: 0;
+  top: 0.1rem;
+  display: grid;
+  place-items: center;
+  width: 1.9rem;
+  height: 1.9rem;
+  border-radius: 50%;
+  background: var(--grad);
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.85rem;
+}
+.prose .steps h3 { margin-top: 0; }
+.updated { color: var(--ink-faint); font-size: 0.88rem; }
+
 /* ---- Narrow screens ---- */
 
 @media (max-width: 900px) {
@@ -477,7 +566,7 @@ main { padding-bottom: 40px; }
   .highlight { padding-top: 64px; padding-bottom: 64px; }
   .highlight.flip .blurb { order: 0; }
   .bento { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .steps { grid-template-columns: minmax(0, 1fr); }
+  .setup .steps { grid-template-columns: minmax(0, 1fr); }
   .card { padding: 28px; }
   .final { margin-left: 16px; margin-right: 16px; padding: 56px 20px; }
   .foot-inner { flex-direction: column; justify-content: center; gap: 0.8rem; height: auto; padding: 28px 24px; }
