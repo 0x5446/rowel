@@ -12,8 +12,8 @@ const server = new RelayServer({
   port: Number(process.env['PORT'] ?? '8787'),
   host: process.env['HOST'] ?? '0.0.0.0',
   log: (message: string) => { process.stdout.write(`${message}\n`) },
-  // An empty value turns the route off; unset falls back to the install.sh in
-  // the checkout, which is what a normal deployment wants.
+  // Off unless it names a file: a relay that hands out the installer turns one
+  // compromise into a supply-chain event (see `readInstaller`).
   ...(installScript === undefined ? {} : { installScript: installScript === '' ? null : installScript }),
 })
 

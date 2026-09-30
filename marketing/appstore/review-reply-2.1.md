@@ -32,7 +32,7 @@ work resuming.
 Harness ("dsh") coding agent on their own Mac. The problem it solves: the
 agent stops mid-task to ask permission while the developer is away from the
 desk, and the work sits blocked. Rowel delivers that request to the phone
-with the full command, and one tap resumes the Mac. It is a companion client
+with the command it wants to run, and one tap resumes the Mac. It is a companion client
 in the same shape as an SSH client or the Home Assistant app.
 
 3. Setup and access: the user installs a small companion program ("Bridle")

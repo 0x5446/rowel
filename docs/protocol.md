@@ -53,7 +53,7 @@ WebSocket 二进制消息
 | 字段 | 类型 | 必需 | 含义 |
 |---|---|---|---|
 | `v` | number | 是 | 载荷版本。当前恒为 `1`。 |
-| `relay` | string | 是 | Relay 基址，如 `wss://rowel.novabox.ai`。 |
+| `relay` | string | 是 | Relay 基址，如 `wss://rowel-relay.novabox.ai`。 |
 | `direct` | string[] | 否 | 直连候选，`ws://host:port`，**最优在前**。字段为 `undefined` 时整个键省略。 |
 | `device` | string | 是 | 设备 id，见 §2.3。 |
 | `key` | string | 是 | Bridle 的 X25519 静态**公钥**，32 字节，base64url 无填充。 |
@@ -105,7 +105,7 @@ device = base64url( sha256("rowel-device" ‖ ed25519_signing_public_key)[0..16]
 - 显示形式：`XXXX-XXXX`（中间一个连字符）
 - 生成：每字符取一个随机字节，`ALPHABET[byte % 28]`
 
-> 取模引入的偏置：256 mod 28 = 4，前 4 个字符概率略高（约 +2.4%）。8 字符的熵约 38.5 bit，短码只在 15 分钟内有效且一次性（§6.2），此偏置不构成实际风险。
+> 取模引入的偏置：256 mod 28 = 4，前 4 个字符每个概率约 3.9%，其余约 3.6%（高约 11%）。8 字符的熵约 38.5 bit，短码最长 10 分钟有效（Relay 最多持有 15 分钟）且一次性（§6.2），此偏置不构成实际风险。
 
 **归一化**（比较前必须执行）：
 
@@ -123,7 +123,7 @@ device = base64url( sha256("rowel-device" ‖ ed25519_signing_public_key)[0..16]
 
 ### 2.6 密钥指纹
 
-给人核对用（`bridle devices` 与 app 设置页显示同一个值）。
+给人核对用：`bridle pair --code` 显示申请手机的指纹，与 app 等待时显示的一致；`bridle status` 显示本机指纹，与 app 设置页一致。
 
 ```
 hex = uppercase( hex( sha256("rowel-identity" ‖ public_key) ) )
@@ -342,7 +342,7 @@ App **必须**应答 Bridle 的每个 `ping`。Bridle 连续 2.5 个 ping 周期
 
 **`ev`** — 下行事件
 
-| `t` = `"ev"` | `seq` = 隧道级单调序号 | `stream` = `"mux"` \| `"host"` | `frame` = agent 的 `server-request` 帧，原样 |
+| `t` = `"ev"` | `seq` = Bridle 进程级单调序号 | `stream` = `"mux"` \| `"host"` | `frame` = agent 的 `server-request` 帧，原样 |
 
 **`resync`** — 有事件没送到这个 App
 
@@ -374,7 +374,7 @@ Bridle **必须**限制单条隧道的在途 `req` 数量。当前实现为 **64
 
 ### 4.5 事件序号与重放
 
-- `seq` 由 Bridle 分配，**每条隧道内**单调递增，从 1 开始
+- `seq` 由 Bridle 进程分配，所有隧道共用一套编号，每个进程从 1 开始（以 `epoch` 区分进程）
 - Bridle 持有环形缓冲；默认容量 **2000** 条（`EventLog` 构造参数可覆盖，测试用小值验证溢出路径）
 - `resume{since, epoch}` 时：`epoch` 存在且不等于本进程的，或 `since` 大于当前最高序号 → `resync{from: 最高序号}`；否则若 `since >= 缓冲最早序号 - 1`，重放 `since` 之后全部；否则 `resync{from}`
 - **禁止**静默丢弃：超大事件丢弃后立即发 `resync`（`seq: 0` 的待处理请求快照除外——它不是日志中的位置）
@@ -421,15 +421,15 @@ u32 circuit （大端）
 WakeRequest = { token: string, machine?: string }
 ```
 
-Relay 收到 `Wake` 后向 APNs 发一条**固定文案**的通知。文案是 Relay 代码里的常量，`WakeRequest` **没有**可以放正文的字段 —— 这不是"Relay 承诺不看"，是**没有东西可看**。手机醒来后自己开隧道去机器上取内容，本地发通知。
+Relay 收到 `Wake` 后向 APNs 发一条**固定文案**的通知。文案是 Relay 代码里的常量加机器名：Relay 只读 `token` 和 `machine`（截到 64 字符），其余字段忽略。推送不会运行 app；用户点开后 app 重连隧道，才显示机器上的真实请求。
 
 `machine` 不是新泄露的信息：Relay 的目录里本来就存着机器名（`GET /v1/machine/:id` 就是答它）。
 
 Relay 没配 APNs 密钥时，`Wake` **必须**是 no-op，**禁止**因此断开机器。
 
-反向的 `{ token, dead: true }` **只在**苹果明确说设备已消失时发送（HTTP 410 `Unregistered`，或两个主机都回 `BadDeviceToken`）。限流、鉴权失败、苹果 5xx、配置不全 —— 一律**禁止**回传 `dead`：Bridle 收到就会删 token，而那些都是临时故障，删掉的是一个好地址。
+反向的 `{ token, dead: true }` **只在**苹果明确说设备已消失时发送（HTTP 410 `Unregistered`，或两个主机都回 `BadDeviceToken`），以及 token 本地格式就不合法时。限流、鉴权失败、苹果 5xx、配置不全 —— 一律**禁止**回传 `dead`：Bridle 收到就会删 token，而那些都是临时故障，删掉的是一个好地址。
 
-Bridle **禁止**在注册完成前发送 `Wake`：Relay 对注册前的二进制帧的处理是断开连接。振铃时机若不满足，**应当**记住并在注册完成后补发 —— `onWaiting` 只触发一次，丢了就是永久丢了。
+Bridle **禁止**在注册完成前发送 `Wake`：Relay 对注册前的二进制帧的处理是断开连接。振铃时机若不满足，**应当**记住并在注册完成后补发 —— Bridle 从待处理请求列表推导欠下的振铃（`dueForRing`），注册完成时补发，不能靠一次性的事件。
 
 未知 type **必须**拒绝（而非忽略）——这一层是二进制且长度定死，未知类型意味着解析错位。
 
@@ -442,7 +442,7 @@ Relay **禁止**解析 `Data` 的 payload。
 | 方法 | 路径 | 用途 |
 |---|---|---|
 | `GET` | `/healthz` | 存活与粗粒度计数 |
-| `GET` | `/install` | 安装脚本（`curl \| sh`），文本 |
+| `GET` | `/install` | 安装脚本（`curl \| sh`），文本。仅 Node relay 且配置了 `ROWEL_INSTALL_SCRIPT` 时；线上 Worker 回 404 |
 | `GET` | `/v1/machine/<deviceId>` | 该机器是否在线 |
 | `POST` | `/v1/pair/offer` | Bridle 挂一个短码邀请 |
 | `GET` | `/v1/pair/claim?code=` | App 用短码换配对载荷，**一次性** |
@@ -479,7 +479,7 @@ Relay 侧限制（硬编码，非配置项）：
 |---|---|
 | 单帧最大 | 32 MiB |
 | 注册超时 | 15 秒 |
-| 心跳 | 25 秒 |
+| 心跳 | 25 秒（Node relay；Worker 没有 relay 侧心跳，靠 Bridle 侧 62.5 秒无应答自断） |
 | 每机器并发 circuit | 8 |
 | 每设备待领短码 | 3 |
 | 短码有效期上限 | 15 分钟（请求更长会被截断） |
@@ -494,7 +494,7 @@ Relay 侧限制（硬编码，非配置项）：
 Bridle 监听 `0.0.0.0:<port>`（`--direct-port`，`0` 表示由系统分配）。
 
 - 路径：`/v1/tunnel`（`DIRECT_PATH`）
-- **非 WebSocket upgrade 的请求必须返回 `426`**，且**禁止**返回任何 API 内容
+- **非 WebSocket upgrade 的请求必须返回 `426`**（路径不对的 upgrade 回 `400`），且**禁止**返回任何 API 内容
 - WebSocket 消息直接是 Noise 消息，**无 mux 头**
 - 单条消息上限与隧道一致：32 MiB（`MAX_FRAME_BYTES`）
 - 未完成握手的连接同时最多 **8** 条，从 TCP 建连起计数；超出的在 **TCP 层直接断开**（WebSocket 升级之前，客户端看到的是连接重置，没有关闭码）。连接总数上限 **16**（8 条未认证 + 8 台已配对手机）。HTTP 升级请求和 Noise 握手都须在 **10 秒**内完成，否则断开。这个端口对同一网络上的任何人开放，而 Relay 那条路有每机 8 条线路的上限，这里原来没有

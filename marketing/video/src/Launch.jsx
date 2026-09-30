@@ -9,7 +9,7 @@ import { Cut } from './Cut.jsx'
 const LINES = [
   { beat: 'notified', offset: 0.7, text: 'It found you.' },
   { beat: 'opened', offset: 0.2, text: 'Your agent stopped to ask.' },
-  { beat: 'asked', offset: 1.2, text: 'The whole command. Not a summary.' },
+  { beat: 'asked', offset: 1.2, text: 'What it wants to run, and why.' },
   { beat: 'allowed', offset: 0.1, text: 'One tap, from wherever you are.' },
   { beat: 'allowed', offset: 3.4, text: 'The Mac carries on.' },
 ]

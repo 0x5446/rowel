@@ -69,9 +69,10 @@ defects. Each one is expanded below.
 **A tunnel the relay cannot open.** The app and the Bridle complete a
 `Noise_IK_25519_ChaChaPoly_SHA256` handshake with each other. The relay switches
 sealed frames between two sockets by circuit number and holds no key material.
-This is checked, not asserted: the e2e test `the relay only ever sees ciphertext`
-taps the socket and fails if a canary string, a method name, the machine name, or
-a session id appears on the wire.
+This is tested, locally: the e2e test `the relay only ever sees ciphertext` taps
+the phone-to-relay leg of a Node relay and fails if a canary string, a method
+name, the machine name, or a session id appears on it. It needs a running
+harness, so it is not part of CI.
 
 Both ends use only their platform's own primitives — Node's `node:crypto`, Swift's
 `CryptoKit`, WebCrypto in the Worker. There is no third-party cryptography
@@ -105,20 +106,20 @@ owner's phone has used it, the token is gone and the thief is an unpaired
 stranger. Test: `a stolen pairing token works exactly once`.
 
 **The local-network listener is not a web server.** The Bridle's LAN listener
-answers `426` to anything that is not a WebSocket upgrade on exactly one path. It
+answers `426` to anything that is not a WebSocket upgrade, and `400` to an
+upgrade on any path but its one. It
 never exposes a byte of the harness API to the network, even to a host on the
 same Wi-Fi. Test: `the direct listener is not a web server`. This matters more
 than it sounds: the harness has no authentication of its own, so a plain
 `socat` from `0.0.0.0` to its loopback port would hand unauthenticated remote
 code execution to the whole subnet.
 
-**Push carries no content.** The message the relay is able to send to Apple is a
-constant in `relay-worker/src/apns.ts`, plus the machine's display name. The
-structure the Bridle uses to ask for a wake has two fields, `token` and
-`machine` — there is no field an over-helpful Bridle could put the agent's
-question into, so nothing rests on the relay choosing not to read one. The push
-does not run the app; the real words appear when you open it and it reconnects
-over its own Noise channel.
+**Push carries no content.** The relay takes only `token` and `machine` from a
+wake request, cuts `machine` to 64 characters, and ignores anything else, so the
+most a push can say is the constant sentence in `relay-worker/src/apns.ts` plus
+64 characters of whatever the Bridle calls the machine — its `machineName`. The
+push does not run the app; the real words appear when you open it and it
+reconnects over its own Noise channel.
 
 ### What it does not protect, and cannot
 
@@ -148,8 +149,9 @@ phone paired with it, and anything that can run as your user already has the
 harness anyway.
 
 **An unlocked, paired phone is a shell with no further challenge.** The app locks
-itself with Face ID, Touch ID, or a passcode on launch and after an idle timeout,
-and covers its own screen when it stops being frontmost. Read what that is for:
+itself with Face ID, Touch ID, or a passcode on launch and once it has been out
+of the foreground longer than a delay you choose (one minute by default), and
+covers its own screen when it stops being frontmost. Read what that is for:
 it bounds the window, it does not close it. Approvals are deliberately not behind
 a second authentication — a lock people have to defeat forty times a day is a
 lock people turn off. The lock does not protect data at rest, and it does not
@@ -160,12 +162,18 @@ hold on a jailbroken device. If you lose the phone, the thing that revokes it is
 the machine still lists the phone. A phone asking to be forgotten is exactly the
 phone whose word should not be taken for it.
 
-**The relay learns metadata.** It cannot read your traffic and it stores nothing
-between sessions, but it necessarily observes: the machine's device id, its
-display name in clear text (it defaults to your computer's name — edit
-`machineName` in `~/.rowel/bridle.json`), the Bridle version, that some phone has
-a circuit open to some machine and when it opened, message sizes and timing, and
-your IP address. If you push, it also learns the association between an Apple
+**The relay learns metadata.** It cannot read your traffic, but it necessarily
+observes: the machine's device id, its display name in clear text (it defaults to
+your computer's name — edit `machineName` in `~/.rowel/bridle.json`), the Bridle
+version, that some phone has a circuit open to some machine and when it opened,
+message sizes and timing, and your IP address — and, if you pair with a typed
+code, the pairing bundle (the machine's public key, its local network addresses
+and the code's token) until a phone claims it or it lapses. While a Mac is
+online the hosted relay keeps a row about it (device id, name, version, connect
+time) in Cloudflare's SQLite-backed storage, deleted when it disconnects;
+Cloudflare can restore that storage for 30 days, and nothing in the relay does.
+Its code prints a line naming the device id when a machine re-registers over a
+live connection, and a line when a push fails; logs are not kept. If you push, it also learns the association between an Apple
 device token and a machine, and it holds an APNs signing key — a relay that can
 wake your phone is no longer only a dumb pipe, and that is an unavoidable
 consequence of push rather than a design choice that could have gone the other
@@ -185,13 +193,15 @@ database.
 bridges, VPN legs, and a tailnet. Its `426` body names it, which makes it
 identifiable to any scanner and therefore points at a machine running an
 unauthenticated harness. Nothing on that path is authenticated below Noise: the
-transport is plain `ws://`, and the listener has no connection cap or rate limit
-of its own, so a host on your network can make it allocate handshake state
-indefinitely.
+transport is plain `ws://`. The listener admits at most eight connections that
+have not completed a handshake and drops any that take longer than ten seconds,
+but it has no rate limit, so a host on your network can keep those places full
+and push your phone onto the relay.
 
 **The installer is `curl | sh` with no signature.** It clones a pinned tag over
 HTTPS and builds from source. There is no checksum and no signed commit. If you
-do not want that, read `install.sh` first — it is 150 lines, mostly comments —
+do not want that, read `install.sh` first — under 150 lines, a third of them
+comments —
 and run the steps yourself.
 
 **No one has audited this.** No external review, no formal analysis, no
@@ -243,8 +253,8 @@ online status and display name indefinitely.
 
 **Every paired phone is rung for every waiting request.** The Bridle wakes all
 distinct device tokens it knows, not just the one that will act. If you have
-paired an old phone and forgotten it, it still buzzes — and its token is still
-associated with your machine at the relay.
+paired an old phone and forgotten it, it still buzzes, and every ring hands its
+token to the relay alongside your machine's name.
 
 **`scripts/lan-webui.mjs` deliberately defeats the loopback fence.** It is a
 development script, it says what it is doing in its own header, and it must never
@@ -266,7 +276,7 @@ parts a security reader needs. If you are reading source instead:
 | The properties as executable tests | `e2e/tests/security.test.js`, `e2e/tests/direct.test.js` |
 | Byte-level wire specification | `docs/protocol.md` (Chinese) |
 | Design rationale for all of the above | `docs/architecture.md` §5, §7, §14 (Chinese) |
-| The invariant list, each with its guarding test | `docs/architecture.md` §16 (Chinese) |
+| The invariant list and the tests that guard them (some still to be written) | `docs/architecture.md` §16 (Chinese) |
 
 `docs/README.md` records which sections are specification-grade — implemented,
 tested, safe to reimplement from — and which are design-grade. Do not read a

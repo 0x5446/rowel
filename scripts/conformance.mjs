@@ -33,12 +33,6 @@ const targets = deployed
       // The address every app and Bridle dials, served by whichever
       // implementation is currently deployed to it.
       { name: 'live · rowel-relay.novabox.ai', url: 'wss://rowel-relay.novabox.ai' },
-      // The Node relay on its own name. It needs one: the Worker routes take
-      // /healthz and /v1/* at the edge, so from the moment they went live the
-      // box became unreachable and therefore untestable. A fallback nobody can
-      // exercise is not a fallback, which is the whole reason this address
-      // exists — see docs/deployment.md §1.6.
-      { name: 'standby · rowel-relay-standby.novabox.ai', url: 'wss://rowel-relay-standby.novabox.ai' },
     ]
   : [
       { name: 'the Node relay', url: null, spawn: nodeRelay },
