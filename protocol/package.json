@@ -1,6 +1,6 @@
 {
   "name": "@rowel/protocol",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Wire format shared by the Rowel app, Bridle, and Relay: Noise IK, tunnel frames, pairing payloads, relay muxing.",
   "license": "MIT",
   "type": "module",

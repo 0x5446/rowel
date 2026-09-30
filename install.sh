@@ -35,7 +35,7 @@ REPO="${ROWEL_REPO:-https://github.com/0x5446/rowel.git}"
 # a relay that had been retired. Nothing downstream can catch it, because from
 # here a stale tag and a current one look identical. Bump this in the same
 # commit as the CHANGELOG heading; they are one decision, not two.
-REF="${ROWEL_REF:-v0.1.5}"
+REF="${ROWEL_REF:-v0.1.6}"
 SRC_DIR="${ROWEL_SRC:-$HOME/.rowel/src}"
 
 # Colour only when a human is watching. Piped output stays plain.
@@ -131,11 +131,14 @@ esac
 
 say ""
 say "${bold}Rowel Bridle is installed.${off}"
-say "${dim}Next: pair your iPhone. This prints a QR code — point Rowel at it.${off}"
+say "${dim}Next: pair your iPhone. This starts Bridle and prints a QR code — point Rowel at it.${off}"
 say ""
 
 # Running `bridle pair` directly would inherit the pipe from `curl | sh` as its
 # stdin, which is already at EOF, so the QR would flash past. Tell them the
 # command instead; it is one line and they are already in a terminal.
 say "  ${bold}bridle pair${off}"
+say ""
+say "${dim}If no Bridle was running yet, it stays in that terminal. Once the phone is in,${off}"
+say "${dim}Ctrl-C and run ${bold}bridle service install${off}${dim} to keep it running after login.${off}"
 say ""

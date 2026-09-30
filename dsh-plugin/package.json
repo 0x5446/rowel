@@ -1,6 +1,6 @@
 {
   "name": "@rowel/bridle-plugin",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Reach your DeepSeek Harness from your phone. Installs the Rowel Bridle into dsh so there is no second process to run.",
   "license": "MIT",
   "type": "module",

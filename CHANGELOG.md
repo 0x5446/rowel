@@ -7,6 +7,16 @@ Versions are the tags `install.sh` can install. `ROWEL_REF` in that script names
 the one it installs by default, so a release here and a change to that line are
 the same decision.
 
+## 0.1.6 — 2026-09-30
+
+- **`bridle pair` works on a fresh install.** It is what the installer, the
+  app and the site tell a new person to run, but it only printed a pairing
+  code and exited — and a code is answered by the running Bridle, so with none
+  running, the phone that scanned it waited on nothing. With no Bridle running
+  it now becomes one, like `bridle --pair`: the code first, then it keeps
+  running. `bridle pair --code` still needs a Bridle already running, and says
+  so. The installer's last lines now say how to move it into the background.
+
 ## 0.1.5 — 2026-09-29
 
 - **The dsh plugin says the version it is.** It reported 0.1.2 to `bridle

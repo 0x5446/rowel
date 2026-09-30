@@ -128,6 +128,25 @@ test('the first run pairs a phone with no configuration at all', { skip, timeout
   assert.equal((await phone.call('host.describe', {})).ok, true)
 })
 
+test('pair with nothing running becomes the bridle, so the scan is answered', { skip, timeout: 120_000 }, async (t) => {
+  // What the installer, the app and the site tell a new person to run. It used
+  // to print a code and exit, and the phone that scanned it waited on nothing.
+  const { cli, relayUrl } = await fixture(t)
+
+  const started = await cli.spawn(
+    ['pair', '--relay', relayUrl, '--dsh', DSH_URL, '--no-auto-start'],
+    RELAY_UP,
+  )
+  t.after(() => { started.child.kill('SIGKILL') })
+  assert.match(started.out(), /No bridle is running here, so this one will/u, 'it says why it is staying')
+
+  const phone = new RowelPhone({ bundle: bundleFrom(started.out()), prefer: 'relay', name: 'New iPhone' })
+  t.after(() => { phone.close() })
+  const ready = await phone.connect()
+  assert.equal(ready.dshReachable, true)
+  assert.equal(started.child.exitCode, null, 'it keeps running after the phone is in')
+})
+
 test('a second device is added from another terminal while the bridle runs', { skip, timeout: 120_000 }, async (t) => {
   const { cli, relayUrl } = await fixture(t)
   const started = await cli.spawn(['start', '--relay', relayUrl, '--dsh', DSH_URL, '--no-auto-start'], RELAY_UP)

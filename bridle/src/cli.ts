@@ -320,14 +320,20 @@ async function pair(options: Options): Promise<void> {
   if (flagBoolean(options, 'code') && runtime === undefined) {
     // The running Bridle is what records the phone's request; without one the
     // phone would wait for a question this command can never ask.
-    say('"bridle pair --code" needs a running bridle. Start one with "bridle start", then run this again.')
+    say('"bridle pair --code" needs a running bridle. Run "bridle" in another terminal (or "bridle service install"), then run this again.')
     process.exitCode = 1
     return
   }
   if (runtime === undefined) {
-    say('No bridle is running on this machine. Start one with "bridle start" first,')
-    say('or keep this invitation and start it before scanning.')
+    // A printed invitation is answered by the running Bridle, not by this
+    // command — so with none running, a phone that scanned it waited on
+    // nothing. `bridle pair` is what the installer, the app and the site all
+    // say to run after installing, so here it becomes that Bridle: the same
+    // as `bridle --pair`, in the foreground, invitation first.
+    say('No bridle is running here, so this one will — it shows the code and keeps running.')
     say('')
+    await start({ command: 'start', flags: new Map([...options.flags, ['pair', true]]) })
+    return
   }
   const invitation = createInvitation(state, runtime?.direct ?? [])
   if (!flagBoolean(options, 'code')) {
@@ -773,7 +779,7 @@ function usage(): void {
   process.stdout.write(`Rowel Bridle ${VERSION} — reach your local DeepSeek Harness from your phone.
 
   bridle                    start the bridle (and pair, on first run)
-  bridle pair               show a new pairing QR (--code: a code to type instead)
+  bridle pair               show a new pairing QR, starting bridle if none runs (--code: a code to type)
   bridle status             machine, relay, harness, and paired devices
   bridle devices            list paired devices
   bridle instances          every identity on this machine, and who runs it
