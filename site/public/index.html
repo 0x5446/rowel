@@ -90,8 +90,8 @@
     <span class="num">02</span>
     <h2>The exact command.<br>Not a summary.</h2>
     <p>
-      Every approval sits under the tool call it is for — the full command
-      or the diff — with the reason dsh gives. You decide on what will
+      Every approval arrives with the tool call it is for — the full command
+      or the diff — and the reason dsh gives. You decide on what will
       actually execute, then the Mac carries on while you are still on the
       train.
     </p>
@@ -107,7 +107,7 @@
     <p>
       Phone and Mac run a Noise&nbsp;IK handshake with each other, not with
       us. Our relay forwards sealed frames it holds no key for — and an
-      end-to-end test taps the phone's traffic through it and fails if a
+      end-to-end test taps the phone's traffic through a relay and fails if a
       method name, a session id or a conversation title ever shows up. On the
       same Wi-Fi the phone usually goes straight to the Mac, and the relay
       never carries the session.
@@ -228,7 +228,7 @@
         <code>bridle pair</code>
         <button type="button" class="copy" aria-label="Copy the pairing command">Copy</button>
       </div>
-      <p>Starts Bridle if it isn't running, prints a QR code, and stays running.</p>
+      <p>Prints a QR code. With no Bridle running yet, it becomes one and stays running.</p>
     </li>
     <li>
       <span class="step">3</span>
@@ -325,7 +325,7 @@ open ios/Rowel.xcodeproj   # pick your iPhone, Run</code></pre>
     </details>
     <details>
       <summary>Uninstalling</summary>
-      <p><code>bridle service uninstall</code> if you installed the service, then <code>rm -rf ~/.rowel ~/.local/bin/bridle</code>. There is no account to close.</p>
+      <p><code>bridle service uninstall</code> if you installed the service, then <code>rm "$(command -v bridle)"</code> and <code>rm -rf ~/.rowel</code>. There is no account to close.</p>
     </details>
   </div>
   <p class="after">Still stuck? <a href="https://github.com/0x5446/rowel/issues">Open an issue</a> or write to <a href="mailto:hi@novabox.ai">hi@novabox.ai</a>.</p>
