@@ -5,8 +5,9 @@
 | 域名 | 是什么 |
 |---|---|
 | `rowel-relay.novabox.ai` | Relay。app 和 Bridle 拨的就是这个，别的什么都没有 |
-| `rowel.novabox.ai` | 官网四个页面 + `/install` 重定向。**不承载任何中继路径** |
-| `rowel-relay-standby.novabox.ai` | Node relay 的常驻备用地址，见 §1.6 |
+| `rowel.novabox.ai` | 官网（单页 + 隐私页，`/help` `/get` 跳转）+ `/install` 重定向。**不承载任何中继路径** |
+
+曾经还有第三个：`rowel-relay-standby.novabox.ai`，北京一台 ECS 上的 Node relay，经 Cloudflare Tunnel 挂出来当备用。2026-09-30 下线并删掉了 DNS 与隧道：它在 Cloudflare 后面，Cloudflare 出事它也不通，算不上独立的故障切换；客户端也从没指向过它。
 
 它们共用过一天同一个域名，那是个错误：站点是公开营销页，Relay 是基础设施，而 Cloudflare 的每一项控制（缓存规则、WAF 规则、"我正被攻击"开关）都是**按主机名生效的**。一条冲着页面去的规则会连 Relay 一起命中，而 Relay 是不能挂的那一半。共用还意味着任一侧的 Worker 写出 `/*` 路由就能把另一侧整个吞掉。
 
@@ -27,26 +28,22 @@
 
 ## 当前生产部署
 
+没有自己的主机，两样都是 Cloudflare Worker：
+
 | 项 | 值 |
 |---|---|
-| 主机 | 阿里云北京，Ubuntu 26.04，2 核 / 1.5 GB |
-| Relay | systemd `rowel-relay`，监听 `127.0.0.1:8787`，**不开公网端口** |
-| 源码路径 | `/opt/rowel`，`root:root` 只读，服务账号 `rowel`（nologin） |
-| 入口 | Cloudflare Tunnel `rowel-relay`，systemd `cloudflared` |
-| 隧道配置 | `/etc/cloudflared/config.yml`（本地管理，不是面板管理） |
-| `rowel-relay.novabox.ai` | Cloudflare Worker `rowel-relay`（custom domain），Durable Objects |
-| `rowel-relay-standby.novabox.ai` | 北京那台的 Node relay，经隧道 |
-| `rowel.novabox.ai` | Worker `rowel-site`（静态资源，无源站）+ `/install` 重定向规则 |
+| `rowel-relay.novabox.ai` | Worker `rowel-relay`（`relay-worker/`，custom domain），Durable Objects，SQLite 后端存储，`observability` 关 |
+| `rowel.novabox.ai` | Worker `rowel-site`（`site/`，custom domain），纯静态资源，无源站 |
 
 站点那个域名按路径分：
 
 | 路径 | 谁在服务 | 为什么 |
 |---|---|---|
-| `/`、`/get`、`/help`、`/privacy` | Worker 静态资源，跑在边缘 | 无源站。Relay 挂了隐私页不能跟着挂，App Store 审核会去拉那个链接 |
-| `/_/*` | 同上 | 站点自己的静态资源。加 favicon 时不用再加一条路由 |
-| `/install` | Cloudflare 重定向规则 → GitHub raw | 中继和安装链路必须是两个信任域 |
+| `/`、`/privacy`、`/_/*` | 静态资源，跑在边缘 | 无源站。Relay 挂了隐私页不能跟着挂，App Store 审核会去拉那个链接 |
+| `/help`、`/get` | `site/public/_redirects`，301 到 `/#help`、`/#get` | 旧页面地址，app 帮助按钮、App Store 支持 URL、CLI 还在用 |
+| `/install` | `site/public/_redirects`，302 → GitHub raw | 中继和安装链路必须是两个信任域 |
 
-**站点 Worker 的路由绝不能写成 `/*`**。虽然 Relay 已经搬走了，`/install` 那条重定向规则仍在这个域名上，一个通配路由会把它吞掉，而四个页面依然返回 200 —— 看起来一切正常。
+站点绑的是整个 `rowel.novabox.ai`（custom domain），这个域名上没有别的东西；`/install` 是 `_redirects` 里的一行，随站点部署。
 
 验证方式是 `e2e/tests/deployed.test.js`，它打的是真实公网地址而不是进程内的 Relay：
 
@@ -54,7 +51,7 @@
 ROWEL_E2E_RELAY_URL=wss://rowel-relay.novabox.ai npm run build && \
   node --test e2e/tests/deployed.test.js
 
-# 或者两套 Relay 一起验，确认随时可切：
+# 或者跑一致性套件打线上地址：
 npm run conformance:deployed
 ```
 
@@ -64,7 +61,9 @@ npm run conformance:deployed
 
 ## 1. Relay
 
-Relay **没有持久内容，但有连接撮合状态**。它不存数据库、不存明文、没有配置文件，全部配置来自环境变量——但设备、线路、待领短码都在进程内存里（`registry.ts` / `offers.ts`）。
+本节讲 Node relay（`relay/`）：自建和测试用的实现。线上跑的是 `relay-worker/`，它的状态写在 SQLite 后端的 Durable Object 存储里（`exchange.ts` 的 `MachineRow`/`OfferSlots`、`pair-code.ts` 的 `HeldOffer`），见 §1.6 的差异表。
+
+Node relay **没有持久内容，但有连接撮合状态**。它不存数据库、不存明文、没有配置文件，全部配置来自环境变量——但设备、线路、待领短码都在进程内存里（`registry.ts` / `offers.ts`）。它往 stdout 打上下线日志（含机器名和 deviceId）。
 
 这个区别在部署时是全部：**进程退出会断掉每一条在线连接，并丢掉所有待领短码。**
 
@@ -80,7 +79,7 @@ PORT=8787 node relay/lib/main.js
 |---|---|---|
 | `PORT` | `8787` | 监听端口 |
 | `HOST` | `0.0.0.0` | 监听地址 |
-| `ROWEL_INSTALL_SCRIPT` | 仓库里的 `install.sh` | `/install` 返回哪个文件；设成空字符串就关掉这个路由 |
+| `ROWEL_INSTALL_SCRIPT` | 不设（关闭） | 指向一个文件，`/install` 才返回它 |
 
 ### 路由
 
@@ -94,7 +93,7 @@ PORT=8787 node relay/lib/main.js
 | `WS` | `/v1/bridle` | Bridle 的常连 |
 | `WS` | `/v1/app` | app 的连接 |
 
-`/install` 这条路由**默认关闭**（`ROWEL_INSTALL_SCRIPT=` 空字符串）。
+`/install` 这条路由**默认关闭**（不设 `ROWEL_INSTALL_SCRIPT`）。
 
 它存在是给自托管的人用的——自己跑一套时，一个域名一次部署确实省事。但**官方部署不开它**：把安装脚本和公网中继放在同一个部署单元，等于把一次中继入侵放大成对所有新用户的供应链投毒。官方的安装脚本从仓库直接取（§2）。
 
@@ -118,7 +117,7 @@ DNS 在 Cloudflare，所以最省事的两条路：
 
 **A. 有公网机器** —— A 记录 `rowel` 指向那台机器，橙云（proxied）打开。Cloudflare 的代理支持 WebSocket，不用额外开关。源站上放 Caddy 或者直接让 Cloudflare 回源到 8787。
 
-**B. Cloudflare Tunnel** —— 现在用的就是这条。理由见下面的备案一节；简单说是：这台机器在中国大陆，备案这条路对 `.ai` 是死的，隧道让执法链条够不着。**注意这是"够不着"，不是"不适用"**——早先这里写的是"不监听公网端口就不构成对外提供服务"，那句话是错的。
+**B. Cloudflare Tunnel** —— 北京那台（已下线）当年用的是这条。理由见下面的备案一节；简单说是：这台机器在中国大陆，备案这条路对 `.ai` 是死的，隧道让执法链条够不着。**注意这是"够不着"，不是"不适用"**——早先这里写的是"不监听公网端口就不构成对外提供服务"，那句话是错的。
 
 ```sh
 cloudflared tunnel login                      # 浏览器授权，写出 ~/.cloudflared/cert.pem
@@ -185,7 +184,7 @@ sudo cloudflared service install              # 读 /etc/cloudflared/config.yml
 
 ### 横向扩展：现在做不到，原因要说清楚
 
-Relay 按 deviceId 在**进程内存**里撮合两条 socket，app 和 Bridle 必须落到同一个进程。
+Node relay 按 deviceId 在**进程内存**里撮合两条 socket，app 和 Bridle 必须落到同一个进程。（线上的 Worker 用 Exchange 这个 Durable Object 做设备目录，已经解决了这个问题。）
 
 早期文档建议"按 deviceId 做一致性哈希的 L4 分流"。**那行不通**：Bridle 建连时 URL 里没有 deviceId，它在 WebSocket 建立**之后**的注册消息里，四层负载均衡在建连时拿不到。
 
@@ -198,9 +197,9 @@ Relay 按 deviceId 在**进程内存**里撮合两条 socket，app 和 Bridle �
 
 ### 它拿不到什么
 
-Relay 看不到明文、看不到你的 dsh 地址、看不到会话内容。它知道的全部是：哪个 deviceId 在线、谁连了谁、搬了多少字节。
+Relay 看不到明文、看不到你的 dsh 地址、看不到会话内容。它知道的是：deviceId、明文机器名、Bridle 版本、IP、哪条线路何时建立、字节数与时序；振铃时的 device token；短码配对时持有的 bundle（公钥、局域网地址）。
 
-这不是承诺，是结构上做不到——加密在 Bridle 和 app 之间，Relay 只有密文。`e2e/tests/security.test.js` 里的 `the relay only ever sees ciphertext` 盯着这一条。
+内容看不到不是承诺，是结构上做不到——加密在 Bridle 和 app 之间，Relay 只有密文。`e2e/tests/security.test.js` 里的 `the relay only ever sees ciphertext` 盯着这一条（在本机有 dsh 时跑，打 Node relay，不在 CI 里）。
 
 ---
 
@@ -258,15 +257,17 @@ Relay 看不到明文、看不到你的 dsh 地址、看不到会话内容。它
 
 **扩大规模前重新评估这一节。**上面的风险评估建立在"个人、小流量、不公开推广"之上；有真实用户之后每一条的概率都变。
 
+**后续**：2026-08 Relay 迁到了上表第三行（Cloudflare Workers + Durable Objects），北京 ECS 先降为备用，2026-09-30 下线。境内已经没有我们的机器，上面第 2、3 条风险随之不再适用；第 1 条（中国区 App Store 要备案号）仍然成立。
+
 ---
 
-## 1.6 Node relay 备用（`rowel-relay-standby.novabox.ai`）
+## 1.6 Node relay 与 Worker 的差异
 
-线上的 `rowel-relay.novabox.ai` 是 Cloudflare Worker（`relay-worker/`）。北京那台上的 Node relay（`relay/`）经隧道挂在自己的名字上，用途有三个：本地与 e2e 测试用的 relay、自建 relay 的参考实现、以及出事时可以把流量切过去的备用。它需要单独一个名字：Worker 在边缘接管了 `/healthz` 与 `/v1/*`，没有这个名字它就无法被测到，而测不到的备用不是备用（`npm run conformance:deployed` 两套一起验）。
+线上的 `rowel-relay.novabox.ai` 是 Cloudflare Worker（`relay-worker/`）。`relay/` 里的 Node relay 是本地与 e2e 测试用的 relay、也是自建 relay 的参考实现；它没有公开部署（北京那台备用已于 2026-09-30 下线，见文首）。
 
-**切过去之前要知道的：Node relay 不发推送。**收到 Bridle 的 `Wake` 直接丢弃（只有测试构造时带 `recordWakes` 才记录；默认不留任何 token），从不调 APNs——推送要的签名密钥属于一个部署，不属于测试。所以切到备用期间，手机不在前台时机器停下来提问，**没有人会被叫醒**。配对、隧道、历史这些都照常。
+**自建时要知道：Node relay 不发推送。**收到 Bridle 的 `Wake` 直接丢弃（只有测试构造时带 `recordWakes` 才记录；默认不留任何 token），从不调 APNs——推送要的签名密钥属于一个部署，不属于测试。所以用它时，手机不在前台时机器停下来提问，**没有人会被叫醒**。配对、隧道、历史这些都照常。
 
-两套实现的行为差异不止这一处，改其中一边时要看另一边：
+两套实现的行为差异不止推送，改其中一边时要看另一边：
 
 | 项 | Worker | Node |
 |---|---|---|
@@ -276,22 +277,21 @@ Relay 看不到明文、看不到你的 dsh 地址、看不到会话内容。它
 
 ## 2. DNS
 
-已经加好了，`cloudflared tunnel route dns` 建的：
+两个域名都是 Worker 的 custom domain，由 `wrangler deploy` 按各自 `wrangler.jsonc` 里的 `routes` 建好，不用手动加记录：
 
-| 类型 | 名称 | 内容 | 代理 |
-|---|---|---|---|
-| `CNAME` | `rowel` | `a553d87c-715d-4045-9e2d-012ee543c96c.cfargotunnel.com` | 橙云开 |
-
-自己重建的话不用手动填，跑 `cloudflared tunnel route dns <隧道名> rowel.novabox.ai`。
+| 域名 | 配置 |
+|---|---|
+| `rowel-relay.novabox.ai` | `relay-worker/wrangler.jsonc` |
+| `rowel.novabox.ai` | `site/wrangler.jsonc` |
 
 验证：
 
 ```sh
-dig +short rowel.novabox.ai
-curl -fsSL https://rowel.novabox.ai/healthz
+curl -fsSL https://rowel-relay.novabox.ai/healthz
+curl -fsSI https://rowel.novabox.ai/ | head -1
 ```
 
-`dig` 出来了但 `curl` 说解析不了，是本机解析器缓存了刚才那次 NXDOMAIN（SOA 的 negative TTL 是 1800 秒）。macOS 上 `sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder`。
+`dig` 出来了但 `curl` 说解析不了，是本机解析器缓存了之前那次 NXDOMAIN（SOA 的 negative TTL 是 1800 秒）。macOS 上 `sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder`。
 
 ### 安装脚本挂哪
 
@@ -301,7 +301,7 @@ curl -fsSL https://rowel.novabox.ai/healthz
 curl -fsSL https://raw.githubusercontent.com/0x5446/rowel/main/install.sh | sh
 ```
 
-短地址已经配好了，是一条 Cloudflare **Redirect Rule**（不是 Worker，不用写代码）：
+短地址是 `site/public/_redirects` 里的一行，随站点部署（不是面板里点出来的规则，所以仓库里有记录）：
 
 ```
 rowel.novabox.ai/install  →  302  https://raw.githubusercontent.com/0x5446/rowel/main/install.sh
@@ -309,27 +309,23 @@ rowel.novabox.ai/install  →  302  https://raw.githubusercontent.com/0x5446/row
 
 这样 app 里那行 `curl -fsSL https://rowel.novabox.ai/install | sh` 仍然成立，但中继被攻破**不会**污染安装链路——两者是不同的信任域。
 
-重定向本身现在就生效，但跟过去是 404：仓库还是私有的。**仓库转公开的那一刻它自己就通了**，不需要再动 Cloudflare。
+指向 `main` 而不是某个 tag，是有意的：这一层是引导脚本，永远取最新；`install.sh` 内部再用 `ROWEL_REF` 把真正 checkout 的源码钉到发布 tag 上。两层分开，改发布版本不用动重定向。发布时 `ROWEL_REF` 和 tag 要一起推（`git push --atomic origin HEAD:main vX.Y.Z`），否则中间那几秒装的人会 clone 一个还不存在的 tag。
 
-指向 `main` 而不是某个 tag，是有意的：这一层是引导脚本，永远取最新；`install.sh` 内部再用 `ROWEL_REF` 把真正 checkout 的源码钉到发布 tag 上。两层分开，改发布版本不用动 Cloudflare 规则。
-
-### 转公开之前必须做完的
+### 转公开之前必须做完的（仓库已公开，留作记录）
 
 仓库一旦公开，提交历史收不回来。这几条是不可绕过的：
 
 - [ ] **全历史秘密扫描**（`gitleaks detect --no-git` 与 `--log-opts=--all` 各一遍）
-- [ ] **打 tag**：`install.sh` 默认 checkout `ROWEL_REF`（现在是 `v0.1.0`）。这个 tag 不存在的话，安装脚本会在 `git clone --branch` 那步失败——私有期间没人跑得到，公开的第一分钟就有人跑得到
+- [x] **打 tag**：`install.sh` 默认 checkout `ROWEL_REF`（见 `install.sh` 里那一行）。这个 tag 不存在的话，安装脚本会在 `git clone --branch` 那步失败
 - [x] LICENSE 就位（MIT）
 - [x] 包元数据不再是 `UNLICENSED` / `private`
 - [ ] 依赖许可证核对（`npm ls --all` 里没有 GPL 传染项）
 - [ ] `/privacy` 页面已写：Relay 能观测到在线状态、连接关系、流量计数；推送落地后还会知道 device token 与机器的关联
 - [ ] 至少两名发布维护者，或明确写出当前是单人维护及其后果
 
-### 私有仓库期间的注意
+### 安装脚本本身
 
-安装脚本本身能从 Relay 拿到，但它里面 `git clone` 的是私有仓库——没有 GitHub 访问权的人跑到那一步会失败，脚本会明确说是私有仓库并给出手动 clone 命令。要真正对外，仓库得转公开，或者改成从发布产物安装。
-
-脚本是幂等的（重跑是更新不是重装），装完把 `bridle` 链接到 `~/.local/bin`。app 里那行命令要改的话，改 `ios/Rowel/App/Links.swift` 一处。
+经 `rowel.novabox.ai/install` 重定向到 GitHub raw；Relay 不提供它（Worker 的 `/install` 回 404，Node relay 默认关闭）。脚本是幂等的（重跑是更新不是重装），装完把 `bridle` 链接到 `~/.local/bin`（不可写时退到 `/usr/local/bin`，或 `ROWEL_BIN`）。app 里那行命令要改的话，改 `ios/Rowel/App/Links.swift` 一处。
 
 ---
 
@@ -412,7 +408,7 @@ npx wrangler secret put ROWEL_APNS_TOPIC --config relay-worker/wrangler.jsonc  #
 
 **为什么签名在 Relay 而不在 Bridle。** APNs 只收开发者密钥签的推送。那把密钥不能塞进跑在别人笔记本上的 Bridle —— 否则每个用户都握着能推给所有其他用户的钥匙。所以 Relay 签，Relay 也因此成了唯一会知道 device token 的组件。
 
-**它不会知道推送的内容。** Bridle 只发 token 和机器名，横幅上的字是 `relay-worker/src/apns.ts` 里的常量。`WakeRequest` 里没有能放正文的字段，所以这不是"承诺不看"，是没有东西可看。手机醒来后自己开隧道取内容，本地发通知 —— 那句话既没经过 Relay，也没到过苹果。
+**它不会知道推送的内容。** Worker 只从 wake 请求里读 `token` 和 `machine`（截到 64 字符），其余字段忽略；横幅 = `relay-worker/src/apns.ts` 里的常量 + 机器名。推送不会运行 app：用户点开后 app 重连隧道才显示真实请求——那句话既没经过 Relay，也没到过苹果。
 
 **用 alert 不用 silent。** `content-available` 是更诱人的设计（醒来、取、发真实文案），但 iOS 把静默推送当可丢弃的：限流、低电量模式下丢、app 被划掉后干脆不送。"能删掉这个吗"不能等系统心情好了再送。
 
@@ -423,7 +419,7 @@ npx wrangler secret put ROWEL_APNS_TOPIC --config relay-worker/wrangler.jsonc  #
 - **ATS 例外**：`NSAllowsLocalNetworking: true`。直连是局域网内的明文 WebSocket，里面搬的全是 Noise 密文——底下再套一层 TLS 是给一个没人能签发证书的名字做认证，没有意义。走 Relay 的路径是 `wss`，没有例外。
 - **加密出口合规**：`ITSAppUsesNonExemptEncryption: true` 已写进 Info.plist。这是实话——app 用 CryptoKit 实现 Noise（Curve25519 + ChaCha20-Poly1305）加密用户输入，不属于苹果列出的任何一项豁免（非医疗、非仅认证、非版权保护、非 56 位以下）。填 false 能少答一道题，但那是在出口声明上说假话。代价是 App Store Connect 会问一次是否按大众市场自分类（ECCN 5D992.c，是），随之而来的是每年一次给 BIS 的自分类报告。不阻塞任何构建。
 - **隐私清单**：`ios/Rowel/PrivacyInfo.xcprivacy`。不追踪、不收集、无第三方 SDK；唯一需要声明理由的 API 是 `UserDefaults`，理由码 `CA92.1`（本 app 自己的数据，不用于追踪）。
-- **后台模式**：一个都不声明。曾经写着 `remote-notification` 却没有一行注册推送的代码，那是 Guideline 2.5.4 的直接拒审理由。做推送时连同实现一起加回来。
+- **后台模式**：一个都不声明。曾经写着 `remote-notification` 却没有一行注册推送的代码，那是 Guideline 2.5.4 的直接拒审理由。推送已实现，用的是 alert 推送，不需要 `remote-notification` 后台模式。
 
 ### 发布关键路径
 
@@ -454,21 +450,6 @@ npx wrangler secret put ROWEL_APNS_TOPIC --config relay-worker/wrangler.jsonc  #
 
 **这条路可以走，但它是一个不同的产品。**混着说会让所有计划都建立在一个没做的决策上。
 
-### 官网要重做（未开始）
-
-现在这四个页面是**功能正确、定位错误**的：它们在用文字解释一个视觉产品。
-
-一个手机 App 的官网，主体应该是**手机 App 本身长什么样** —— 截图、录屏、真实界面。用户扫一眼就知道这是什么、界面好不好看、值不值得装。现在首页第一屏是三段散文，用户看完还是不知道它长什么样。
-
-重做时的要求：
-
-- **视觉主体是设备图 / 录屏**，不是文字。审批卡片、轨迹、会话面板这三个是最有说服力的画面
-- 文字降级为图旁的说明，不是内容主体
-- 保留现在这版**内容上的诚实**：`/get` 说清楚还没上架、`/privacy` 说清楚 Relay 存了什么。重做的是表达方式，不是把这些话删掉换成营销词
-- 截图要能随 App 更新而更新，不能手工维护一堆很快过期的图
-
-**前置**：App 的界面要先稳定下来，现在还在每天改。等功能收敛了再做，否则拍的图第二天就过期。
-
 ### 对外页面
 
 官网是单页 `site/public/index.html`（安装、获取、帮助、FAQ 都在里面），另有独立的隐私政策 `privacy.html` 和 `404.html`，全站一份样式 `_/site.css`。`/help`、`/get` 已并入首页，由 `_redirects` 301 到 `/#help`、`/#get`——这两个地址被 app 的帮助按钮、App Store 的技术支持 URL、CLI 输出引用着，不能删。首页的截图由 `ios/screenshots.sh` 生成到 `_/shots/`；首屏的循环短片 `_/media/approve.mp4` 截自 `ios/demo.sh` 录的 `marketing/video/raw/phone.mov`（从会话列表出现到结束，约 20 秒），界面变了就重录再截：
@@ -491,10 +472,11 @@ npx wrangler deploy --config site/wrangler.jsonc
 
 | 页面上的说法 | 权威在哪 |
 |---|---|
-| Relay 不落盘、不记日志 | `relay/src/` 里没有任何 `writeFile` / `console.*` |
-| Relay 内存里存了什么 | `registry.ts` 的 `Machine`、`offers.ts` 的 `HeldOffer` |
-| 机器名是明文 | `Machine.name`，注册时上报，配对前就要显示给 app |
-| 配对期最多 15 分钟持有 bundle | `PairingBundle` 含 LAN 地址、公钥、一次性 token |
+| 日志不留存；只在重复注册（带 deviceId）和推送失败时打一行 | `relay-worker/wrangler.jsonc` 的 `observability: false`、`exchange.ts` 的 `console.warn`、`switchboard.ts` 的 `console.error` |
+| Relay 存了什么、何时删 | `exchange.ts` 的 `MachineRow`/`OfferSlots` 与十分钟清扫、`pair-code.ts` 的 `HeldOffer`；Cloudflare 对这类存储有 30 天恢复窗口，代码里没有任何调用 |
+| 机器名是明文，知道 deviceId 就能查 | `switchboard.ts` 的注册、`index.ts` 的 `/v1/machine/:deviceId` |
+| 配对码 10 分钟，Relay 最多持有 15 分钟 | `protocol/src/pairing.ts` 的 `PAIRING_TTL_MS`、`relay-worker/src/limits.ts` |
+| 推送是固定横幅，不运行 app | `relay-worker/src/apns.ts`（alert 类型，无 `content-available`）、`ios/Rowel/App/Notifier.swift` |
 | 手机端解除配对是单向的 | `AppModel.unpair` 只动本地；Mac 侧要 `bridle revoke` |
 
 **不要在隐私页上写代码没做到的事。**"手机上解除配对会同时通知电脑" 这种话写起来顺手，但它是假的——一部想被遗忘的手机，恰恰是最不该听它自称的那一部。

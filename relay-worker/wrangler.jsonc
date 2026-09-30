@@ -92,10 +92,9 @@
   // `rowel-relay.` and not `relay.rowel.` — which would read better — because
   // Cloudflare's free Universal SSL covers the apex and *one* level of
   // subdomain only. A Worker custom domain would get its own certificate at
-  // any depth, but the standby address behind the tunnel relies on the
-  // wildcard, and having the two live at different depths to save a hyphen is
-  // not worth the Advanced Certificate Manager subscription it would take to
-  // make them match.
+  // any depth, but a proxied record elsewhere in the zone (the standby relay
+  // behind a tunnel, retired 2026-09-30) relied on the wildcard, and one
+  // naming scheme for both was worth more than saving a hyphen.
   "routes": [
     { "pattern": "rowel-relay.novabox.ai", "custom_domain": true }
   ]

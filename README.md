@@ -14,7 +14,7 @@ MIT, all of it: the app, Bridle, the relay, the protocol.
 
 <p>
   <img src="site/public/_/shots/push.webp" width="220" alt="The lock screen: “Your agent is waiting on you”.">
-  <img src="site/public/_/shots/approval.webp" width="220" alt="A permission request with the full command, and Don't / Allow.">
+  <img src="site/public/_/shots/approval.webp" width="220" alt="A permission request: the tool, the reason dsh gives, and Don't / Allow.">
   <img src="site/public/_/shots/trace.webp" width="220" alt="The trace: every step of the run, one line each.">
 </p>
 

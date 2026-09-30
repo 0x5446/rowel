@@ -1,6 +1,6 @@
 # Rowel 技术架构
 
-本文档描述 Rowel 的整体设计、每个接缝的契约、以及新功能应该落在哪里。它同时是一份**扩展指南**——未做的功能（推送、定时任务、多 agent、trace）在这里有明确的落点，实施时不需要重新设计。
+本文档描述 Rowel 的整体设计、每个接缝的契约、以及新功能应该落在哪里。它同时是一份**扩展指南**——未做的功能（定时任务、多 agent）在这里有明确的落点；推送与 trace 已按这里的落点做完，实施时不需要重新设计。
 
 写作原则：每个决策给出理由和代价。没有理由的决策是巧合，没有代价的决策是谎话。
 
@@ -222,7 +222,6 @@ interface AgentClient {
 | 机器静态私钥 | `~/.rowel/bridle.json`，0600 | 首次运行生成 |
 | 机器签名密钥（Ed25519） | 同上 | 同上，与静态密钥**分离** |
 | 每连接临时密钥 | 内存 | 一次连接。**不可用于推送**——推送发生时它已不存在，见 §10.2 |
-| 手机推送私钥（X25519） | Keychain 共享组，`afterFirstUnlockThisDeviceOnly` | 长期，可轮换；app 与通知扩展共用 |
 | 配对令牌 | 状态文件，带过期 | **一次性**，用掉即废 |
 
 **密钥不复用。**签名用 Ed25519，DH 用 X25519，对称加密用握手派生的传输密钥——三者独立。把一个 32 字节秘密同时当 SecretBox key、Ed25519 seed 和 X25519 私钥用，是明确的密码学异味。
@@ -260,7 +259,7 @@ app 自己那把锁（`ios/Rowel/Store/AppLock.swift`）不解决这件事，它
 | 机制 | 做什么 | 为什么是这个选择 |
 |---|---|---|
 | 冷启动即锁 | 从外部进来一次就要认证一次 | 启动是唯一能确定"刚才不在手里"的时刻 |
-| 闲置超时 | 可配：立即 / 1 / 5 / 15 分钟 / 1 小时，默认 1 分钟 | 默认要短到有意义，又不能让"切出去看条消息"都要刷脸 |
+| 离开前台超时 | 可配：立即 / 1 / 5 / 15 分钟 / 1 小时，默认 1 分钟 | 默认要短到有意义，又不能让"切出去看条消息"都要刷脸 |
 | `.inactive` 就遮挡 | app 一旦不在最前就盖住内容 | **iOS 在 `.inactive` 阶段给窗口拍照做多任务缩略图**。等到 `.background` 再遮，拍到的已经是完整会话内容 |
 | 时钟倒退即锁 | 墙钟往回走就当超时 | 不知道密码、但能改系统时间的人，否则可以直接跑赢一小时的超时 |
 | 不可认证则放行 | 设备没有密码时自动关掉这把锁 | 这不是绕过（拿掉密码本来就要先知道密码）；要避免的是机主被永久关在自己的配对之外 |
@@ -427,13 +426,13 @@ dsh 的 workspace 成员表是个只进不补的账本：只有"创建进 worksp
 ```
 app 拿到 APNs token → 经 Noise 隧道发 wake 帧给 Bridle，每次 ready 重发
 Bridle 存进 PairedPeer.push
-dsh 发 approval/requested 或 question/requested → core.onWaiting 触发
-Bridle 检查 core.attached === 0（两种传输都没人）→ MuxType.Wake 让 Relay 振铃
+dsh 发 approval/requested 或 question/requested → core.onWaitingChanged 触发
+Bridle 检查 core.attached === 0（两种传输都没人）且 dueForRing 非空 → MuxType.Wake 让 Relay 振铃
 Relay 用 APNs 密钥签 ES256 JWT，发一条固定文案的 alert 推送
-手机醒来 → 自己开隧道 → 取内容 → 发本地通知
+手机显示横幅（不运行 app）→ 用户点开 → app 重连隧道 → 显示真实请求
 ```
 
-横幅上的字是 `relay-worker/src/apns.ts` 里的常量。`WakeRequest` 结构里**没有**可以放正文的字段——这不是"Relay 承诺不看"，是**没有东西可看**。
+横幅上的字是 `relay-worker/src/apns.ts` 里的常量加机器名。Worker 只从 wake 请求里读 `token` 和 `machine`（截到 64 字符），其余字段忽略——所以一条推送最多说出常量加 64 个字符的机器名，不靠 Relay 承诺不看。
 
 ### 10.2 放弃了 NSE，以及为什么
 
@@ -455,7 +454,7 @@ Relay 必须知道 **device token**（它要调 APNs），因此能建立 `devic
 
 能否避免？只有让 Bridle 自己调 APNs——那需要把 APNs 私钥分发到每个用户的机器上，等于每个用户都握着能推给所有其他用户的钥匙，不可接受。
 
-**所以这是一个真实的、不可消除的元数据泄露，必须写进隐私说明。**Relay 知道：谁在线、谁连谁、搬了多少字节、振铃时哪个 token 属于哪台机器。它不知道：任何内容。
+**所以这是一个真实的、不可消除的元数据泄露，必须写进隐私说明。**Relay 知道：deviceId、明文机器名、Bridle 版本、IP、谁连谁、搬了多少字节与时序、振铃时哪个 token 属于哪台机器，短码配对时还持有 bundle（公钥、局域网地址）。它不知道：任何内容。
 
 Relay **不持久化** token——只在振铃那一刻从 Bridle 手里拿到，用完即弃。
 
@@ -464,8 +463,8 @@ Relay **不持久化** token——只在振铃那一刻从 Bridle 手里拿到�
 | 决定 | 为什么 |
 |---|---|
 | 帧里不带 APNs 环境 | token 由沙盒还是生产主机签发，是苹果自己会回答的问题（错主机回 `BadDeviceToken`）。早期让 app 读自己描述文件里的 `aps-environment` 再逐层传下来——那是把猜测当事实，而且猜错时推送静默不到达 |
-| 只有 410 `Unregistered` 才算 token 死了 | 早先把所有非 200 都当失效回传，于是一次限流、一次苹果 5xx、一个填错的 topic，都会让 Bridle 永久删掉一个好地址 |
-| 欠下的振铃要记账 | `onWaiting` 只触发一次，之后请求就被去重了。Relay 离线时直接丢弃 = 那个问题永远不会有人被通知 |
+| 只有苹果说设备已消失才算 token 死了（410 / `Unregistered`，或生产与沙盒都回 `BadDeviceToken`；本地格式不合法的 token 也直接判死） | 早先把所有非 200 都当失效回传，于是一次限流、一次苹果 5xx、一个填错的 topic，都会让 Bridle 永久删掉一个好地址 |
+| 欠下的振铃要记账 | 该不该振铃由 core 的待处理列表推导（`dueForRing`/`markRung`），注册完成时 `flushWake` 补发。Relay 离线时直接丢弃 = 那个问题永远不会有人被通知 |
 | 每个请求只振一次 | "该不该振"会被反复重新判断——每次接入/离开、每次 Relay 重新注册（Mac 睡醒、换网络）。只看"有没有待处理"，同一个问题就会随每次重连再振一遍。core 记下已为哪些请求振过（`dueForRing` / `markRung`），请求被回答或删除时出账 |
 | 待处理请求随 dsh 重建 | 请求活在 dsh 进程里，dsh 重启就没了，而 `resolved` 永远不会来。mux 下行重连后 dsh 会把仍待处理的全部重发；2 秒内没被重发的就删掉，并向事件日志追加合成的 `*/resolved`，让在线的手机也撤卡 |
 
@@ -477,7 +476,7 @@ Relay **不持久化** token——只在振铃那一刻从 Bridle 手里拿到�
 | `protocol/src/mux.ts` | `MuxType.Wake`（双向：请求振铃 / 回传失效 token） |
 | `ios/Rowel/App/Push.swift` | 每次启动和回前台向 iOS 要 token |
 | `ios/Rowel/Net/Tunnel.swift` | 每次 `ready` 重发 token |
-| `bridle/src/core.ts` | `onWaiting` 钩子、接入计数 |
+| `bridle/src/core.ts` | `onWaitingChanged` 钩子、`dueForRing`/`markRung`、接入计数 |
 | `bridle/src/relay-client.ts` | 判断无人接入、按 token 去重、欠账补发 |
 | `relay-worker/src/apns.ts` | ES256 签名、生产→沙盒回退、错误分类 |
 | `ios/Rowel/Rowel.entitlements` | `aps-environment`（付费会员才签得下来） |
@@ -640,10 +639,10 @@ UI          7（XCUITest，真机或模拟器，连真 Bridle）
 
 | # | 不变量 | 守卫 |
 |---|---|---|
-| 1 | Relay 只见密文 | e2e `the relay only ever sees ciphertext` |
+| 1 | Relay 读不到内容 | e2e `the relay only ever sees ciphertext`（本机有 dsh 时跑，打 Node relay，不在 CI） |
 | 2 | 直连监听器不是 web 服务器 | e2e `the direct listener is not a web server` |
 | 3 | 配对令牌一次性 | e2e `a stolen pairing token works exactly once` |
-| 4 | 吊销立即生效 | e2e `a revoked device cannot come back` |
+| 4 | 吊销在下一次握手生效（已开隧道要重启 bridle 才断） | e2e `a revoked device cannot come back` |
 | 5 | 篡改帧撕毁隧道，不被接受 | e2e `a tampered frame tears the tunnel down` |
 | 6 | 错误的机器密钥无法完成握手 | e2e `a device believing the wrong machine key…` |
 | 7 | 重放无损，不够时显式告知 | e2e `replay is gapless… and honest when it cannot be` |
@@ -654,7 +653,6 @@ UI          7（XCUITest，真机或模拟器，连真 Bridle）
 | 12 | 插件 apply 不阻塞、dispose 不抛 | `dsh-plugin/tests/plugin.test.js` |
 | 13 | 版本不匹配时拒绝是**已认证且可读**的，不是握手失败 | 待补：新旧双向互通测试（§14.3） |
 | 14 | 至少同时支持当前版与上一版 | 待补：同上 |
-| 15 | 推送密钥独立于隧道密钥，且在 app 挂起后仍可解密 | 待补：真机验收矩阵（§10.6） |
 
 ---
 
@@ -692,7 +690,7 @@ UI          7（XCUITest，真机或模拟器，连真 Bridle）
 - 「Needs you」把等待你的会话顶到最前，webui 要自己翻
 - 中继是兜底不是路径，webui 没有这个概念
 - 新会话默认模型，webui 没有
-- 推送（未建）——webui 根本不可能有
+- 推送（已做）——webui 根本不可能有
 
 ---
 
@@ -738,9 +736,9 @@ UI          7（XCUITest，真机或模拟器，连真 Bridle）
 
 **这些数字是拍的，但有数字才能被证伪。**没有候补名单就先建一个——不建就永远没有数据，"以后再说"就成了默认答案。
 
-8. **推送依赖付费 Apple 账号**（§10.6）。硬阻塞，且它同时卡着 TestFlight 与上架——是**一个决策卡三件事**。
+8. ~~**推送依赖付费 Apple 账号**（§10.6）~~。已解决：2026-08 开通 Developer Program，推送、TestFlight、上架都已走通。
 9. **版本移出 prologue 会破坏现有配对一次**（§14.4）。必须在公开发布前做完。
-10. **Relay 会持有 APNs 私钥**（§10.5）。它从"只搬密文的哑管道"变成"还持有一份对外发送凭据"，这是推送带来的、不可避免的信任面扩大。
+10. **Relay 会持有 APNs 私钥**（§10.4）。它从"只搬密文的哑管道"变成"还持有一份对外发送凭据"，这是推送带来的、不可避免的信任面扩大。
 
 ---
 
@@ -754,6 +752,6 @@ UI          7（XCUITest，真机或模拟器，连真 Bridle）
 | 访问模式切换 | `permissions` projection（读）+ `commands/execute` 跑 `/permission`（写）+ Session 面板 | 已做 |
 | 斜杠命令 | 已做：`commands/list` 进输入框菜单 + 命中命令走 `commands/execute`（**不是** `session.prompt`——斜杠开头的文本会被当成消息发给模型），结果由 `command/run|done` 折叠成一行 |
 | subagent | `subagent.*` 四个方法 + 取消列表过滤 | 数百行 |
-| 推送 | §10 六处 | 一天，卡付费账号 |
+| 推送 | §10 六处 | 已做 |
 | 定时任务 | §11 三处 | 一到两天，依赖推送 |
 | 第二个 agent 后端 | §12，先提 interface | 数天 |

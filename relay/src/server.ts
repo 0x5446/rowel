@@ -341,9 +341,8 @@ export class RelayServer {
 
   /**
    * The wakes Bridles have asked for, oldest first — kept only when the relay
-   * was built with `recordWakes` (the tests). Anything else would have this
-   * relay, which also runs as a long-lived standby, holding every APNs token
-   * it ever saw.
+   * was built with `recordWakes` (the tests). Anything else would have a
+   * long-running self-hosted relay holding every APNs token it ever saw.
    */
   readonly wakes: Record<string, unknown>[] = []
 

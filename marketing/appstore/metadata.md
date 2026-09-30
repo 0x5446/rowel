@@ -6,6 +6,12 @@ Everything on this page is calibrated against the repo (README, CHANGELOG,
 reference (Name 30, Subtitle 30, Promotional Text 170, Description 4000,
 Keywords 100).
 
+**2026-09-30:** the Description's Approvals and Notifications paragraphs were
+corrected here (the push does not wake the app; an approval carries the tool
+call and a reason, the command or diff is in the card it belongs to). App Store
+Connect still holds the old text for 1.0, which was in review — put this in
+with the next version.
+
 ---
 
 ## App Name (limit 30)
@@ -79,14 +85,15 @@ what it wants to do next, and starting the next thing from wherever you are.
 
 WHAT YOU CAN DO
 
-• Approvals — when the agent wants to run a command, the request arrives with
-the full command and the diff. Approve or refuse. Anything raised while you
+• Approvals — when the agent wants to run something, the request arrives with
+the tool call it is for — the command or the diff — and the reason given.
+Approve or refuse. Anything raised while you
 were away is waiting when you come back, pinned above everything else.
 
 • Notifications that respect the content — when the agent stops to ask and the
-app is closed, a push wakes your phone. The push itself carries no content:
-the phone reconnects over its own encrypted tunnel, fetches what happened,
-and writes the real notification locally.
+app is closed, your phone gets a notification. It carries no question — just
+"Your agent is waiting on you" and your Mac's name. Open it, and the app
+fetches the real request over its own encrypted tunnel.
 
 • Sessions — everything running on your Mac, grouped by workspace. Start new
 ones, fork a conversation from where it got interesting, archive what is done.
