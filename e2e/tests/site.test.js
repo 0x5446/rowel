@@ -30,7 +30,7 @@ const TIMEOUT_MS = 30_000
 test('every page the app links to is served', { timeout: TIMEOUT_MS }, async () => {
   // `Links.swift` sends people to these. A 404 behind the app's Privacy button
   // is also a rejected App Store submission.
-  for (const path of ['/', '/get', '/help', '/privacy', '/_/style.css']) {
+  for (const path of ['/', '/get', '/help', '/privacy', '/_/site.css']) {
     const response = await fetch(new URL(path, SITE), { signal: AbortSignal.timeout(15_000) })
     assert.equal(response.status, 200, `${path} should be served`)
   }

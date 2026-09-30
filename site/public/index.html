@@ -3,15 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Rowel — your coding agent is waiting on you. Answer from anywhere.</title>
-<meta name="description" content="Rowel is the iPhone remote for the DeepSeek Harness on your Mac. When the agent stops to ask, your phone buzzes, you see the exact command, and one tap unblocks it. End-to-end encrypted. No account. Open source.">
+<title>Rowel — the iPhone app for DeepSeek Harness. Answer your agent from anywhere.</title>
+<meta name="description" content="Rowel is the open-source iPhone app for the DeepSeek Harness (dsh) on your Mac. When the agent stops to ask, your phone buzzes, you see the exact command, and one tap unblocks it. End-to-end encrypted. No account. Open source.">
 <meta name="theme-color" content="#07080b">
-<meta property="og:title" content="Rowel — answer your coding agent from anywhere">
-<meta property="og:description" content="The iPhone remote for the DeepSeek Harness on your Mac. End-to-end encrypted, no account, open source.">
+<meta property="og:title" content="Rowel — the iPhone app for DeepSeek Harness">
+<meta property="og:description" content="Answer your DeepSeek Harness from anywhere. End-to-end encrypted, no account, open source.">
 <meta property="og:image" content="https://rowel.novabox.ai/_/media/approve-poster.webp">
 <link rel="icon" href="/favicon.png">
 <link rel="apple-touch-icon" href="/_/media/icon-180.png">
-<link rel="stylesheet" href="/_/landing.css">
+<link rel="stylesheet" href="/_/site.css">
 </head>
 <body>
 
@@ -31,12 +31,13 @@
 <header class="hero">
   <div class="wrap hero-inner">
     <div class="hero-copy">
-      <a class="pill" href="https://testflight.apple.com/join/HHCQBu38"><span class="dot"></span>Now on TestFlight · Open source</a>
-      <h1>Your coding agent is waiting on you.<br><span class="grad">Answer from anywhere.</span></h1>
+      <a class="pill" href="https://testflight.apple.com/join/HHCQBu38"><span class="dot"></span>Now on TestFlight</a>
+      <p class="eyebrow">The iPhone app for <a href="https://github.com/deepseek-ai/deepseek-harness">DeepSeek Harness</a></p>
+      <h1>Your DeepSeek Harness is waiting on you.<br><span class="grad">Answer from anywhere.</span></h1>
       <p class="sub">
-        Rowel is the iPhone remote for the DeepSeek Harness on your Mac.
-        When the agent stops to ask, your phone buzzes, you see the exact
-        command, and one tap unblocks it.
+        Rowel is the open-source iPhone app for <code>dsh</code>, the DeepSeek
+        Harness on your Mac. When the agent stops to ask, your phone buzzes,
+        you see the exact command, and one tap unblocks it.
       </p>
       <div class="actions">
         <a class="btn" href="https://testflight.apple.com/join/HHCQBu38">Join the TestFlight</a>
@@ -48,11 +49,12 @@
         <button type="button" class="copy" aria-label="Copy the install command">Copy</button>
       </div>
       <ul class="trust">
+        <li>Open source, MIT</li>
         <li>End-to-end encrypted</li>
         <li>No account</li>
-        <li>MIT licensed</li>
         <li>Free</li>
       </ul>
+      <p class="requires">Requires the <a href="https://github.com/deepseek-ai/deepseek-harness">DeepSeek Harness</a> on a Mac. Not a remote for other coding agents.</p>
     </div>
     <div class="hero-phone">
       <div class="phone">
@@ -99,7 +101,7 @@
 <section class="wrap highlight" id="security">
   <div class="blurb">
     <span class="num">03</span>
-    <h2>The relay is blind.<br>By design.</h2>
+    <h2>The relay is blind.<br>Don't take our word for it.</h2>
     <p>
       Phone and Mac run a Noise&nbsp;IK handshake with each other, not with
       us. Our relay switches sealed frames it holds no key for — and an
@@ -107,7 +109,13 @@
       name ever appears in the clear. On the same Wi-Fi, there is no relay
       at all.
     </p>
+    <p>
+      Every line of it is open source — the app, Bridle, the relay and the
+      protocol — so none of this has to be taken on faith. Read it, or run
+      your own relay.
+    </p>
     <p class="links">
+      <a href="https://github.com/0x5446/rowel">Read the source →</a>
       <a href="/privacy">What the relay can and cannot see →</a>
     </p>
   </div>
@@ -227,6 +235,10 @@
 <section class="wrap faq">
   <h2 class="section-title">Questions</h2>
   <details>
+    <summary>Does it work with Claude Code, Codex, Cursor or other agents?</summary>
+    <p>No. Rowel is built for the <a href="https://github.com/deepseek-ai/deepseek-harness">DeepSeek Harness</a> (<code>dsh</code>) and speaks its API — sessions, approvals, models, skills. The harness itself can run many models, DeepSeek, GLM, Qwen and more, and Rowel lets you pick between them.</p>
+  </details>
+  <details>
     <summary>Is it free?</summary>
     <p>Yes. The app, Bridle, the relay and the protocol are all MIT-licensed and free.</p>
   </details>
@@ -254,10 +266,10 @@
 
 <section class="wrap final">
   <h2>Stop babysitting your terminal.</h2>
-  <p>Let the agent work. Rowel will tell you when it needs you.</p>
+  <p>Let the harness work. Rowel will tell you when it needs you.</p>
   <div class="actions">
     <a class="btn" href="https://testflight.apple.com/join/HHCQBu38">Join the TestFlight</a>
-    <a class="btn btn-ghost" href="https://github.com/0x5446/rowel">View on GitHub</a>
+    <a class="btn btn-ghost" href="https://github.com/0x5446/rowel">Read the source</a>
   </div>
 </section>
 
@@ -265,7 +277,7 @@
 
 <footer class="foot">
   <div class="wrap foot-inner">
-    <span class="brand"><img src="/_/media/icon-180.png" width="22" height="22" alt="">Rowel</span>
+    <a class="brand" href="/"><img src="/_/media/icon-180.png" width="22" height="22" alt="">Rowel</a>
     <nav>
       <a href="/get">Get the app</a>
       <a href="/help">Help</a>

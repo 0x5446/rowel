@@ -1,12 +1,27 @@
 # Rowel
 
-**Drive the coding agent on your Mac from your iPhone.** End to end encrypted;
-the relay only ever sees ciphertext.
+**The iPhone app for the [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness).
+Your agent is waiting on you — answer from anywhere.**
 
-The [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`)
-runs where your code and your keys already are. Rowel is the other half: read
-what the agent did, approve what it wants to do next, answer the question it is
-blocked on, start the next thing from a train.
+When `dsh` stops to ask permission, your phone buzzes, you see the exact
+command and diff, and one tap unblocks the Mac. Read what the agent did,
+answer the question it is blocked on, start the next thing from a train.
+End to end encrypted; the relay only ever sees ciphertext.
+
+**[rowel.novabox.ai](https://rowel.novabox.ai)** ·
+**[Join the TestFlight](https://testflight.apple.com/join/HHCQBu38)** ·
+MIT, all of it: the app, Bridle, the relay, the protocol.
+
+<p>
+  <img src="site/public/_/shots/push.webp" width="220" alt="The lock screen: “Your agent is waiting on you”.">
+  <img src="site/public/_/shots/approval.webp" width="220" alt="A permission request with the full command, and Don't / Allow.">
+  <img src="site/public/_/shots/trace.webp" width="220" alt="The trace: every step of the run, one line each.">
+</p>
+
+> **Built for `dsh` only.** Rowel speaks the DeepSeek Harness API — sessions,
+> approvals, models, skills. It is not a remote for Claude Code, Codex, Cursor
+> or other agents. The harness itself runs many models (DeepSeek, GLM, Qwen and
+> more), and Rowel lets you pick between them.
 
 | Piece | What it is | Where it runs |
 |---|---|---|
@@ -31,9 +46,11 @@ There are no accounts. Pairing is a QR code in your terminal.
 
 ## Where this is
 
-The Mac side is finished and in daily use. The relay is deployed. **The app is not
-on the App Store yet** — getting it means building it with Xcode, which is free
-but comes with [a seven-day catch](https://rowel.novabox.ai/get).
+The Mac side is finished and in daily use. The relay is deployed. **The app is in
+App Store review**; until it clears, the submitted build is on
+[TestFlight](https://testflight.apple.com/join/HHCQBu38). You can also build it
+yourself with Xcode, which is free but comes with
+[a seven-day catch](https://rowel.novabox.ai/get).
 
 ## Getting it running
 
