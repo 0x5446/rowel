@@ -412,10 +412,9 @@ take() {
   # Web copies, small enough for a page to carry.
   #
   # `--resampleWidth`, not `-Z`. `-Z` caps the *longest* edge, and these are
-  # portrait, so it set the height to 660 and left the width at 303 — under
-  # half of what the page needs. The slot is 13.5rem (216 CSS px) and a phone
-  # renders it at 3×, so 660 wide is the number; 303 was visibly soft on every
-  # retina screen while the README claimed 660 the whole time.
+  # portrait, so it capped the height instead and left the width at a third of
+  # what the page needs. The widest slot on the front page is 380 CSS px, which
+  # a retina screen draws at 760, so 900 wide is the number.
   #
   # WebP, because the page is nothing but screenshots and one of them is a
   # notification over a photograph, which PNG cannot compress: the set was
@@ -427,19 +426,13 @@ take() {
     || fail "cwebp is not installed, and the site references .webp — brew install webp"
   mkdir -p "$root/site/public/_/shots"
   local tmp="${TMPDIR:-/tmp}/rowel-web-shot.png"
-  for n in sessions conversation approval photo models push pairing-sheet machine tools artifact; do
+  # Only what `site/public/index.html` shows; a copy nothing links to is a
+  # file that goes stale in silence.
+  for n in push approval conversation trace sessions photo; do
     cp "$root/marketing/shots/$n.png" "$tmp"
-    sips --resampleWidth 660 "$tmp" >/dev/null
-    cwebp -q 88 -quiet "$tmp" -o "$root/site/public/_/shots/$n.webp"
+    sips --resampleWidth 900 "$tmp" >/dev/null
+    cwebp -q 85 -quiet "$tmp" -o "$root/site/public/_/shots/$n.webp"
   done
-  if [ -f "$root/marketing/shots/dashboard.png" ]; then
-    cp "$root/marketing/shots/dashboard.png" "$tmp"
-    # Landscape, so the longest edge is the width and `-Z` would be right here
-    # too; spelled the same way as the others so the next reader does not have
-    # to work out why one line differs.
-    sips --resampleWidth 1200 "$tmp" >/dev/null
-    cwebp -q 88 -quiet "$tmp" -o "$root/site/public/_/shots/dashboard.webp"
-  fi
   rm -f "$tmp"
   say "shots in marketing/shots, web copies in site/public/_/shots"
 }

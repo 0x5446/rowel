@@ -471,7 +471,17 @@ npx wrangler secret put ROWEL_APNS_TOPIC --config relay-worker/wrangler.jsonc  #
 
 ### 对外页面
 
-四个页面在 `site/public/`，部署命令：
+页面在 `site/public/`：首页 `index.html` 用自己的 `_/landing.css`（深色落地页），`help` / `get` / `privacy` / `404` 这几个阅读页共用 `_/style.css`。首页的截图由 `ios/screenshots.sh` 生成到 `_/shots/`；首屏的循环短片 `_/media/approve.mp4` 截自 `ios/demo.sh` 录的 `marketing/video/raw/phone.mov`（从会话列表出现到结束，约 20 秒），界面变了就重录再截：
+
+```sh
+ffmpeg -ss <列表出现的秒数> -to <ended> -i marketing/video/raw/phone.mov \
+  -vf "fps=30,scale=590:-2" -c:v libx264 -profile:v main -pix_fmt yuv420p \
+  -crf 27 -preset slow -an -movflags +faststart site/public/_/media/approve.mp4
+```
+
+截之前逐帧看一遍：画面里不能出现真实用户名、主机名或工程路径。
+
+部署命令：
 
 ```sh
 npx wrangler deploy --config site/wrangler.jsonc

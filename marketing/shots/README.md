@@ -31,16 +31,16 @@ so.
 | `artifact.png` | The same job finished — 5/5 steps, and what the data said | App Store 5 |
 | `photo.png` | A sketch from the camera roll on its way to the agent | App Store 6, site |
 | `push.png` | The notification that arrives when the agent needs an answer | site |
-| `models.png` | The model picker | site |
+| `models.png` | The model picker | reserve |
 | `machine.png` | Fingerprint, device id, harness port — the pairing is to a key | reserve |
-| `trace.png` | Every step with what it cost | reserve |
+| `trace.png` | Every step with what it cost | site |
 | `plan.png` | The plan the agent wrote for itself | reserve |
 | `welcome.png` | First launch | reserve |
-| `pairing-sheet.png` | The install-and-pair sheet | help page |
-| `dashboard.png` | The artifact itself, rendered — a dark-mode page with inline SVG charts the agent built from `metrics.json` | site, video |
+| `pairing-sheet.png` | The install-and-pair sheet | reserve |
+| `dashboard.png` | The artifact itself, rendered — a dark-mode page with inline SVG charts the agent built from `metrics.json` | video |
 
-`site/public/_/shots/` holds copies scaled to 660px wide (1200px for the
-dashboard) so the marketing page stays under a megabyte. The originals here are
+`site/public/_/shots/` holds 900px-wide WebP copies of the six the front page
+shows, so the page stays under a megabyte of images. The originals here are
 1320×2868, which is the App Store's 6.9" size.
 
 ## The recording
