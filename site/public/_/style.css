@@ -1,7 +1,8 @@
-/* One stylesheet for four pages.
+/* The reading pages: help, get, privacy, 404. The front page is a pitch and
+ * has its own, `landing.css`.
  *
- * No framework and no build step: the whole site is under 20 KB, and a
- * toolchain here would be something to maintain in exchange for nothing. */
+ * No framework and no build step: a toolchain here would be something to
+ * maintain in exchange for nothing. */
 
 :root {
   --ink: #14110f;
@@ -190,86 +191,3 @@ footer {
 footer a { margin-right: 1.1rem; }
 
 .updated { font-size: 0.85rem; color: var(--ink-soft); margin-top: 0.5rem; }
-
-/* --- The front page ---------------------------------------------------------
- *
- * Everything below exists for index.html: the two links under the hero and
- * the screenshot sections. The other pages never use these classes. */
-
-.cta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.7rem;
-  margin: 1.6rem 0 0;
-  font: 600 0.92rem/1 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
-}
-
-.cta a {
-  display: inline-block;
-  padding: 0.7rem 1.15rem;
-  border-radius: 8px;
-  text-decoration: none;
-}
-
-.cta .primary { background: var(--accent); color: var(--paper); }
-.cta .secondary { border: 1px solid var(--line); color: var(--ink); }
-
-.fineprint { margin-top: 1.5rem; font-size: 0.9rem; color: var(--ink-soft); }
-
-/* A screenshot next to the words about it. One column on a phone — where the
- * picture is close to life-size anyway — two columns above 40rem, with the
- * picture alternating sides so the page does not read as a table.
- *
- * The width/height attributes on the images carry the aspect ratio, so the
- * page does not reflow as they lazy-load in. */
-
-.feature { margin: 2.75rem 0; }
-
-.feature h3 { margin-top: 0; }
-
-.shot {
-  display: block;
-  width: 100%;
-  max-width: 13.5rem;
-  height: auto;
-  margin: 1.25rem auto 0;
-  border: 1px solid var(--line);
-  border-radius: 1.25rem;
-  background: var(--code-bg);
-}
-
-@media (min-width: 40rem) {
-  .feature {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 12.5rem;
-    gap: 0 1.75rem;
-    align-items: start;
-  }
-  .feature .shot { margin: 0.35rem 0 0; }
-  .feature:nth-of-type(even) { grid-template-columns: 12.5rem minmax(0, 1fr); }
-  .feature:nth-of-type(even) .shot { order: -1; }
-}
-
-/* The thing the agent built, rather than the app that watched it being built.
- * Landscape and full width — it is a page, not a phone, and shrinking it into
- * the 13.5rem phone slot would make the one image here that is evidence look
- * like another screenshot of a screenshot. */
-
-.artifact {
-  margin: 2.75rem 0;
-}
-
-.artifact img {
-  display: block;
-  width: 100%;
-  height: auto;
-  margin: 1.25rem 0 0.6rem;
-  border: 1px solid var(--line);
-  border-radius: 0.75rem;
-  background: var(--code-bg);
-}
-
-.artifact figcaption {
-  font-size: 0.9rem;
-  color: var(--ink-soft);
-}

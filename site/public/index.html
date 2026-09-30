@@ -3,303 +3,288 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Rowel — your coding agent, in your pocket</title>
-<meta name="description" content="Drive the DeepSeek Harness on your Mac from your iPhone. End-to-end encrypted; the relay only ever sees ciphertext. Free and open source.">
-<link rel="stylesheet" href="/_/style.css">
+<title>Rowel — your coding agent is waiting on you. Answer from anywhere.</title>
+<meta name="description" content="Rowel is the iPhone remote for the DeepSeek Harness on your Mac. When the agent stops to ask, your phone buzzes, you see the exact command, and one tap unblocks it. End-to-end encrypted. No account. Open source.">
+<meta name="theme-color" content="#07080b">
+<meta property="og:title" content="Rowel — answer your coding agent from anywhere">
+<meta property="og:description" content="The iPhone remote for the DeepSeek Harness on your Mac. End-to-end encrypted, no account, open source.">
+<meta property="og:image" content="https://rowel.novabox.ai/_/media/approve-poster.webp">
+<link rel="icon" href="/favicon.png">
+<link rel="apple-touch-icon" href="/_/media/icon-180.png">
+<link rel="stylesheet" href="/_/landing.css">
 </head>
 <body>
 
-<header>
-  <a class="wordmark" href="/">Rowel</a>
-  <h1>Your coding agent, in your pocket.</h1>
-  <p class="lede">
-    The DeepSeek Harness runs on your Mac, where your code and your keys
-    already are. Rowel is the iPhone app that drives it — watch it think,
-    approve what it wants to run, answer the question it is blocked on,
-    start the next thing from a train.
-  </p>
-  <div class="cta">
-    <a class="primary" href="/get">Get the app</a>
-    <a class="secondary" href="https://github.com/0x5446/rowel">Source on GitHub</a>
+<nav class="bar">
+  <div class="wrap bar-inner">
+    <a class="brand" href="/"><img src="/_/media/icon-180.png" width="28" height="28" alt="">Rowel</a>
+    <div class="bar-links">
+      <a href="#features">Features</a>
+      <a href="#security">Security</a>
+      <a href="#setup">Setup</a>
+      <a href="https://github.com/0x5446/rowel">GitHub</a>
+      <a class="btn btn-small" href="/get">Get the app</a>
+    </div>
   </div>
-  <p class="fineprint">
-    Free. MIT-licensed. No accounts. On the Mac that runs <code>dsh</code>,
-    the whole setup is one line:
-  </p>
-  <code class="command">curl -fsSL https://rowel.novabox.ai/install | sh</code>
+</nav>
+
+<header class="hero">
+  <div class="wrap hero-inner">
+    <div class="hero-copy">
+      <a class="pill" href="https://testflight.apple.com/join/HHCQBu38"><span class="dot"></span>Now on TestFlight · Open source</a>
+      <h1>Your coding agent is waiting on you.<br><span class="grad">Answer from anywhere.</span></h1>
+      <p class="sub">
+        Rowel is the iPhone remote for the DeepSeek Harness on your Mac.
+        When the agent stops to ask, your phone buzzes, you see the exact
+        command, and one tap unblocks it.
+      </p>
+      <div class="actions">
+        <a class="btn" href="https://testflight.apple.com/join/HHCQBu38">Join the TestFlight</a>
+        <a class="btn btn-ghost" href="https://github.com/0x5446/rowel">View on GitHub</a>
+      </div>
+      <div class="term" data-copy="curl -fsSL https://rowel.novabox.ai/install | sh">
+        <span class="prompt">$</span>
+        <code>curl -fsSL https://rowel.novabox.ai/install | sh</code>
+        <button type="button" class="copy" aria-label="Copy the install command">Copy</button>
+      </div>
+      <ul class="trust">
+        <li>End-to-end encrypted</li>
+        <li>No account</li>
+        <li>MIT licensed</li>
+        <li>Free</li>
+      </ul>
+    </div>
+    <div class="hero-phone">
+      <div class="phone">
+        <video src="/_/media/approve.mp4" poster="/_/media/approve-poster.webp" width="590" height="1282"
+               autoplay muted loop playsinline preload="metadata"
+               aria-label="Recording of Rowel: a conversation waiting on a permission request, Allow tapped, and the agent on the Mac carrying on."></video>
+      </div>
+      <p class="caption">Real app, real Mac, no mockups.</p>
+    </div>
+  </div>
 </header>
 
-<main>
+<main id="features">
 
-<h2>What it does</h2>
-
-<section class="feature">
-  <div class="feature-copy">
-    <h3>Read the run, not a summary of it</h3>
+<section class="wrap highlight">
+  <div class="blurb">
+    <span class="num">01</span>
+    <h2>It finds you.</h2>
     <p>
-      Replies stream in as they are written, the model's thinking included.
-      Tool calls arrive as cards — the command, the diff, the output — and the
-      agent's to-do list ticks over as it works through it.
-    </p>
-    <p>
-      Diffs and terminal output are rendered for a phone screen rather than
-      shrunk to fit one.
+      The moment your agent blocks on a permission, your lock screen lights
+      up. Not an email. Not a dashboard you forgot to check. And the push
+      carries no content — the phone wakes and fetches the question over its
+      own encrypted tunnel.
     </p>
   </div>
-  <img class="shot" src="/_/shots/conversation.webp" width="1320" height="2868" loading="lazy"
-       alt="A conversation in Rowel: the model's thinking streaming in above a tool-call card with a diff, and a to-do list part-way done.">
-</section>
-
-<section class="feature">
-  <div class="feature-copy">
-    <h3>Long jobs, from the phone</h3>
-    <p>
-      A real task is not one answer. It is a plan the agent writes for itself,
-      then files read, commands run, a to-do list worked through, and files
-      written — all of it arriving as it happens. Scrolling back through a
-      conversation is scrolling back through the work.
-    </p>
-  </div>
-  <img class="shot" src="/_/shots/tools.webp" width="1320" height="2868" loading="lazy"
-       alt="A long job part-way through in Rowel: cards for files read, shell commands run, and a to-do list being ticked off.">
-</section>
-
-<figure class="artifact">
-  <h3>And it leaves something behind</h3>
-  <p>
-    Asked from a phone on the sofa, the agent read <code>metrics.json</code>,
-    worked out what the numbers meant, and wrote this page on the Mac — a
-    self-contained dashboard, charts drawn as inline SVG, no external assets.
-    The three findings across the top are its own reading of the data, not a
-    template.
-  </p>
-  <img src="/_/shots/dashboard.webp" width="1600" height="860" loading="lazy"
-       alt="The dashboard the agent built: a dark page titled Checkout API — 30-Day Metrics, three summary cards for daily orders, refund rate and P95 latency, and a bar chart of daily orders.">
-  <figcaption>
-    The artifact itself, opened on the Mac. Nothing in it was written by hand.
-  </figcaption>
-</figure>
-
-<section class="feature">
-  <div class="feature-copy">
-    <h3>Approve with the whole picture</h3>
-    <p>
-      When the agent wants to run something, the request arrives with the full
-      command and diff — not a paraphrase. Approve or refuse from wherever you
-      are. Anything raised while you were away is waiting at the top of the
-      list when you come back, where it cannot be scrolled past.
-    </p>
-  </div>
-  <img class="shot" src="/_/shots/approval.webp" width="1320" height="2868" loading="lazy"
-       alt="Rowel showing a pending approval: the agent asks to escalate the sandbox so it can write a file, with Don't and Allow buttons under the reason it gave.">
-</section>
-
-<section class="feature">
-  <div class="feature-copy">
-    <h3>It finds you when it is stuck</h3>
-    <p>
-      “Your agent is waiting on you”, on the lock screen, the moment the agent
-      stops to ask. The push itself carries nothing else: your phone wakes,
-      opens its own encrypted tunnel to your Mac, and fetches the actual
-      question — so the words never pass through Apple's push service, or our
-      relay, in readable form.
-    </p>
-  </div>
-  <img class="shot" src="/_/shots/push.webp" width="1320" height="2868" loading="lazy"
+  <img class="shot" src="/_/shots/push.webp" width="900" height="1955" loading="lazy"
        alt="An iPhone lock screen showing the notification “Your agent is waiting on you”.">
 </section>
 
-<section class="feature">
-  <div class="feature-copy">
-    <h3>Show it, instead of describing it</h3>
+<section class="wrap highlight flip">
+  <div class="blurb">
+    <span class="num">02</span>
+    <h2>The exact command.<br>Not a summary.</h2>
     <p>
-      Attach a photo from the camera or an image from your library. Sketch a
-      screen on paper, photograph it, and ask for the interface — the sketch
-      goes to the model, the code lands on your Mac.
+      Approvals arrive with the full command and diff the agent wants to run,
+      and the reason it gave. You decide on what will actually execute —
+      then the Mac carries on while you are still on the train.
     </p>
   </div>
-  <img class="shot" src="/_/shots/photo.webp" width="1320" height="2868" loading="lazy"
-       alt="A message in Rowel with a photographed hand-drawn sketch attached, asking the agent to build that screen.">
+  <img class="shot focus-bottom" src="/_/shots/approval.webp" width="900" height="1955" loading="lazy"
+       alt="Rowel showing a pending approval: the agent asks to escalate the sandbox so it can write a file, with Don't and Allow buttons.">
 </section>
 
-<section class="feature">
-  <div class="feature-copy">
-    <h3>Pick the model per conversation</h3>
+<section class="wrap highlight" id="security">
+  <div class="blurb">
+    <span class="num">03</span>
+    <h2>The relay is blind.<br>By design.</h2>
     <p>
-      DeepSeek, GLM, and the dozens of others your harness knows about. Switch
-      mid-project without touching the Mac — the picker shows what your
-      <code>dsh</code> actually offers, and how hard the model should think.
+      Phone and Mac run a Noise&nbsp;IK handshake with each other, not with
+      us. Our relay switches sealed frames it holds no key for — and an
+      end-to-end test taps the wire and fails if a method name or a machine
+      name ever appears in the clear. On the same Wi-Fi, there is no relay
+      at all.
+    </p>
+    <p class="links">
+      <a href="/privacy">What the relay can and cannot see →</a>
     </p>
   </div>
-  <img class="shot" src="/_/shots/models.webp" width="1320" height="2868" loading="lazy"
-       alt="The model picker in Rowel listing DeepSeek and GLM models.">
+  <div class="diagram" role="img" aria-label="The iPhone and the Mac exchange sealed frames through the relay, which sees only ciphertext.">
+    <div class="node">
+      <span class="node-title">iPhone</span>
+      <span class="node-sub">Rowel</span>
+    </div>
+    <div class="wire"><span>sealed frames</span></div>
+    <div class="node node-blind">
+      <span class="node-title">Relay</span>
+      <span class="node-sub">sees ciphertext only</span>
+    </div>
+    <div class="wire"><span>sealed frames</span></div>
+    <div class="node">
+      <span class="node-title">Your Mac</span>
+      <span class="node-sub">Bridle → dsh</span>
+    </div>
+    <p class="diagram-note">Bridle dials out. No port to forward, no public IP.</p>
+  </div>
 </section>
 
-<section class="feature">
-  <div class="feature-copy">
-    <h3>Every session, one list</h3>
+<section class="wrap duo">
+  <div class="card">
+    <span class="num">04</span>
+    <h2>Zero accounts.<br>One QR code.</h2>
     <p>
-      Everything the harness is running, grouped by workspace — the same
-      directories you work in on the Mac. Search the full text of every
-      conversation. And when one reaches an interesting branch point, fork it
-      and take both paths.
+      Nothing to sign up for, no server address to type. The Mac prints a QR
+      code, the phone reads it, and what changes hands is a key — so there is
+      no password to leak, reuse, or reset.
     </p>
   </div>
-  <img class="shot" src="/_/shots/sessions.webp" width="1320" height="2868" loading="lazy"
-       alt="The session list in Rowel, grouped by workspace, with full-text search.">
-</section>
-
-<section class="feature">
-  <div class="feature-copy">
-    <h3>One minute, one QR code, no account</h3>
+  <div class="card">
+    <span class="num">05</span>
+    <h2>Your Mac. Your keys.<br>Your models.</h2>
     <p>
-      There is nothing to sign up for and no server address to type. The Mac
-      prints a QR code; the phone reads it. That exchange hands over a key, not
-      a password — so there is no credential to leak, reuse, or reset.
-    </p>
-    <p>
-      Both ends then show the same fingerprint, and you check they match. That
-      is the whole of the trust decision, and it is made once: from then on the
-      app reconnects by itself.
+      The agent runs where your code already lives. Rowel never talks to an
+      AI service: it drives the harness you configured — DeepSeek, GLM, Qwen
+      and the dozens of others it knows — and lets you switch per conversation.
     </p>
   </div>
-  <img class="shot" src="/_/shots/pairing-sheet.webp" width="1320" height="2868" loading="lazy"
-       alt="Rowel's pairing screen, showing the one command to run on the Mac and a button to scan the QR code it prints.">
 </section>
 
-<h3>Also in the app</h3>
-
-<table>
-  <tr>
-    <th>Trace</th>
-    <td>The whole run as one line per step, searchable, with what each one took — for the two questions a transcript cannot answer at a glance: what has it been doing, and where did it go wrong.</td>
-  </tr>
-  <tr>
-    <th>Cost and context</th>
-    <td>How full the context window is and what is filling it, plus the four token classes broken out — because cache reads and fresh input are an order of magnitude apart in price.</td>
-  </tr>
-  <tr>
-    <th>Subagents</th>
-    <td>When work is handed to a child agent, see what it is doing instead of watching a tool call sit there.</td>
-  </tr>
-  <tr>
-    <th>Slash commands</th>
-    <td>Run the skills installed on your Mac by typing <code>/</code>.</td>
-  </tr>
-  <tr>
-    <th>Several Macs</th>
-    <td>Pair as many as you like and switch between them.</td>
-  </tr>
-</table>
-
-<h2>The security is structural</h2>
-
-<p>
-  Three pieces. <strong>Rowel</strong> is the app. <strong>Bridle</strong> is a
-  small program on your Mac that speaks for the harness. Between them, when
-  they are not on the same network, sits a <strong>relay</strong> we run on
-  Cloudflare's edge. Bridle dials out, so there is no port to forward and no
-  public IP to need.
-</p>
-
-<p>
-  The phone and the Mac run a Noise&nbsp;IK handshake with each other — not
-  with the relay — and everything after it travels as sealed frames. The relay
-  switches those frames between two sockets by circuit number. It holds no key
-  material, so it cannot read your prompts, the model's replies, your diffs,
-  or your file paths. That is a property of the design, not a promise about
-  our conduct: an end-to-end test taps the wire and fails if a method name or
-  a machine name ever appears in the clear.
-</p>
-
-<p>
-  Pairing is a QR code in your terminal, or a short code typed by hand and
-  accepted on the Mac. It
-  anchors keys on both ends — no accounts, no passwords — and both ends show a
-  key fingerprint you can compare when you want to be sure. On the same
-  Wi-Fi, the app talks to the Mac directly and the relay is not involved at
-  all.
-</p>
-
-<p>
-  All of it is open source — the app, Bridle, the relay, and the protocol —
-  so none of this has to be taken on faith.
-  <a href="https://github.com/0x5446/rowel">Read the source</a>, or read
-  <a href="/privacy">exactly what the relay can and cannot see</a>. And if
-  even a content-blind relay is more trust than you want to extend, run your
-  own: <code>bridle --relay wss://your.host</code> is the whole client side.
-</p>
-
-<h2>Setting up</h2>
-
-<p>
-  The one prerequisite: a Mac already running the
-  <a href="https://github.com/deepseek-ai/deepseek-harness">DeepSeek
-  Harness</a>.
-</p>
-
-<ol class="steps">
-  <li>
-    <h3>Install Bridle on the Mac</h3>
-    <p>Paste this into Terminal. It takes about a minute.</p>
-    <code class="command">curl -fsSL https://rowel.novabox.ai/install | sh</code>
-  </li>
-  <li>
-    <h3>Start pairing</h3>
-    <p>Still in Terminal:</p>
-    <code class="command">bridle pair</code>
-    <p>A QR code appears.</p>
-  </li>
-  <li>
-    <h3>Point the phone at it</h3>
-    <p>
-      Open Rowel, tap <em>Connect</em>, and scan. If the camera is being
-      difficult, run <code>bridle pair --code</code>, type its code, and accept
-      the phone on the Mac once its key matches. Pairing is one-time — after
-      this the app reconnects on its own.
-    </p>
-  </li>
-</ol>
-
-<section class="feature">
-  <div class="feature-copy">
-    <h3>What you get when it is done</h3>
-    <p>
-      The Mac appears in the app with the fingerprint of its key, the device id
-      the relay uses to address it, and the port the harness answers on. The
-      fingerprint is the one to compare: <code>bridle status</code> prints the
-      same four groups on the Mac, and matching them is what rules out an
-      impostor in the middle.
-    </p>
+<section class="wrap bento-section">
+  <h2 class="section-title">The whole run, on a phone.</h2>
+  <p class="section-sub">Not a notification relay. A full client for everything the harness does.</p>
+  <div class="bento">
+    <figure class="tile tile-tall">
+      <img src="/_/shots/conversation.webp" width="900" height="1955" loading="lazy"
+           alt="A conversation in Rowel with the model's reply, a code block and a test run.">
+      <figcaption><strong>Live, token by token.</strong> Replies, thinking, tool cards and diffs as they happen.</figcaption>
+    </figure>
+    <figure class="tile tile-tall">
+      <img src="/_/shots/trace.webp" width="900" height="1955" loading="lazy"
+           alt="The trace view: every step of a run, one line each, with what it took.">
+      <figcaption><strong>Trace.</strong> Every step on one line — what it has been doing, and where it went wrong.</figcaption>
+    </figure>
+    <figure class="tile tile-tall">
+      <img src="/_/shots/sessions.webp" width="900" height="1955" loading="lazy"
+           alt="The session list, grouped by workspace, with anything waiting on you at the top.">
+      <figcaption><strong>Every session, one list.</strong> Grouped by workspace, full-text search, waiting ones on top.</figcaption>
+    </figure>
+    <figure class="tile tile-tall">
+      <img src="/_/shots/photo.webp" width="900" height="1955" loading="lazy"
+           alt="A photographed paper sketch attached to a message, asking the agent to build that screen.">
+      <figcaption><strong>Show, don't describe.</strong> Photograph a sketch; the code lands on your Mac.</figcaption>
+    </figure>
+    <div class="tile tile-text">
+      <strong>Cost &amp; context</strong>
+      <p>How full the window is, what fills it, and the four token classes that price it.</p>
+    </div>
+    <div class="tile tile-text">
+      <strong>Subagents</strong>
+      <p>See what a child agent is doing instead of watching a tool call sit there.</p>
+    </div>
+    <div class="tile tile-text">
+      <strong>Slash commands</strong>
+      <p>Type <code>/</code> to run the skills installed on your Mac.</p>
+    </div>
+    <div class="tile tile-text">
+      <strong>Several Macs</strong>
+      <p>Pair as many as you like and switch between them.</p>
+    </div>
   </div>
-  <img class="shot" src="/_/shots/machine.webp" width="1320" height="2868" loading="lazy"
-       alt="A paired Mac in Rowel's settings, showing its key fingerprint, device id, and harness port.">
 </section>
 
-<h2>Where it is</h2>
+<section class="wrap setup" id="setup">
+  <h2 class="section-title">Set up in a minute.</h2>
+  <p class="section-sub">One prerequisite: a Mac running the <a href="https://github.com/deepseek-ai/deepseek-harness">DeepSeek Harness</a>.</p>
+  <ol class="steps">
+    <li>
+      <span class="step">1</span>
+      <h3>Install Bridle on the Mac</h3>
+      <div class="term" data-copy="curl -fsSL https://rowel.novabox.ai/install | sh">
+        <span class="prompt">$</span>
+        <code>curl -fsSL https://rowel.novabox.ai/install | sh</code>
+        <button type="button" class="copy" aria-label="Copy the install command">Copy</button>
+      </div>
+    </li>
+    <li>
+      <span class="step">2</span>
+      <h3>Start pairing</h3>
+      <div class="term" data-copy="bridle pair">
+        <span class="prompt">$</span>
+        <code>bridle pair</code>
+        <button type="button" class="copy" aria-label="Copy the pairing command">Copy</button>
+      </div>
+    </li>
+    <li>
+      <span class="step">3</span>
+      <h3>Scan it with Rowel</h3>
+      <p>Open the app, tap <em>Connect a Mac</em>, point the camera. No camera handy? <code>bridle pair --code</code> gives you a short code to type instead.</p>
+    </li>
+  </ol>
+</section>
 
-<div class="note">
-  <p>
-    <strong>The Mac side works today.</strong> Bridle and the relay are
-    deployed and in daily use.
-  </p>
-  <p>
-    <strong>The app is not on the App Store yet</strong> — it is in review. In
-    the meantime it is on
-    <a href="https://testflight.apple.com/join/HHCQBu38">TestFlight</a>, and
-    the build there is the one that was submitted.
-    <a href="/get">Where the release stands, and how to build it yourself.</a>
-  </p>
-</div>
+<section class="wrap faq">
+  <h2 class="section-title">Questions</h2>
+  <details>
+    <summary>Is it free?</summary>
+    <p>Yes. The app, Bridle, the relay and the protocol are all MIT-licensed and free.</p>
+  </details>
+  <details>
+    <summary>Does my code leave my Mac?</summary>
+    <p>Only to your own phone, end-to-end encrypted. The relay in between cannot read it, and Rowel never sends anything to an AI service — the agent runs on your Mac with the provider you configured there.</p>
+  </details>
+  <details>
+    <summary>Do the phone and Mac need to be on the same network?</summary>
+    <p>No. On the same Wi-Fi they talk directly; anywhere else they meet through the relay, still end to end encrypted.</p>
+  </details>
+  <details>
+    <summary>Can I run my own relay?</summary>
+    <p>Yes. It is in the repository, and <code>bridle --relay wss://your.host</code> is the whole client side.</p>
+  </details>
+  <details>
+    <summary>Is it on the App Store?</summary>
+    <p>It is in App Store review. Until then it is on <a href="https://testflight.apple.com/join/HHCQBu38">TestFlight</a>, and the build there is the one that was submitted. <a href="/get">Where the release stands.</a></p>
+  </details>
+  <details>
+    <summary>Something is not working.</summary>
+    <p>Start with <a href="/help">Help</a> — pairing, connection and harness problems are covered there.</p>
+  </details>
+</section>
+
+<section class="wrap final">
+  <h2>Stop babysitting your terminal.</h2>
+  <p>Let the agent work. Rowel will tell you when it needs you.</p>
+  <div class="actions">
+    <a class="btn" href="https://testflight.apple.com/join/HHCQBu38">Join the TestFlight</a>
+    <a class="btn btn-ghost" href="https://github.com/0x5446/rowel">View on GitHub</a>
+  </div>
+</section>
 
 </main>
 
-<footer>
-  <a href="/get">Get the app</a>
-  <a href="/help">Help</a>
-  <a href="/privacy">Privacy</a>
-  <a href="https://github.com/0x5446/rowel">GitHub</a>
+<footer class="foot">
+  <div class="wrap foot-inner">
+    <span class="brand"><img src="/_/media/icon-180.png" width="22" height="22" alt="">Rowel</span>
+    <nav>
+      <a href="/get">Get the app</a>
+      <a href="/help">Help</a>
+      <a href="/privacy">Privacy</a>
+      <a href="https://github.com/0x5446/rowel">GitHub</a>
+    </nav>
+  </div>
 </footer>
 
+<script>
+  // The one script on the page: copy a command. Everything else is HTML.
+  for (const term of document.querySelectorAll('.term[data-copy]')) {
+    const button = term.querySelector('.copy')
+    button.addEventListener('click', async () => {
+      await navigator.clipboard.writeText(term.dataset.copy)
+      button.textContent = 'Copied'
+      setTimeout(() => { button.textContent = 'Copy' }, 1500)
+    })
+  }
+</script>
 </body>
 </html>

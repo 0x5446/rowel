@@ -1,0 +1,496 @@
+/*
+ * The front page. The other pages (help, get, privacy) keep `style.css`: they
+ * are long reading, and a reading page wants a narrow column on paper. This
+ * one is a pitch, so it gets the dark stage and the product in front.
+ *
+ * No web fonts and no framework: the system font on Apple devices is SF Pro,
+ * which is the typeface of the product being shown, and a page that makes one
+ * request for text renders on the first frame.
+ */
+
+:root {
+  --bg: #07080b;
+  --bg-raise: #0f1116;
+  --line: rgba(255, 255, 255, 0.08);
+  --line-strong: rgba(255, 255, 255, 0.14);
+  --ink: #eef0f5;
+  --ink-soft: #9aa3b2;
+  --ink-faint: #6b7383;
+  --a1: #8b5cf6;
+  --a2: #22d3ee;
+  --grad: linear-gradient(100deg, var(--a1), var(--a2));
+  --radius: 20px;
+  --wrap: 1120px;
+  --sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", "Segoe UI", system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 400 17px/1.6 var(--sans);
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+a { color: var(--ink); }
+img, video { display: block; max-width: 100%; height: auto; }
+
+code {
+  font-family: var(--mono);
+  font-size: 0.88em;
+  background: rgba(255, 255, 255, 0.07);
+  padding: 0.12em 0.4em;
+  border-radius: 6px;
+}
+
+.wrap { max-width: var(--wrap); margin: 0 auto; padding: 0 24px; }
+/* Grid children may shrink below their content, or one unbroken command line
+   widens the whole column past a phone's screen. */
+.hero-inner > *, .highlight > *, .duo > *, .bento > *, .steps > * { min-width: 0; }
+
+.grad {
+  background: var(--grad);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* ---- Buttons ---- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.8rem 1.35rem;
+  border-radius: 999px;
+  background: var(--ink);
+  color: var(--bg);
+  font-weight: 600;
+  font-size: 0.98rem;
+  text-decoration: none;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.btn:hover { transform: translateY(-1px); box-shadow: 0 8px 30px rgba(139, 92, 246, 0.35); }
+.btn-ghost {
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid var(--line-strong);
+}
+.btn-ghost:hover { box-shadow: none; border-color: rgba(255, 255, 255, 0.3); }
+.btn-small { padding: 0.45rem 0.95rem; font-size: 0.88rem; }
+
+/* ---- Nav ---- */
+
+.bar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: rgba(7, 8, 11, 0.72);
+  backdrop-filter: saturate(160%) blur(14px);
+  -webkit-backdrop-filter: saturate(160%) blur(14px);
+  border-bottom: 1px solid var(--line);
+}
+.bar-inner { display: flex; align-items: center; justify-content: space-between; height: 60px; }
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  font-weight: 700;
+  font-size: 1.05rem;
+  letter-spacing: -0.01em;
+  text-decoration: none;
+}
+.brand img { border-radius: 7px; }
+.bar-links { display: flex; align-items: center; gap: 1.6rem; }
+.bar-links a:not(.btn) { color: var(--ink-soft); text-decoration: none; font-size: 0.92rem; }
+.bar-links a:not(.btn):hover { color: var(--ink); }
+
+/* ---- Hero ---- */
+
+.hero {
+  position: relative;
+  padding: 72px 0 96px;
+  isolation: isolate;
+}
+/* A glow behind the phone and a faint grid under everything — the stage. */
+.hero::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background:
+    radial-gradient(600px 420px at 78% 38%, rgba(139, 92, 246, 0.28), transparent 70%),
+    radial-gradient(520px 380px at 62% 70%, rgba(34, 211, 238, 0.16), transparent 70%),
+    linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px) 0 0 / 56px 56px,
+    linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px) 0 0 / 56px 56px;
+  mask-image: linear-gradient(to bottom, black 60%, transparent);
+  -webkit-mask-image: linear-gradient(to bottom, black 60%, transparent);
+}
+.hero-inner {
+  display: grid;
+  grid-template-columns: 1.15fr 0.85fr;
+  gap: 56px;
+  align-items: center;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.35rem 0.85rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--ink-soft);
+  font-size: 0.85rem;
+  text-decoration: none;
+}
+.pill:hover { color: var(--ink); }
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #34d399;
+  box-shadow: 0 0 0 4px rgba(52, 211, 153, 0.18);
+}
+
+h1 {
+  margin: 1.4rem 0 0;
+  font-size: clamp(2.5rem, 5.4vw, 4.4rem);
+  line-height: 1.04;
+  font-weight: 750;
+  letter-spacing: -0.035em;
+}
+
+.sub {
+  margin: 1.4rem 0 0;
+  max-width: 34rem;
+  font-size: 1.2rem;
+  line-height: 1.55;
+  color: var(--ink-soft);
+}
+
+.actions { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 2rem; }
+
+.term {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  margin-top: 1.6rem;
+  max-width: 34rem;
+  padding: 0.7rem 0.7rem 0.7rem 1rem;
+  background: var(--bg-raise);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  font-family: var(--mono);
+  font-size: 0.9rem;
+}
+.term code { background: none; padding: 0; font-size: inherit; white-space: nowrap; overflow-x: auto; flex: 1; }
+.prompt { color: var(--a2); user-select: none; }
+.copy {
+  flex: none;
+  padding: 0.35rem 0.7rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink-soft);
+  font: 500 0.8rem var(--sans);
+  cursor: pointer;
+}
+.copy:hover { color: var(--ink); border-color: rgba(255, 255, 255, 0.3); }
+
+.trust {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1.4rem;
+  margin: 1.6rem 0 0;
+  padding: 0;
+  list-style: none;
+  color: var(--ink-faint);
+  font-size: 0.88rem;
+}
+.trust li::before { content: "✓"; margin-right: 0.45rem; color: var(--a2); }
+
+.hero-phone { display: flex; flex-direction: column; align-items: center; }
+.phone {
+  width: min(320px, 78vw);
+  padding: 11px;
+  border-radius: 54px;
+  background: linear-gradient(160deg, #2a2d36, #121318);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.1),
+    0 40px 120px rgba(139, 92, 246, 0.25),
+    0 20px 60px rgba(0, 0, 0, 0.6);
+}
+.phone video { width: 100%; border-radius: 44px; background: #fff; }
+.caption { margin: 1rem 0 0; color: var(--ink-faint); font-size: 0.82rem; }
+
+/* ---- Highlights ---- */
+
+main { padding-bottom: 40px; }
+
+.highlight {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 72px;
+  align-items: center;
+  padding-top: 96px;
+  padding-bottom: 96px;
+  border-top: 1px solid var(--line);
+}
+.highlight.flip .blurb { order: 2; }
+
+.num {
+  display: inline-block;
+  font: 600 0.85rem var(--mono);
+  color: var(--a2);
+  letter-spacing: 0.08em;
+}
+
+.highlight h2, .duo h2 {
+  margin: 0.8rem 0 0;
+  font-size: clamp(2rem, 3.6vw, 3rem);
+  line-height: 1.06;
+  font-weight: 720;
+  letter-spacing: -0.03em;
+}
+.highlight p, .duo p { margin: 1.2rem 0 0; color: var(--ink-soft); font-size: 1.1rem; max-width: 30rem; }
+.shot.focus-bottom { object-position: bottom; }
+
+.highlight .links a { color: var(--ink); font-weight: 500; text-decoration: none; border-bottom: 1px solid var(--line-strong); }
+.highlight .links a:hover { border-color: var(--a2); }
+
+.shot {
+  justify-self: center;
+  width: min(380px, 82vw);
+  /* A window onto the part of the screen the claim is about, not the whole
+     phone: a full-height screenshot at this size is mostly wallpaper. */
+  aspect-ratio: 10 / 11;
+  object-fit: cover;
+  object-position: top;
+  border-radius: 28px;
+  border: 1px solid var(--line-strong);
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.55), 0 0 60px rgba(139, 92, 246, 0.12);
+}
+
+/* The architecture, drawn in boxes rather than as an image so it stays sharp and readable. */
+.diagram {
+  display: grid;
+  gap: 0;
+  justify-items: stretch;
+  padding: 28px;
+  background: var(--bg-raise);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.node {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 16px 18px;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+}
+.node-title { font-weight: 650; }
+.node-sub { color: var(--ink-soft); font: 0.85rem var(--mono); }
+.node-blind { border-style: dashed; background: transparent; }
+.node-blind .node-sub { color: var(--a2); }
+.wire {
+  position: relative;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.wire::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--grad);
+  opacity: 0.7;
+}
+.wire span {
+  position: relative;
+  padding: 0.1rem 0.6rem;
+  background: var(--bg-raise);
+  color: var(--ink-faint);
+  font: 0.75rem var(--mono);
+}
+.wire span::before { content: "🔒 "; }
+.diagram-note { margin: 18px 0 0; color: var(--ink-faint); font-size: 0.88rem; text-align: center; }
+
+.duo {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  padding-top: 24px;
+  padding-bottom: 96px;
+}
+.card {
+  padding: 40px;
+  background: var(--bg-raise);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.duo h2 { font-size: clamp(1.7rem, 2.8vw, 2.3rem); }
+
+/* ---- Bento ---- */
+
+.bento-section, .setup, .faq { padding-top: 96px; padding-bottom: 32px; border-top: 1px solid var(--line); }
+
+.section-title {
+  margin: 0;
+  font-size: clamp(2rem, 3.6vw, 3rem);
+  line-height: 1.08;
+  font-weight: 720;
+  letter-spacing: -0.03em;
+}
+.section-sub { margin: 0.9rem 0 0; color: var(--ink-soft); font-size: 1.1rem; }
+.section-sub a { color: var(--ink); }
+
+.bento {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 48px;
+}
+.tile {
+  margin: 0;
+  background: var(--bg-raise);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+/* Each tall tile shows the top of a phone screen, cropped, above its caption. */
+.tile-tall img {
+  width: 100%;
+  aspect-ratio: 3 / 3.6;
+  object-fit: cover;
+  object-position: top;
+  border-bottom: 1px solid var(--line);
+}
+.tile figcaption { padding: 18px 20px 22px; color: var(--ink-soft); font-size: 0.95rem; line-height: 1.5; }
+.tile strong { color: var(--ink); font-weight: 650; }
+.tile-text { padding: 24px; }
+.tile-text p { margin: 0.5rem 0 0; color: var(--ink-soft); font-size: 0.95rem; line-height: 1.5; }
+
+/* ---- Setup ---- */
+
+.steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  margin: 48px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.steps li {
+  padding: 28px;
+  background: var(--bg-raise);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.step {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--grad);
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.9rem;
+}
+.steps h3 { margin: 1rem 0 0; font-size: 1.15rem; letter-spacing: -0.01em; }
+.steps p { margin: 0.8rem 0 0; color: var(--ink-soft); font-size: 0.95rem; }
+.steps .term { margin-top: 1rem; font-size: 0.8rem; }
+/* A narrow column wraps the command rather than hiding half of it behind a scroll. */
+.steps .term code { white-space: normal; overflow-wrap: anywhere; }
+
+/* ---- FAQ ---- */
+
+.faq details {
+  max-width: 48rem;
+  border-bottom: 1px solid var(--line);
+}
+.faq details:first-of-type { margin-top: 36px; }
+.faq summary {
+  padding: 1.2rem 0;
+  font-weight: 600;
+  font-size: 1.08rem;
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  justify-content: space-between;
+}
+.faq summary::-webkit-details-marker { display: none; }
+.faq summary::after { content: "+"; color: var(--ink-faint); font-weight: 400; font-size: 1.3rem; line-height: 1; }
+.faq details[open] summary::after { content: "–"; }
+.faq details p { margin: 0 0 1.3rem; color: var(--ink-soft); }
+
+/* ---- Final CTA ---- */
+
+.final {
+  margin-top: 96px;
+  padding: 80px 24px;
+  text-align: center;
+  border-radius: 28px;
+  background:
+    radial-gradient(500px 260px at 50% 0%, rgba(139, 92, 246, 0.35), transparent 70%),
+    var(--bg-raise);
+  border: 1px solid var(--line);
+  max-width: calc(var(--wrap) - 48px);
+}
+.final h2 {
+  margin: 0;
+  font-size: clamp(2.2rem, 4.4vw, 3.6rem);
+  line-height: 1.05;
+  font-weight: 750;
+  letter-spacing: -0.035em;
+}
+.final p { margin: 1rem 0 0; color: var(--ink-soft); font-size: 1.15rem; }
+.final .actions { justify-content: center; }
+
+/* ---- Footer ---- */
+
+.foot { margin-top: 72px; border-top: 1px solid var(--line); }
+.foot-inner { display: flex; justify-content: space-between; align-items: center; height: 88px; }
+.foot nav { display: flex; gap: 1.5rem; }
+.foot nav a { color: var(--ink-soft); text-decoration: none; font-size: 0.9rem; }
+.foot nav a:hover { color: var(--ink); }
+
+/* ---- Narrow screens ---- */
+
+@media (max-width: 900px) {
+  .bar-links a:not(.btn) { display: none; }
+  .hero { padding: 48px 0 64px; }
+  .hero-inner, .highlight, .duo { grid-template-columns: minmax(0, 1fr); gap: 40px; }
+  .highlight { padding-top: 64px; padding-bottom: 64px; }
+  .highlight.flip .blurb { order: 0; }
+  .bento { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .steps { grid-template-columns: minmax(0, 1fr); }
+  .card { padding: 28px; }
+  .final { margin-left: 16px; margin-right: 16px; padding: 56px 20px; }
+  .foot-inner { flex-direction: column; justify-content: center; gap: 0.8rem; height: auto; padding: 28px 24px; }
+}
+
+@media (max-width: 520px) {
+  body { font-size: 16px; }
+  .bento { grid-template-columns: minmax(0, 1fr); }
+  .term { font-size: 0.78rem; }
+  .term code { white-space: normal; overflow-wrap: anywhere; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .btn { transition: none; }
+}
