@@ -30,9 +30,20 @@ const TIMEOUT_MS = 30_000
 test('every page the app links to is served', { timeout: TIMEOUT_MS }, async () => {
   // `Links.swift` sends people to these. A 404 behind the app's Privacy button
   // is also a rejected App Store submission.
-  for (const path of ['/', '/get', '/help', '/privacy', '/_/site.css']) {
+  for (const path of ['/', '/privacy', '/_/site.css']) {
     const response = await fetch(new URL(path, SITE), { signal: AbortSignal.timeout(15_000) })
     assert.equal(response.status, 200, `${path} should be served`)
+  }
+})
+
+test('the old page addresses land on their sections', { timeout: TIMEOUT_MS }, async () => {
+  // The site is one page now, but `/help` is the app's Help button and the App
+  // Store's support URL, and `/get` is printed by the CLI and in the README —
+  // addresses that cannot be corrected once they have been read.
+  for (const [path, anchor] of [['/help', '/#help'], ['/get', '/#get']]) {
+    const response = await fetch(new URL(path, SITE), { redirect: 'manual', signal: AbortSignal.timeout(15_000) })
+    assert.equal(response.status, 301, `${path} should be a permanent redirect`)
+    assert.equal(new URL(response.headers.get('location') ?? '', SITE).href, new URL(anchor, SITE).href, `${path} should land on ${anchor}`)
   }
 })
 

@@ -12,10 +12,10 @@
  * What it does not learn is what the push is about. The Bridle sends a token
  * and a machine name; the visible text is a constant in this file. There is no
  * field for the agent's question, so there is nothing to leak and no promise
- * resting on the Relay choosing not to look. The phone wakes, opens its own
- * encrypted tunnel, asks the machine what happened, and posts a *local*
- * notification with the real words — which never crossed the Relay and never
- * reached Apple.
+ * resting on the Relay choosing not to look. The push is an alert and nothing
+ * more: it does not run the app. When the person opens it, the app reconnects
+ * over its own encrypted tunnel and shows the real request — words that never
+ * crossed the Relay and never reached Apple.
  *
  * **Which host, and why nobody is asked.** A token is minted against either the
  * development or the production APNs host and is meaningless to the other. The

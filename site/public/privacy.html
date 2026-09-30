@@ -18,8 +18,9 @@
       <a href="/#features">Features</a>
       <a href="/#security">Security</a>
       <a href="/#setup">Setup</a>
+      <a href="/#help">Help</a>
       <a href="https://github.com/0x5446/rowel">GitHub</a>
-      <a class="btn btn-small" href="/get">Get the app</a>
+      <a class="btn btn-small" href="/#get">Get the app</a>
     </div>
   </div>
 </nav>
@@ -30,7 +31,7 @@
     What each part of Rowel can see, stated precisely enough to be checked
     against the source.
   </p>
-  <p class="updated">Last updated 15 August 2026.</p>
+  <p class="updated">Last updated 30 September 2026.</p>
 </header>
 
 <main class="prose">
@@ -38,117 +39,120 @@
 <h2>The short version</h2>
 
 <ul>
-  <li>There are no accounts. We never ask for your name, email, or phone number.</li>
-  <li>Your conversations, code, and commands are encrypted between your phone and your Mac. The relay cannot decrypt them.</li>
-  <li>The relay keeps no logs. What little it does store — which machines are online, and a pairing code while you are using it — is deleted the moment it stops being needed.</li>
-  <li>There is no analytics SDK, no crash reporter, and no advertising or tracking code in the app.</li>
-  <li>On the same Wi-Fi, nothing touches the relay at all.</li>
+  <li>No accounts. We never ask for your name, email or phone number.</li>
+  <li>Your conversations, code and commands are encrypted end to end between your phone and your Mac. The relay in between cannot decrypt them.</li>
+  <li>The relay keeps no logs and stores almost nothing: which Macs are online, and a pairing code while you use one. Both are deleted when no longer needed.</li>
+  <li>No analytics, no advertising, no tracking, and no crash reporter that sends anything anywhere.</li>
+  <li>On the same Wi-Fi the phone usually talks to your Mac directly, and the relay never carries that session.</li>
 </ul>
 
 <h2>What the relay can see</h2>
 
 <p>
-  The app and Bridle perform a Noise&nbsp;IK handshake with each other and
-  exchange sealed frames. The relay switches those frames between two sockets
-  by circuit number. It has no key material and cannot read the contents.
+  The app and Bridle run a Noise&nbsp;IK handshake with each other and then
+  exchange sealed frames. The relay forwards those frames between two sockets
+  by circuit number. It holds no key and cannot read them. It does see:
 </p>
-
-<p>It does necessarily observe:</p>
 
 <table>
   <tr>
-    <th>Machine identifier</th>
-    <td>A random per-machine ID generated when Bridle is installed. It is not derived from your hardware and is not linked to you.</td>
+    <th>Machine ID</th>
+    <td>Random, made when Bridle is installed — the hash of its public key, not derived from your hardware.</td>
   </tr>
   <tr>
     <th>Machine name</th>
-    <td>The display name Bridle reports, so the app can show you which Mac you are about to connect to. This is in the clear, and it defaults to your computer's name — edit <code>machineName</code> in <code>~/.rowel/bridle.json</code> if that name says more about you than you would like.</td>
+    <td>In the clear, so the app can show which Mac it is connecting to. It defaults to your computer's name; change <code>machineName</code> in <code>~/.rowel/bridle.json</code> if that says more than you would like. Anyone who knows your machine ID can ask the relay for this name and your Bridle version.</td>
   </tr>
   <tr>
     <th>Bridle version</th>
-    <td>Reported at registration.</td>
+    <td>Reported when Bridle connects.</td>
   </tr>
   <tr>
-    <th>Who is connected to whom</th>
-    <td>That some phone has an open circuit to some machine, and when it opened.</td>
+    <th>Who talks to whom</th>
+    <td>That some phone opened a circuit to some machine, and when.</td>
   </tr>
   <tr>
-    <th>Traffic volume and timing</th>
-    <td>Unavoidable for anything that forwards bytes. Enough to tell that you are busy, not what you are doing.</td>
+    <th>Volume and timing</th>
+    <td>Unavoidable for anything that forwards bytes: enough to tell you are busy, not what you are doing.</td>
   </tr>
   <tr>
-    <th>Network address</th>
-    <td>Your IP address, as with any server you connect to.</td>
+    <th>IP addresses</th>
+    <td>Yours, as with any server you connect to.</td>
+  </tr>
+  <tr>
+    <th>Push tokens</th>
+    <td>Your phone's notification token, at the moment a notification is sent — see <a href="#notifications">Notifications</a>.</td>
   </tr>
 </table>
 
-<p>It never sees: your prompts, the model's replies, file contents, diffs, command output, your Harness's address, your API keys, or your file paths.</p>
+<p>It never sees your prompts, the model's replies, file contents, diffs, command output, API keys or file paths.</p>
+
+<p>
+  On the same Wi-Fi the app tries your Mac directly and only dials the relay
+  a quarter of a second later; the direct path normally wins, and then the
+  relay never learns that session happened. Bridle itself stays connected to
+  the relay either way, so your Mac is reachable when you are not at home.
+</p>
 
 <h3>During pairing</h3>
 
 <p>
-  While a pairing code is outstanding — <strong>at most 15 minutes</strong>, and
-  usually a few seconds — the relay holds the pairing bundle so the app can
-  fetch it with the short code. That bundle contains your machine's name, its
-  public key, its local network addresses, and a one-time token that can only
-  <em>ask</em> to pair — someone at the Mac has to accept it. It is dropped
-  as soon as the code is claimed or expires.
+  Pairing by QR code goes from your screen to your camera; the relay is not
+  involved. Pairing by typed code (<code>bridle pair --code</code>) puts a
+  pairing bundle on the relay so the app can fetch it: your machine's name,
+  ID, public key, local network addresses, and a one-time token that can only
+  <em>ask</em> to pair — you accept the phone at the Mac. The bundle is kept
+  until a phone enters the code or it expires, 10 minutes at most (the relay
+  refuses to hold one longer than 15).
 </p>
 
-<h2>What the relay stores, and for how long</h2>
+<h2>What the relay stores</h2>
 
 <p>
-  The relay runs on Cloudflare's edge, as a set of small objects each holding
-  one connection or one pairing code. Two of them write to durable storage, and
-  both delete what they wrote as soon as it stops being needed:
+  The relay is a Cloudflare Worker. The objects that carry your traffic store
+  nothing. What is written to storage:
 </p>
 
 <table>
   <tr>
     <th>While a Mac is online</th>
-    <td>One row: its machine ID, display name, Bridle version, and when it
-      connected. Deleted when it disconnects.</td>
+    <td>One row: its machine ID, name, Bridle version, when it connected, and how many phones are attached. Deleted when it disconnects — or within ten minutes, if the disconnect is missed.</td>
   </tr>
   <tr>
-    <th>While a pairing code is outstanding</th>
-    <td>The pairing bundle, so the app can fetch it with the code. Deleted the
-      moment the code is claimed, or when it expires — at most 15 minutes.</td>
+    <th>While a typed code is outstanding</th>
+    <td>The pairing bundle above, and a note of which codes that machine has open and when they lapse. Deleted when the code is used or expires.</td>
+  </tr>
+  <tr>
+    <th>Once</th>
+    <td>The time the relay first started. Nothing about you.</td>
   </tr>
 </table>
 
 <p>
-  Nothing else is written anywhere. Not your messages, not who talked to whom,
-  not how much, not when. There is no log file, no analytics pipeline, and no
-  backup — the objects that carry your traffic hold no storage at all, and the
-  frames passing through them are sealed anyway.
+  Not your messages, not who talked to whom, not a history of how much or
+  when. Cloudflare keeps its own 30-day recovery log for this kind of storage,
+  which code could use to roll it back to an earlier moment; the relay has no
+  code that does, and we do not use it.
 </p>
 
 <p>
-  Two consequences, one good and one worth knowing: we could not hand over your
-  history because we never had it; and the relay has no memory of you between
-  sessions, so nothing accumulates.
+  Logs are switched off. The relay's code prints a line in two rare cases — two
+  Bridles fighting over one machine ID, and a notification Apple refused — and
+  those lines are visible only to someone watching the live stream at that
+  moment. Nothing is kept.
 </p>
 
 <h2>Cloudflare</h2>
 
 <p>
-  The relay runs at <code>rowel-relay.novabox.ai</code>, and since August 2026 it
-  <em>is</em> a Cloudflare Worker rather than a program on a machine we rent.
-  It has a hostname of its own, separate from this site, so that a rule aimed
-  at these pages cannot reach the thing your phone depends on. Cloudflare therefore both terminates TLS and runs the code, and can
-  observe the same metadata described above — your IP address, timing, and
-  volume — subject to
-  <a href="https://www.cloudflare.com/privacypolicy/">its own privacy policy</a>.
-  It cannot read your traffic: what it forwards is already sealed between your
-  phone and your Mac.
-</p>
-
-<p>
-  Being honest about the shape of that: running on someone else's edge removes
-  a server we could misconfigure and adds a company that could be compelled.
-  The end-to-end encryption is what makes both of those bounded — neither we
-  nor Cloudflare can produce your conversations, because neither has ever
-  held them in a readable form.
+  The relay runs at <code>rowel-relay.novabox.ai</code>, on its own hostname,
+  separate from this site. Cloudflare terminates TLS and runs the code, so it
+  can see the same metadata as the relay — IP addresses, timing, volume —
+  under <a href="https://www.cloudflare.com/privacypolicy/">its own privacy
+  policy</a>. It cannot read your traffic: what it forwards is sealed between
+  your phone and your Mac. We also keep a standby relay of our own for
+  outages; nothing points to it today, and if we ever switch, this page will
+  say so.
 </p>
 
 <h2>What stays on your devices</h2>
@@ -156,104 +160,91 @@
 <h3>On the Mac</h3>
 
 <p>
-  Bridle keeps its identity key and its list of paired phones under
-  <code>~/.rowel</code>. Your conversations stay wherever the DeepSeek Harness
-  already keeps them; Bridle does not copy them anywhere.
+  Under <code>~/.rowel</code>, Bridle keeps its identity keys, the phones it
+  has paired (their names, keys and notification tokens), any pairing request
+  waiting for your approval, and — if you installed the background service —
+  a log, <code>bridle.log</code>, that records connections by device name.
+  Your conversations stay where the DeepSeek Harness keeps them; Bridle does
+  not copy them to disk.
 </p>
 
 <h3>On the phone</h3>
 
 <p>
-  Less than you might expect. The app keeps its identity key in the iOS
-  Keychain, and four small things in its own sandboxed storage: the list of
-  paired Macs, the name this iPhone reports, which Mac it was last on, and the
-  model new conversations should start with.
+  The app keeps its identity key in the iOS Keychain. In its own sandboxed
+  storage: the list of paired Macs, the name this iPhone reports, which Mac it
+  was last on, per-Mac display settings (default model, which workspace
+  sections are folded), the lock settings, and any hang or crash diagnostics
+  iOS hands the app — kept on the phone, and sent only if you share one
+  yourself.
 </p>
 
 <p>
-  <strong>Your conversations are not stored on the phone at all.</strong> The
-  session list and every message are fetched from your Mac when you open the
-  app and held only in memory, so closing it discards them. That is a
-  consequence of the Mac being the only source of truth rather than a privacy
-  feature we are claiming credit for — but the effect is the same, and it is
-  worth knowing that a phone with Rowel on it is not carrying a copy of your
-  work.
+  <strong>Your conversations are not stored on the phone.</strong> The session
+  list and messages are fetched from your Mac and held in memory; closing the
+  app discards them. The exception is a notification the app posts while
+  connected — the first line of a question and the conversation's title — which
+  stays in Notification Center until you clear it.
 </p>
 
 <p>
-  Unpairing a Mac in the app's settings is <strong>one-sided</strong>: the phone
-  forgets that machine, but the Mac still lists the phone until you run
-  <code>bridle revoke</code> there. We could have made the app ask the Mac to
-  forget it, and chose not to — a phone that wants to be forgotten is exactly
-  the phone whose word should not be taken for it. Run <code>bridle devices</code>
-  on the Mac to see what it still trusts.
+  Forgetting a Mac in the app is <strong>one-sided</strong>: the phone forgets
+  the machine, but the Mac keeps trusting the phone until you run
+  <code>bridle revoke</code> there. <code>bridle devices</code> shows what it
+  still trusts.
 </p>
 
 <h2>The lock on the app</h2>
 
 <p>
-  Rowel locks itself, because a paired iPhone can approve commands on your Mac
-  and your phone being unlocked in someone else's hands is the gap the system
-  lock does not cover. It asks for Face ID, Touch ID, or your passcode on
-  launch and after an idle timeout you choose, and it covers the screen the
-  moment the app stops being frontmost — so the app switcher photographs a lock
-  screen rather than your work.
+  A paired iPhone can approve commands on your Mac, so Rowel locks itself by
+  default. It asks for Face ID, Touch ID or your passcode on launch, and when
+  you come back after being away longer than a delay you choose (one minute
+  unless you change it). It covers the screen the moment the app leaves the
+  foreground, so the app switcher shows a lock, not your work. You can turn it
+  off, and it is off on a phone with no passcode.
 </p>
 
 <p>
-  It bounds the window; it does not close it. If you lose the phone, the thing
-  that actually revokes its access is <code>bridle revoke</code> on the Mac, and
-  there is no way to do that from another phone yet.
+  It narrows the window; it does not close it. If you lose the phone, revoke
+  it on the Mac with <code>bridle revoke</code> — there is no way to do that
+  from another phone yet.
 </p>
 
-<h2>Notifications</h2>
+<h2 id="notifications">Notifications</h2>
 
 <p>
-  When your agent stops to ask you something and the app is not running, the
-  machine has the relay ring your phone. Only Apple can wake a suspended iOS
-  app, and Apple only accepts a push signed with a developer key, so the relay
-  is the one part of this that signs — and therefore the one part that learns a
-  device token.
+  When your agent stops to ask and no phone is connected to that Mac, the Mac
+  has the relay send a notification to every phone paired with it that has
+  notifications on. Apple only accepts pushes signed with a developer key, so
+  the relay signs them — which makes it the one part of this that learns your
+  device token. The token is handed over one notification at a time and not
+  stored.
 </p>
 
 <p>
-  <strong>The push carries no content.</strong> The words in the banner are a
-  fixed sentence written into the relay's source, and the message the machine
-  sends the relay has no field an agent's question could go in. There is
-  nothing to leak rather than a promise not to look. Your phone wakes, opens
-  its own encrypted tunnel to your machine, asks what happened, and writes the
-  real notification locally — text that never crossed the relay and never
-  reached Apple.
+  <strong>The push is the whole notification, and it carries no question.</strong>
+  It is titled “Rowel” and reads “Your agent is waiting on you. · <em>name</em>”,
+  with your Mac's name (cut to 64 characters) so someone with two Macs knows
+  which one stopped. The sentence is fixed in the relay's source; the message
+  your Mac sends has no field an agent's question could go in. The push does
+  not run the app. When you open Rowel, it connects over its own encrypted
+  tunnel and shows you the actual request — text that never crossed the relay
+  and never reached Apple.
 </p>
 
-<p>What this does mean, stated plainly:</p>
-
-<ul>
-  <li>
-    The relay learns your <strong>device token</strong> at the moment a push is
-    sent. It is handed over one wake at a time by your machine and is not
-    stored.
-  </li>
-  <li>
-    <strong>Apple sees the machine's display name.</strong> The banner reads
-    “Your agent is waiting on you · <em>name</em>”, so that someone with two
-    Macs knows which one stopped. That name, the timing, and your device token
-    are what Apple's push service handles.
-  </li>
-  <li>
-    Apple's push service therefore knows <em>that</em> a machine wanted your
-    attention, and when. It does not know what about.
-  </li>
-  <li>
-    Your machine rings every phone you have paired with it that has
-    notifications switched on — it does not try to guess which one you are
-    holding.
-  </li>
-</ul>
+<p>
+  So Apple's push service knows <em>that</em> one of your Macs wanted your
+  attention, and when — not what about. The relay knows which device token
+  belongs to which machine.
+</p>
 
 <p>
-  Turning notifications off in iOS Settings is enough to stop it: the app
-  notices on its next launch and tells the machine to forget the token.
+  To stop notifications, turn them off for Rowel in iOS Settings. The next time
+  the app opens it tells the Mac it connects to to forget the token, and other
+  paired Macs forget it when the app next connects to them. A Mac you forgot
+  only on the phone keeps notifying it until you run <code>bridle revoke</code>
+  there.
 </p>
 
 <h2>Children</h2>
@@ -263,19 +254,23 @@
 <h2>Changes</h2>
 
 <p>
-  Material changes will be reflected here with a new date at the top. Because
-  the relay keeps no record of who uses it, there is no mailing list to notify
-  — checking this page is the only mechanism, which is a real limitation of
-  collecting nothing.
+  Material changes are made here, with a new date at the top. The relay keeps
+  no record of who uses it, so there is no list to notify — this page is the
+  only place changes appear.
 </p>
 
 <h2>Checking any of this</h2>
 
 <p>
-  The claims above are structural, so they can be verified rather than trusted.
-  The relay's entire state is in <code>relay/src/registry.ts</code> and
-  <code>relay/src/offers.ts</code>, and a test named <em>the relay only ever
-  sees ciphertext</em> asserts the central claim on every run.
+  Everything above is in the <a href="https://github.com/0x5446/rowel">source</a>.
+  The production relay's entire state is in
+  <code>relay-worker/src/exchange.ts</code>, <code>pair-code.ts</code> and
+  <code>switchboard.ts</code> (the self-hostable Node relay's is in
+  <code>relay/src/registry.ts</code> and <code>offers.ts</code>). An end-to-end
+  test, <em>the relay only ever sees ciphertext</em>
+  (<code>e2e/tests/security.test.js</code>), taps the phone's traffic through
+  the Node relay and fails if a method name, a session id, the machine's name
+  or a conversation title appears in it; it runs wherever a DeepSeek Harness is available.
 </p>
 
 <h2>Contact</h2>
@@ -288,10 +283,11 @@
   <div class="wrap foot-inner">
     <a class="brand" href="/"><img src="/_/media/icon-180.png" width="22" height="22" alt="">Rowel</a>
     <nav>
-      <a href="/get">Get the app</a>
-      <a href="/help">Help</a>
+      <a href="/#get">Get the app</a>
+      <a href="/#help">Help</a>
       <a href="/privacy">Privacy</a>
       <a href="https://github.com/0x5446/rowel">GitHub</a>
+      <a href="mailto:hi@novabox.ai">hi@novabox.ai</a>
     </nav>
   </div>
 </footer>

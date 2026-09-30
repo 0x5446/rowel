@@ -10,3 +10,9 @@
 # a tag (`ROWEL_REF`), so the only thing following `main` here changes is the
 # installer's own logic, and a broken installer must be fixable with a push.
 /install  https://raw.githubusercontent.com/0x5446/rowel/main/install.sh  302
+
+# The site is one page. These two addresses were pages of their own and are
+# still in circulation — `/help` is the app's Help button and the App Store's
+# support URL, `/get` is printed by the CLI — so they land on their sections.
+/help  /#help  301
+/get   /#get   301
