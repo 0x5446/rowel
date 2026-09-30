@@ -471,7 +471,7 @@ npx wrangler secret put ROWEL_APNS_TOPIC --config relay-worker/wrangler.jsonc  #
 
 ### 对外页面
 
-页面在 `site/public/`，全站一份样式 `_/site.css`：首页是深色落地页，`help` / `get` / `privacy` / `404` 用同一套顶栏、页脚和 `.prose` 阅读版式。首页的截图由 `ios/screenshots.sh` 生成到 `_/shots/`；首屏的循环短片 `_/media/approve.mp4` 截自 `ios/demo.sh` 录的 `marketing/video/raw/phone.mov`（从会话列表出现到结束，约 20 秒），界面变了就重录再截：
+官网是单页 `site/public/index.html`（安装、获取、帮助、FAQ 都在里面），另有独立的隐私政策 `privacy.html` 和 `404.html`，全站一份样式 `_/site.css`。`/help`、`/get` 已并入首页，由 `_redirects` 301 到 `/#help`、`/#get`——这两个地址被 app 的帮助按钮、App Store 的技术支持 URL、CLI 输出引用着，不能删。首页的截图由 `ios/screenshots.sh` 生成到 `_/shots/`；首屏的循环短片 `_/media/approve.mp4` 截自 `ios/demo.sh` 录的 `marketing/video/raw/phone.mov`（从会话列表出现到结束，约 20 秒），界面变了就重录再截：
 
 ```sh
 ffmpeg -ss <列表出现的秒数> -to <ended> -i marketing/video/raw/phone.mov \

@@ -3,10 +3,10 @@
 **The iPhone app for the [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness).
 Your agent is waiting on you — answer from anywhere.**
 
-When `dsh` stops to ask permission, your phone buzzes, you see the exact
-command and diff, and one tap unblocks the Mac. Read what the agent did,
-answer the question it is blocked on, start the next thing from a train.
-End to end encrypted; the relay only ever sees ciphertext.
+When `dsh` stops to ask permission, your phone buzzes, you see the command
+or diff it wants to run, and one tap unblocks the Mac. Read what the agent
+did, answer the question it is blocked on, start the next thing from a train.
+End to end encrypted; the relay cannot read your traffic.
 
 **[rowel.novabox.ai](https://rowel.novabox.ai)** ·
 **[Join the TestFlight](https://testflight.apple.com/join/HHCQBu38)** ·
@@ -38,9 +38,9 @@ MIT, all of it: the app, Bridle, the relay, the protocol.
 ```
 
 Bridle dials out. **No port forwarding, no public IP, nothing to change on your
-router.** When the phone and the Mac are on the same network the app talks to the
-Mac directly and the relay is not involved at all — both paths are raced and the
-local one wins.
+router.** When the phone and the Mac are on the same network the app tries the
+Mac directly and dials the relay a quarter of a second later; the local path
+normally wins, and then the relay never carries the session.
 
 There are no accounts. Pairing is a QR code in your terminal.
 
@@ -61,9 +61,9 @@ curl -fsSL https://rowel.novabox.ai/install | sh
 ```
 
 Needs Node 22+ and git. The script installs neither — it stops and tells you what
-is missing. It writes nothing outside `~/.rowel`, plus one symlink onto your PATH.
-It is 134 lines, a third of them comments, if you would rather read it before
-running it.
+is missing. Everything it installs lives in `~/.rowel`, plus one symlink onto
+your PATH (and npm's usual cache). It is 144 lines, over a third of them
+comments, if you would rather read it before running it.
 
 ### 2. Pair
 
@@ -71,12 +71,13 @@ running it.
 bridle pair
 ```
 
-A QR code appears in the terminal. Point the app at it. The first run of `bridle`
-does this for you, so this command is for adding a second phone.
+It starts Bridle if none is running, prints a QR code, and stays running. In
+the app, tap *Connect a Mac*, then *I've run it — scan the code*. With Bridle
+already running (a service, or dsh's plugin), it just prints a fresh code.
 
 Over SSH, where a terminal may not draw a QR code, add `--link` to print the raw
-pairing link. When the camera is not an option, `bridle pair --code` prints an
-8-character code to type instead and waits: the Mac then shows the phone's key
+pairing link. When the camera is not an option, `bridle pair --code` (with Bridle
+already running) prints an 8-character code to type instead and waits: the Mac then shows the phone's key
 and asks you to accept it, and you check it against the key the phone shows.
 [SECURITY.md](SECURITY.md) says why that step exists.
 
@@ -93,7 +94,7 @@ takes it back off.
 
 ```
 bridle                    start (and pair, on the first run)
-bridle pair               a fresh pairing QR (--code: a code to type)
+bridle pair               a pairing QR, starting bridle if none runs (--code: a code to type)
 bridle status             machine, relay, harness, paired devices
 bridle devices            list paired devices
 bridle revoke <prefix>    remove one
@@ -151,8 +152,11 @@ this: it starts nothing, so it runs happily beside a Bridle that is already up.
 
 The relay switches sealed frames between two sockets by circuit number. It has no
 key material and cannot open them, which is a property of the shape rather than a
-promise about anyone's conduct — an end-to-end test taps the socket and fails if
-a method name, a machine name, or a session id ever appears on the wire. Both
+promise about anyone's conduct — an end-to-end test taps the phone's traffic
+through the relay and fails if a method name, a session id, the machine's name or
+a conversation title ever appears in it. (The relay does learn the machine's
+display name from Bridle's own registration; SECURITY.md lists everything it
+learns.) Both
 implementations of the tunnel use only their platform's own primitives, Node's
 `node:crypto` and Swift's `CryptoKit`. There is no third-party cryptography
 dependency in the tree.

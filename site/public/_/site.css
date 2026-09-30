@@ -427,14 +427,39 @@ main { padding-bottom: 40px; }
 /* A narrow column wraps the command rather than hiding half of it behind a scroll. */
 .setup .steps .term code { white-space: normal; overflow-wrap: anywhere; }
 
+/* ---- Get, Help ---- */
+
+.get, .help { padding-top: 96px; padding-bottom: 32px; border-top: 1px solid var(--line); }
+.after { margin: 1.6rem 0 0; color: var(--ink-soft); font-size: 0.98rem; }
+.after a { color: var(--ink); }
+
+.get-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 40px; }
+.get-card h3 { margin: 0; font-size: 1.3rem; letter-spacing: -0.01em; }
+.get-card p { margin: 0.7rem 0 1.4rem; color: var(--ink-soft); font-size: 1rem; }
+.more summary { cursor: pointer; color: var(--ink); font-weight: 600; }
+.more p { font-size: 0.92rem; margin-bottom: 0; }
+
+/* Code in the sections below the fold: commands and config to paste. */
+main pre {
+  margin: 0.9rem 0;
+  padding: 0.9rem 1rem;
+  overflow-x: auto;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font: 0.8rem/1.6 var(--mono);
+}
+main pre code { background: none; padding: 0; font-size: inherit; }
+
+.qa-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 40px; margin-top: 28px; }
+.qa-grid > * { min-width: 0; }
+
 /* ---- FAQ ---- */
 
-.faq details {
-  max-width: 48rem;
-  border-bottom: 1px solid var(--line);
-}
+.faq details, .qa-grid details { border-bottom: 1px solid var(--line); }
+.faq details { max-width: 48rem; }
 .faq details:first-of-type { margin-top: 36px; }
-.faq summary {
+.faq summary, .qa-grid summary {
   padding: 1.2rem 0;
   font-weight: 600;
   font-size: 1.08rem;
@@ -443,10 +468,11 @@ main { padding-bottom: 40px; }
   display: flex;
   justify-content: space-between;
 }
-.faq summary::-webkit-details-marker { display: none; }
-.faq summary::after { content: "+"; color: var(--ink-faint); font-weight: 400; font-size: 1.3rem; line-height: 1; }
-.faq details[open] summary::after { content: "–"; }
-.faq details p { margin: 0 0 1.3rem; color: var(--ink-soft); }
+.faq summary::-webkit-details-marker, .qa-grid summary::-webkit-details-marker { display: none; }
+.faq summary::after, .qa-grid summary::after { content: "+"; flex: none; margin-left: 1rem; color: var(--ink-faint); font-weight: 400; font-size: 1.3rem; line-height: 1; }
+.faq details[open] summary::after, .qa-grid details[open] summary::after { content: "–"; }
+.faq details p, .qa-grid details p { margin: 0 0 1rem; color: var(--ink-soft); }
+.qa-grid summary { font-size: 1rem; }
 
 /* ---- Final CTA ---- */
 
@@ -566,7 +592,7 @@ main { padding-bottom: 40px; }
   .highlight { padding-top: 64px; padding-bottom: 64px; }
   .highlight.flip .blurb { order: 0; }
   .bento { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .setup .steps { grid-template-columns: minmax(0, 1fr); }
+  .setup .steps, .get-grid, .qa-grid { grid-template-columns: minmax(0, 1fr); }
   .card { padding: 28px; }
   .final { margin-left: 16px; margin-right: 16px; padding: 56px 20px; }
   .foot-inner { flex-direction: column; justify-content: center; gap: 0.8rem; height: auto; padding: 28px 24px; }

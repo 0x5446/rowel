@@ -22,8 +22,9 @@
       <a href="#features">Features</a>
       <a href="#security">Security</a>
       <a href="#setup">Setup</a>
+      <a href="#help">Help</a>
       <a href="https://github.com/0x5446/rowel">GitHub</a>
-      <a class="btn btn-small" href="/get">Get the app</a>
+      <a class="btn btn-small" href="#get">Get the app</a>
     </div>
   </div>
 </nav>
@@ -75,9 +76,9 @@
     <h2>It finds you.</h2>
     <p>
       The moment your agent blocks on a permission, your lock screen lights
-      up. Not an email. Not a dashboard you forgot to check. And the push
-      carries no content — the phone wakes and fetches the question over its
-      own encrypted tunnel.
+      up. Not an email. Not a dashboard you forgot to check. The push carries
+      no question — just a fixed sentence and your Mac's name. Open it, and
+      the phone fetches the question over its own encrypted tunnel.
     </p>
   </div>
   <img class="shot" src="/_/shots/push.webp" width="900" height="1955" loading="lazy"
@@ -89,9 +90,10 @@
     <span class="num">02</span>
     <h2>The exact command.<br>Not a summary.</h2>
     <p>
-      Approvals arrive with the full command and diff the agent wants to run,
-      and the reason it gave. You decide on what will actually execute —
-      then the Mac carries on while you are still on the train.
+      Every approval sits under the tool call it is for — the full command
+      or the diff — with the reason dsh gives. You decide on what will
+      actually execute, then the Mac carries on while you are still on the
+      train.
     </p>
   </div>
   <img class="shot focus-bottom" src="/_/shots/approval.webp" width="900" height="1955" loading="lazy"
@@ -101,13 +103,14 @@
 <section class="wrap highlight" id="security">
   <div class="blurb">
     <span class="num">03</span>
-    <h2>The relay is blind.<br>Don't take our word for it.</h2>
+    <h2>The relay can't read your code.<br>Don't take our word for it.</h2>
     <p>
       Phone and Mac run a Noise&nbsp;IK handshake with each other, not with
-      us. Our relay switches sealed frames it holds no key for — and an
-      end-to-end test taps the wire and fails if a method name or a machine
-      name ever appears in the clear. On the same Wi-Fi, there is no relay
-      at all.
+      us. Our relay forwards sealed frames it holds no key for — and an
+      end-to-end test taps the phone's traffic through it and fails if a
+      method name, a session id or a conversation title ever shows up. On the
+      same Wi-Fi the phone usually goes straight to the Mac, and the relay
+      never carries the session.
     </p>
     <p>
       Every line of it is open source — the app, Bridle, the relay and the
@@ -127,14 +130,14 @@
     <div class="wire"><span>sealed frames</span></div>
     <div class="node node-blind">
       <span class="node-title">Relay</span>
-      <span class="node-sub">sees ciphertext only</span>
+      <span class="node-sub">can't read the frames</span>
     </div>
     <div class="wire"><span>sealed frames</span></div>
     <div class="node">
       <span class="node-title">Your Mac</span>
       <span class="node-sub">Bridle → dsh</span>
     </div>
-    <p class="diagram-note">Bridle dials out. No port to forward, no public IP.</p>
+    <p class="diagram-note">Bridle dials out. No port to forward, no public IP.<br>The relay still sees metadata — your Mac's name, IPs, timing. <a href="/privacy">Exactly what →</a></p>
   </div>
 </section>
 
@@ -153,15 +156,16 @@
     <h2>Your Mac. Your keys.<br>Your models.</h2>
     <p>
       The agent runs where your code already lives. Rowel never talks to an
-      AI service: it drives the harness you configured — DeepSeek, GLM, Qwen
-      and the dozens of others it knows — and lets you switch per conversation.
+      AI service: it drives the harness you configured, with whatever models
+      it offers — DeepSeek, GLM, Qwen, Kimi and more — and lets you switch
+      per conversation.
     </p>
   </div>
 </section>
 
 <section class="wrap bento-section">
   <h2 class="section-title">The whole run, on a phone.</h2>
-  <p class="section-sub">Not a notification relay. A full client for everything the harness does.</p>
+  <p class="section-sub">Not a notification relay. A real client for the harness.</p>
   <div class="bento">
     <figure class="tile tile-tall">
       <img src="/_/shots/conversation.webp" width="900" height="1955" loading="lazy"
@@ -181,7 +185,7 @@
     <figure class="tile tile-tall">
       <img src="/_/shots/photo.webp" width="900" height="1955" loading="lazy"
            alt="A photographed paper sketch attached to a message, asking the agent to build that screen.">
-      <figcaption><strong>Show, don't describe.</strong> Photograph a sketch; the code lands on your Mac.</figcaption>
+      <figcaption><strong>Show, don't describe.</strong> Attach a photo of a sketch; the code lands on your Mac.</figcaption>
     </figure>
     <div class="tile tile-text">
       <strong>Cost &amp; context</strong>
@@ -214,22 +218,117 @@
         <code>curl -fsSL https://rowel.novabox.ai/install | sh</code>
         <button type="button" class="copy" aria-label="Copy the install command">Copy</button>
       </div>
+      <p>Needs Node 22+ and git — it stops and says so if either is missing.</p>
     </li>
     <li>
       <span class="step">2</span>
-      <h3>Start pairing</h3>
+      <h3>Pair</h3>
       <div class="term" data-copy="bridle pair">
         <span class="prompt">$</span>
         <code>bridle pair</code>
         <button type="button" class="copy" aria-label="Copy the pairing command">Copy</button>
       </div>
+      <p>Starts Bridle if it isn't running, prints a QR code, and stays running.</p>
     </li>
     <li>
       <span class="step">3</span>
       <h3>Scan it with Rowel</h3>
-      <p>Open the app, tap <em>Connect a Mac</em>, point the camera. No camera handy? <code>bridle pair --code</code> gives you a short code to type instead.</p>
+      <p>Tap <em>Connect a Mac</em>, then <em>I've run it — scan the code</em>. No camera? With Bridle running, <code>bridle pair --code</code> gives you a code to type, and you accept the phone on the Mac.</p>
     </li>
   </ol>
+  <p class="after">Paired for good — it reconnects on its own. To keep Bridle running after you close the terminal: Ctrl-C, then <code>bridle service install</code>.</p>
+</section>
+
+<section class="wrap get" id="get">
+  <h2 class="section-title">Get the app.</h2>
+  <p class="section-sub">Rowel 1.0 is in App Store review. The same build is on TestFlight today.</p>
+  <div class="get-grid">
+    <div class="card get-card">
+      <h3>TestFlight</h3>
+      <p>Install Apple's TestFlight app, then open the invite. Free, no account with us.</p>
+      <a class="btn" href="https://testflight.apple.com/join/HHCQBu38">Join the TestFlight</a>
+    </div>
+    <div class="card get-card">
+      <h3>Build it yourself</h3>
+      <p>Xcode, <code>brew install xcodegen</code>, iOS 17 or later.</p>
+      <details class="more">
+        <summary>How</summary>
+        <pre><code>git clone https://github.com/0x5446/rowel.git && cd rowel
+ROWEL_TEAM_ID=&lt;your team id&gt; xcodegen generate --spec ios/project.yml
+open ios/Rowel.xcodeproj   # pick your iPhone, Run</code></pre>
+        <p>On a free Apple ID, first comment out <code>aps-environment</code> in <code>ios/Rowel/Rowel.entitlements</code> and set your own <code>PRODUCT_BUNDLE_IDENTIFIER</code> in <code>ios/project.yml</code>. A free signature stops launching after seven days (rebuild to renew), and self-built copies get no lock-screen notifications.</p>
+      </details>
+    </div>
+  </div>
+</section>
+
+<section class="wrap help" id="help">
+  <h2 class="section-title">Help.</h2>
+  <p class="section-sub"><code>bridle status</code> says whether Bridle is running, online at the relay, and can see dsh. <code>bridle doctor</code> checks Node, dsh, the relay and pairing.</p>
+  <div class="qa-grid">
+    <details>
+      <summary>The app says it can't reach your Mac</summary>
+      <p>Bridle isn't running, or can't reach the relay. Run <code>bridle status</code> on the Mac. If it isn't running, start it with <code>bridle</code> — or <code>bridle service install</code> so it comes back after every login.</p>
+    </details>
+    <details>
+      <summary>Connected, but "dsh isn't running"</summary>
+      <p>Bridle is fine; the DeepSeek Harness isn't. Start it, and the app notices within a few seconds — nothing to restart on the phone.</p>
+    </details>
+    <details>
+      <summary>Pairing fails, or the code is refused</summary>
+      <p>A QR code lasts 10 minutes and works once; running <code>bridle pair</code> again replaces it. A typed code also lasts 10 minutes and is used up the moment a phone enters it — if you decline it on the Mac, or it lapses, run <code>bridle pair --code</code> again.</p>
+    </details>
+    <details>
+      <summary>Works at home, not away</summary>
+      <p>At home the phone reaches the Mac directly; away it needs the relay. <code>bridle status</code> should show the relay as online.</p>
+    </details>
+    <details>
+      <summary>Can't browse folders from the phone</summary>
+      <p>On a Mac, dsh opens a Finder window for its folder picker, which a phone can't use. Rowel falls back to folders you've used and to typing a path. To browse from the phone, add this to <code>~/.dsh/profiles/web/cordis.patch.yml</code>:</p>
+      <pre><code>- id: directory-picker
+  disabled: true
+- insert:
+    - id: directory-picker-browse
+      name: '@deepseek-ai/dsh-host-directory-picker-browse'
+    - id: ui-directory-picker-browse
+      name: '@deepseek-ai/dsh-client-ui-directory-picker-browse'</code></pre>
+      <p>The second entry keeps the desktop web UI's own picker working. Reload the desktop page once.</p>
+    </details>
+    <details>
+      <summary>Search finds nothing</summary>
+      <p>dsh ships with its session index off. Add this to <code>~/.dsh/profiles/web/cordis.patch.yml</code> and restart dsh:</p>
+      <pre><code>- id: session-query-sqlite
+  config:
+    path: ~/.dsh/session-query.sqlite
+    openAt: first-search</code></pre>
+    </details>
+    <details>
+      <summary>A conversation opens empty</summary>
+      <p>Go back, pull down on the list to refresh, and open it again. If its history is long, tap <em>Load earlier messages</em> at the top.</p>
+    </details>
+    <details>
+      <summary>Two harnesses on one Mac</summary>
+      <p>One Bridle serves one dsh, and stays with the one that answered last. Name the one you mean with <code>bridle --dsh http://127.0.0.1:3081</code> (it starts dsh there if nothing answers; <code>--no-auto-start</code> refuses instead). To serve a second harness alongside, give it its own identity:</p>
+      <pre><code>ROWEL_HOME=~/.rowel-3081 bridle --dsh http://127.0.0.1:3081</code></pre>
+    </details>
+    <details>
+      <summary>Removing a phone</summary>
+      <p>Forgetting a Mac in the app only affects that iPhone. On the Mac, <code>bridle devices</code> lists paired phones and <code>bridle revoke &lt;prefix&gt;</code> removes one — it is refused at its next handshake; restart Bridle to drop a live connection.</p>
+    </details>
+    <details>
+      <summary>Moving to a new Mac</summary>
+      <p>On the old Mac, <code>bridle backup ~/rowel.bak</code> (encrypted with a passphrase you choose). Stop Bridle there, then on the new one run <code>bridle restore ~/rowel.bak</code> and restart Bridle. Your phones keep working without re-pairing.</p>
+    </details>
+    <details>
+      <summary>After updating</summary>
+      <p>Re-running the installer upgrades in place. Restart Bridle afterwards (or dsh, if Bridle runs inside it) — <code>bridle status</code> says when it is running code from before the update.</p>
+    </details>
+    <details>
+      <summary>Uninstalling</summary>
+      <p><code>bridle service uninstall</code> if you installed the service, then <code>rm -rf ~/.rowel ~/.local/bin/bridle</code>. There is no account to close.</p>
+    </details>
+  </div>
+  <p class="after">Still stuck? <a href="https://github.com/0x5446/rowel/issues">Open an issue</a> or write to <a href="mailto:hi@novabox.ai">hi@novabox.ai</a>.</p>
 </section>
 
 <section class="wrap faq">
@@ -252,15 +351,11 @@
   </details>
   <details>
     <summary>Can I run my own relay?</summary>
-    <p>Yes. It is in the repository, and <code>bridle --relay wss://your.host</code> is the whole client side.</p>
+    <p>Yes — it is in the repository. Start Bridle with <code>bridle --relay wss://your.host</code> and pair your phone with it.</p>
   </details>
   <details>
     <summary>Is it on the App Store?</summary>
-    <p>It is in App Store review. Until then it is on <a href="https://testflight.apple.com/join/HHCQBu38">TestFlight</a>, and the build there is the one that was submitted. <a href="/get">Where the release stands.</a></p>
-  </details>
-  <details>
-    <summary>Something is not working.</summary>
-    <p>Start with <a href="/help">Help</a> — pairing, connection and harness problems are covered there.</p>
+    <p>It is in App Store review. Until then the same build is on <a href="#get">TestFlight</a>.</p>
   </details>
 </section>
 
@@ -279,10 +374,11 @@
   <div class="wrap foot-inner">
     <a class="brand" href="/"><img src="/_/media/icon-180.png" width="22" height="22" alt="">Rowel</a>
     <nav>
-      <a href="/get">Get the app</a>
-      <a href="/help">Help</a>
+      <a href="#get">Get the app</a>
+      <a href="#help">Help</a>
       <a href="/privacy">Privacy</a>
       <a href="https://github.com/0x5446/rowel">GitHub</a>
+      <a href="mailto:hi@novabox.ai">hi@novabox.ai</a>
     </nav>
   </div>
 </footer>

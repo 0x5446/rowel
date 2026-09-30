@@ -10,7 +10,7 @@
 /// The token goes to the paired machine inside the Noise channel. The Relay is
 /// handed it one wake at a time, at the moment a push is sent, and is never
 /// told what the push is about — the words in the banner come from a constant
-/// on the Relay, and the real ones are written locally after the app
+/// on the Relay, and the real ones appear once the person opens the app and it
 /// reconnects.
 ///
 /// No APNs environment is worked out here. The first version read

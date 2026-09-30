@@ -10,10 +10,11 @@
 /// and the words in them are the real ones because they never left the device.
 ///
 /// A suspended app holds no tunnel and posts nothing, and that gap is what
-/// `Push.swift` covers: the machine has the Relay ring this phone, the app
-/// wakes, reconnects, and then posts one of these. The push itself carries a
-/// fixed sentence and no detail, so the third party in the path is still never
-/// told that your agent wants to run `rm`.
+/// `Push.swift` covers: the machine has the Relay ring this phone with a fixed
+/// banner. The push does not run the app — nothing happens until the person
+/// opens it, and then it reconnects and shows the request itself. The banner
+/// carries a fixed sentence and no detail, so the third party in the path is
+/// still never told that your agent wants to run `rm`.
 
 import Foundation
 import UserNotifications

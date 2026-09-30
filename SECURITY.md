@@ -116,9 +116,9 @@ code execution to the whole subnet.
 constant in `relay-worker/src/apns.ts`, plus the machine's display name. The
 structure the Bridle uses to ask for a wake has two fields, `token` and
 `machine` — there is no field an over-helpful Bridle could put the agent's
-question into, so nothing rests on the relay choosing not to read one. The real
-words are a *local* notification the phone posts after it reconnects and asks the
-machine what happened.
+question into, so nothing rests on the relay choosing not to read one. The push
+does not run the app; the real words appear when you open it and it reconnects
+over its own Noise channel.
 
 ### What it does not protect, and cannot
 
