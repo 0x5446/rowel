@@ -462,6 +462,8 @@ ffmpeg -ss <列表出现的秒数> -to <ended> -i marketing/video/raw/phone.mov 
 
 截之前逐帧看一遍：画面里不能出现真实用户名、主机名或工程路径。
 
+**访问统计（2026-10-03）**：官网用 PostHog（与 Mnemo、Save2Plaud 共用 US「Default project」，事件规范见 `mnemo/docs/ANALYTICS_EVENTS.md`）。所有事件带 `product=rowel`、`surface=website`、`site_lang`；自定义事件 `download_click`（`placement`：nav / hero / get / closing）、`install_copy`（`command`：install / pair / pair-code）、`github_click`。脚本自托管 `_/posthog.js`（posthog-js 1.435.8 no-external，取自 npm），配置在 `_/analytics.js`：无 Cookie（sessionStorage）、不录屏、不加载远端脚本。上报走同源 `/ingest/*`，由 `site/worker.js` 转发到 PostHog——这是站点唯一的脚本，`run_worker_first` 只让 `/ingest/*` 进它，其余页面仍是纯静态资源。代理不转发访客 IP 和 Cookie，国家取 `CF-IPCountry` 写进事件（JSON 和 sendBeacon 的 base64 表单两种格式都处理）。**App 不接任何统计**（隐私标签是 Data Not Collected）。无界面浏览器验收要去掉 `navigator.webdriver`，否则 posthog-js 当成机器人不发。
+
 部署命令：
 
 ```sh
