@@ -8,6 +8,8 @@
 <link rel="icon" href="/favicon.png">
 <meta name="theme-color" content="#07080b">
 <link rel="stylesheet" href="/_/site.css">
+<script src="/_/posthog.js" defer></script>
+<script src="/_/analytics.js" defer></script>
 </head>
 <body>
 
@@ -31,7 +33,7 @@
     What each part of Rowel can see, stated precisely enough to be checked
     against the source.
   </p>
-  <p class="updated">Last updated 30 September 2026.</p>
+  <p class="updated">Last updated 3 October 2026.</p>
 </header>
 
 <main class="prose">
@@ -42,7 +44,7 @@
   <li>No accounts. We never ask for your name, email or phone number.</li>
   <li>Your conversations, code and commands are encrypted end to end between your phone and your Mac. The relay in between cannot decrypt them.</li>
   <li>The relay keeps no logs and stores almost nothing: which Macs are online, and a pairing code while you use one. Both are deleted when no longer needed.</li>
-  <li>No analytics, no advertising, no tracking, and no crash reporter that sends anything anywhere.</li>
+  <li>The app has no analytics, no advertising, no tracking, and no crash reporter that sends anything anywhere. This website counts visits, without cookies — see <a href="#website">This website</a>.</li>
   <li>On the same Wi-Fi the phone usually talks to your Mac directly, and the relay never carries that session.</li>
 </ul>
 
@@ -248,6 +250,20 @@
   paired Macs forget it when the app next connects to them. A Mac you forgot
   only on the phone keeps notifying it until you run <code>bridle revoke</code>
   there.
+</p>
+
+<h2 id="website">This website</h2>
+
+<p>
+  <code>rowel.novabox.ai</code> counts visits with
+  <a href="https://posthog.com/privacy">PostHog</a>: which pages are viewed,
+  and clicks such as joining the TestFlight or copying the install command.
+  No cookies — a random visit id lives in the tab's session storage and is
+  gone when you close the tab. No session recording. The script is served from
+  this site, and its reports go through this site too, which passes on neither
+  your IP address nor cookies; the country, from Cloudflare, is the only
+  location recorded. None of this applies to the app, which sends nothing to
+  PostHog or anyone else.
 </p>
 
 <h2>Children</h2>

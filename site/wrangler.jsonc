@@ -1,25 +1,26 @@
 {
   // The public site. `rowel.novabox.ai` is the site and nothing else — the
-  // relay lives on `relay.novabox.ai`, so a rule aimed at these pages can no
-  // longer reach it.
+  // relay lives on `rowel-relay.novabox.ai`, so a rule aimed at these pages
+  // cannot reach it.
   //
-  // Static assets, no Worker code: there is nothing here to compute, and a
-  // script would be one more thing that can break between someone tapping
-  // "Privacy" in the app and a page appearing.
-  //
-  // Not served by the Relay, on purpose. The Relay is one process on one small
-  // machine; when it is down or being upgraded, the App Store's privacy link
-  // must still resolve. These pages run at the edge with no origin at all.
+  // Static assets. The one script, `worker.js`, runs only for `/ingest/*` —
+  // the analytics proxy (`run_worker_first` below) — so every page, including
+  // the privacy policy the App Store links to, is still served straight from
+  // the edge with no code in the way.
   //
   //   npx wrangler deploy --config site/wrangler.jsonc
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "rowel-site",
   "compatibility_date": "2026-08-15",
+  "main": "worker.js",
   "assets": {
     "directory": "./public",
-    // `/help` serves help.html. Without this the app's own links would 404.
+    "binding": "ASSETS",
     "html_handling": "auto-trailing-slash",
-    "not_found_handling": "404-page"
+    "not_found_handling": "404-page",
+    // Only the proxy reaches the script; everything else is assets and
+    // `_redirects`, exactly as before there was a script at all.
+    "run_worker_first": ["/ingest/*"]
   },
   // The whole hostname, as a custom domain.
   //
