@@ -52,20 +52,17 @@ Availability at registration: no live US app is named `Rowel`, and
 
 ## Subtitle (limit 30)
 
-**With Name = `Rowel`:**
+```
+Approve your agent anywhere
+```
+(27 characters)
 
-```
-Drive your Mac's coding agent
-```
-(29 characters)
-
-**If the fallback name is used** (it already contains remote/coding/agent —
-don't repeat indexed words across name and subtitle):
-
-```
-End-to-end encrypted control
-```
-(28 characters)
+**2026-10-08:** the first subtitle, `Drive your Mac's coding agent`, was
+rejected under guideline 5.2.5 — "Mac" is an Apple trademark and may not appear
+in the subtitle. The description may still say what the app works with. The
+replacement repeats no word from the name (`Rowel: DeepSeek Harness Remote`
+already carries the positioning and the search terms), so all 30 characters
+add something.
 
 ## Promotional Text (limit 170 — editable any time without a new build; not indexed for search)
 
