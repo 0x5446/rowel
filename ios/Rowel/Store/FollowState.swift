@@ -44,7 +44,8 @@ final class FollowState {
     /// The transcript is at its end: follow again. Called where the reader
     /// actually arrives there — the scroll position reaching the end (iOS 18),
     /// the button that returns to the bottom, and sending, which puts their
-    /// words there.
+    /// words there. iOS 17, which cannot see where a scroll came to rest, also
+    /// calls it on an upward drag (`ConversationView.TailAnchor`).
     func reachedEnd() {
         follows = true
     }
@@ -53,7 +54,8 @@ final class FollowState {
     /// reading back. Upward used to count as the tail coming to meet the
     /// reader and re-armed following from anywhere in the history — which,
     /// when following still drove the scroll anchor, flipped it under a
-    /// thumb moving up and down; arriving at the end is what re-arms now.
+    /// thumb moving up and down; arriving at the end is what re-arms now
+    /// (`reachedEnd`).
     /// - Parameter translation: the drag's translation, in points.
     func drag(_ translation: CGFloat) {
         if translation > FollowState.backThreshold { follows = false }

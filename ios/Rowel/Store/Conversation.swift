@@ -647,14 +647,16 @@ extension Conversation {
     }
 
     /// `ask_user_question` as a question card, from the questions in its
-    /// arguments. Nil — and so the generic card — when they cannot be read: a
-    /// card that shows the raw call beats one that shows nothing.
+    /// arguments. Nil — and so the generic card — unless every one of them can
+    /// be read: a card that shows the raw call beats one that shows nothing,
+    /// and beats one that silently leaves a question out.
     static func questionPresentation(name: String, arguments: String) -> ToolPresentation? {
         guard name == "ask_user_question",
-              let questions = (try? JSONValue(data: Data(arguments.utf8)))?["questions"]?.arrayValue
+              let questions = (try? JSONValue(data: Data(arguments.utf8)))?["questions"]?.arrayValue,
+              !questions.isEmpty
         else { return nil }
         let items = questions.compactMap(QuestionItem.init(json:))
-        return items.isEmpty ? nil : .question(items: items, answers: nil)
+        return items.count == questions.count ? .question(items: items, answers: nil) : nil
     }
 
     /// The person's answers, from the result text dsh logs for the tool:
