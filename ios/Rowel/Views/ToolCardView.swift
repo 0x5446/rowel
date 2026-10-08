@@ -17,7 +17,13 @@ struct ToolCardView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            if expanded {
+            // A question is shown open: what was asked and what was picked is
+            // the whole point of the card, and it is a few short lines.
+            if case .question(let items, let answers) = card.presentation {
+                Divider().overlay(Palette.line)
+                QuestionBody(items: items, answers: answers, waiting: card.running)
+                    .padding(Metrics.gap)
+            } else if expanded {
                 Divider().overlay(Palette.line)
                 body(for: card.presentation)
                     .padding(Metrics.gap)
@@ -46,16 +52,23 @@ struct ToolCardView: View {
                     .truncationMode(.middle)
                 Spacer(minLength: 4)
                 trailing
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(.tertiary)
-                    .rotationEffect(.degrees(expanded ? 90 : 0))
+                if !isQuestion {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.tertiary)
+                        .rotationEffect(.degrees(expanded ? 90 : 0))
+                }
             }
             .padding(.horizontal, Metrics.gap)
             .padding(.vertical, 9)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+
+    private var isQuestion: Bool {
+        if case .question = card.presentation { return true }
+        return false
     }
 
     @ViewBuilder
@@ -70,6 +83,8 @@ struct ToolCardView: View {
             Pill("\(total > lines.count ? total : lines.count)")
         } else if case .diff(_, let files) = card.presentation, files.count > 1 {
             Pill("\(files.count) files")
+        } else if case .question(_, let answers) = card.presentation {
+            Pill(answers == nil ? "not answered" : "answered", color: answers == nil ? .secondary : Palette.good)
         }
     }
 
@@ -86,6 +101,7 @@ struct ToolCardView: View {
         case .diff: return "plusminus"
         case .search: return "magnifyingglass"
         case .read: return "doc.text"
+        case .question: return "questionmark.bubble"
         case .generic(_, let kind, _):
             switch kind {
             case "fetch", "search": return "globe"
@@ -116,7 +132,72 @@ struct ToolCardView: View {
             ReadBody(lines: lines, totalLines: totalLines)
         case .generic(_, _, let detail):
             GenericBody(detail: detail, arguments: card.arguments, result: card.resultText)
+        case .question(let items, let answers):
+            QuestionBody(items: items, answers: answers, waiting: card.running)
         }
+    }
+}
+
+// MARK: - Question
+
+/// What the agent asked, with what the person picked marked — the transcript's
+/// record of a question card answered earlier, live or on another device.
+private struct QuestionBody: View {
+    let items: [QuestionItem]
+    let answers: [String: QuestionAnswer]?
+    let waiting: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Metrics.gap) {
+            ForEach(items) { item in
+                let answer = answers?[item.id]
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(item.question)
+                        .font(.system(size: 14, weight: .medium))
+                        .fixedSize(horizontal: false, vertical: true)
+                    ForEach(item.options) { option in
+                        row(option.label, picked: answer?.selected.contains(option.label) == true)
+                    }
+                    // A pick that is not one of the options — dsh lets a person
+                    // choose "other" — still shows, checked.
+                    ForEach(extraPicks(item, answer), id: \.self) { label in
+                        row(label, picked: true)
+                    }
+                    if let custom = answer?.custom, !custom.isEmpty {
+                        Text("“\(custom)”")
+                            .font(.system(size: 13))
+                            .foregroundStyle(.primary)
+                            .padding(.leading, 22)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            if answers == nil {
+                Text(waiting ? "Waiting for your answer" : "Not answered")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func row(_ label: String, picked: Bool) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: picked ? "checkmark.circle.fill" : "circle")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(picked ? AnyShapeStyle(Palette.accent) : AnyShapeStyle(.tertiary))
+            Text(label)
+                .font(.system(size: 13, weight: picked ? .semibold : .regular))
+                .foregroundStyle(picked ? .primary : .secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(picked ? .isSelected : [])
+    }
+
+    private func extraPicks(_ item: QuestionItem, _ answer: QuestionAnswer?) -> [String] {
+        let labels = Set(item.options.map(\.label))
+        return (answer?.selected ?? []).filter { !labels.contains($0) }
     }
 }
 

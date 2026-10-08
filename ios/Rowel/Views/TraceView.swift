@@ -276,6 +276,7 @@ struct TraceEntry: Identifiable, Equatable {
         case .diff: return "plusminus"
         case .search: return "magnifyingglass"
         case .read: return "doc.text"
+        case .question: return "questionmark.bubble"
         case .generic: return "wrench.and.screwdriver"
         }
     }

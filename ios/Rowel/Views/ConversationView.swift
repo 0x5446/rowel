@@ -36,6 +36,9 @@ struct ConversationView: View {
     @State private var follow = FollowState()
     /// When the transcript was last pulled to its end, for `follow`.
     @State private var followedAt = Date.distantPast
+    /// Where the transcript opens. Fixed for the life of the view; see
+    /// `TailAnchor`.
+    private let opensAtEnd: Bool
     /// Per-conversation, because attachment ids are only meaningful inside one.
     @State private var attachments: AttachmentLoader
 
@@ -55,6 +58,7 @@ struct ConversationView: View {
         self.sessionId = sessionId
         self.onOpen = onOpen
         _follow = State(initialValue: FollowState(follows: initiallyAtBottom))
+        opensAtEnd = initiallyAtBottom
         _attachments = State(initialValue: AttachmentLoader(harness: session.harness, sessionId: sessionId))
     }
 
@@ -112,7 +116,7 @@ struct ConversationView: View {
             }
         }
         .sheet(isPresented: $showInfo) {
-            SessionInfoView(sessionId: sessionId)
+            SessionInfoView(sessionId: sessionId, conversation: conversation)
                 .environment(session)
         }
         .confirmationDialog("Archive this conversation?", isPresented: $archiving, titleVisibility: .visible) {
@@ -142,7 +146,26 @@ struct ConversationView: View {
     private func transcript(_ conversation: Conversation) -> some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: Metrics.gap) {
+                // Not lazy, on purpose. A `LazyVStack` here froze the app for
+                // good — main thread pinned inside SwiftUI with no Rowel code
+                // running but `ConversationItem.id`, until iOS killed it. The
+                // lazy stack measures rows as it prefetches them, the measured
+                // heights replace its estimates, the content moves, and the
+                // move asks for another prefetch; with an answer streaming and
+                // the reader dragging (the keyboard following the finger), that
+                // never settled. Instruments on a phone showed
+                // `LazyLayoutViewCache.signalPrefetch` feeding a new transaction
+                // from inside every update for 100+ s. `FreezeHunt` reproduced
+                // it within ten gestures on two runs out of two; with this stack
+                // it ran 49 gestures across 12 streamed answers without one.
+                //
+                // What it costs is laying out every loaded row, which history
+                // paging keeps bounded (a page is 25 messages): on the simulator
+                // a 360-row transcript's first layout went from 80 to 520 ms,
+                // linear in rows, and the heaviest streaming rig dropped 16% of
+                // frames instead of 10%. A slower open is a cost; a freeze that
+                // only a force-quit ends is a failure.
+                VStack(alignment: .leading, spacing: Metrics.gap) {
                     header(conversation)
 
                     if conversation.hasMore {
@@ -176,14 +199,6 @@ struct ConversationView: View {
                 .padding(.horizontal, Metrics.gutter)
                 .padding(.vertical, Metrics.gap)
             }
-            // The open position, stated to the layout instead of asked for
-            // after it. `scrollTo` on the way in cannot work: it runs inside
-            // the same layout pass that is still building the content it wants
-            // to scroll to, so a conversation opened at the top of its own
-            // history and stayed there until the reader dragged it down — the
-            // "I have to scroll to the bottom every time" report. An anchor is
-            // part of the layout, so the first frame is already the last line.
-            //
             // The open position, stated to the layout rather than asked for
             // after it. `scrollTo` on the way in cannot work: it runs inside
             // the layout pass that is still building the content it means to
@@ -191,10 +206,9 @@ struct ConversationView: View {
             // and stayed there until the reader dragged it down. An anchor is
             // part of layout, so the first frame is already the last line.
             //
-            // Following *is* this anchor: pinned to the end while the reader is
-            // there, gone the moment they drag back, which is what stops a
-            // streaming answer from sliding in under a thumb that is reading.
-            .defaultScrollAnchor(follow.follows ? .bottom : nil)
+            // See `TailAnchor`: the open position, and the end held in place
+            // while — and only while — the reader is there.
+            .modifier(TailAnchor(opensAtEnd: opensAtEnd, follows: follow.follows, reachedEnd: { follow.reachedEnd() }))
             .scrollDismissesKeyboard(.interactively)
             // A drag already dismisses; a tap did not, and a tap is what
             // someone does when they have finished typing and want to read.
@@ -268,6 +282,52 @@ struct ConversationView: View {
 
     private enum Anchor: Hashable { case bottom }
 
+    /// The scroll anchor, split into the two jobs it does.
+    ///
+    /// Opening (`initialOffset`) lands on the last line, or not, as the view was
+    /// constructed — fixed for its life. Growth (`sizeChanges`) keeps the end in
+    /// place only while following, which holds the newest line on screen as an
+    /// answer streams.
+    ///
+    /// Following means the reader is at the end, and `FollowState` keeps it
+    /// true: it re-arms only where the reader really is there — a scroll coming
+    /// to rest at the end, the return-to-bottom button, sending — never on an
+    /// upward drag somewhere in the middle, which used to pin the end of a
+    /// conversation the reader was halfway up.
+    ///
+    /// iOS 17 cannot split the roles; it gets one anchor, the follow state, under
+    /// the same invariant.
+    private struct TailAnchor: ViewModifier {
+        let opensAtEnd: Bool
+        let follows: Bool
+        let reachedEnd: () -> Void
+
+        func body(content: Content) -> some View {
+            if #available(iOS 18.0, *) {
+                content
+                    .defaultScrollAnchor(opensAtEnd ? .bottom : nil, for: .initialOffset)
+                    .defaultScrollAnchor(follows ? .bottom : nil, for: .sizeChanges)
+                    .onScrollPhaseChange { old, new, context in
+                        // A scroll the reader made, coming to rest at the end.
+                        // Not every geometry change: content growing under a
+                        // reader who never moved is not the reader arriving.
+                        guard new == .idle, old != .idle else { return }
+                        let geometry = context.geometry
+                        if geometry.contentSize.height > geometry.containerSize.height,
+                           geometry.contentOffset.y + geometry.containerSize.height
+                               >= geometry.contentSize.height - ConversationView.endSlack {
+                            reachedEnd()
+                        }
+                    }
+            } else {
+                content.defaultScrollAnchor(follows ? .bottom : nil)
+            }
+        }
+    }
+
+    /// How close to the end counts as being there, in points.
+    static let endSlack: CGFloat = 40
+
     /// How far landing on a traced item counts as reading back. Past the
     /// reading-back threshold, so the tail stops chasing the reader there.
     private static let jumpAway: CGFloat = 100
@@ -284,8 +344,8 @@ struct ConversationView: View {
     /// is what caught it.
     ///
     /// What it must not go back to is one `scrollTo` per streamed delta — two
-    /// hundred a second from a fast model. Each call makes the lazy stack lay
-    /// itself out to the end to find the anchor it is sent to: measured on the
+    /// hundred a second from a fast model. Each call lays the transcript out to
+    /// find the anchor it is sent to: measured, back when the stack was lazy, on the
     /// starvation rig at the rate this harness streams (condition K, 200 chunks
     /// a second into a 190 KB open bubble), that cost 42% of all frames and left
     /// gaps of a third of a second, and a TestFlight build was killed by iOS for

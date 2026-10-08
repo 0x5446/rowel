@@ -559,6 +559,10 @@ public enum ToolPresentation: Equatable {
     case diff(title: String, files: [FileDiff])
     case search(title: String, lines: [String], truncated: Bool, total: Int)
     case read(path: String, lines: [NumberedLine], totalLines: Int)
+    /// `ask_user_question`: what was asked and, once the person answered, what
+    /// they picked — keyed by question id. dsh gives this tool no render intent,
+    /// so without this the transcript showed the answer as raw JSON.
+    case question(items: [QuestionItem], answers: [String: QuestionAnswer]?)
 }
 
 /// One file's before and after, for the diff card.
@@ -606,6 +610,7 @@ public struct ToolCard: Identifiable, Equatable {
         case .diff(let title, _): return title
         case .search(let title, _, _, _): return title
         case .read(let path, _, _): return (path as NSString).lastPathComponent
+        case .question(let items, _): return items.first?.header ?? items.first?.question ?? name
         }
     }
 }
@@ -659,6 +664,28 @@ public struct QuestionItem: Identifiable, Equatable {
     /// Whether this question is a plan waiting for a verdict, which the app
     /// renders as a document with two buttons rather than as a menu.
     public var isPlanReview: Bool { approveLabel != nil }
+}
+
+extension QuestionItem {
+    /// One question as dsh writes it — in a live `question/requested` and in
+    /// the `ask_user_question` call that produced it, which share a shape.
+    public init?(json item: JSONValue) {
+        guard let id = item["id"]?.stringValue, let question = item["question"]?.stringValue else { return nil }
+        let options = (item["options"]?.arrayValue ?? []).compactMap { option -> QuestionOption? in
+            guard let label = option["label"]?.stringValue else { return nil }
+            return QuestionOption(label: label, description: option["description"]?.stringValue)
+        }
+        let intent = item["intent"]
+        self.init(
+            id: id,
+            question: question,
+            header: item["header"]?.stringValue,
+            detail: item["detail"]?.stringValue,
+            options: options,
+            multiSelect: item["multiSelect"]?.boolValue ?? false,
+            approveLabel: intent?["kind"]?.stringValue == "plan-review" ? intent?["approve"]?.stringValue : nil
+        )
+    }
 }
 
 /// One selectable answer.
