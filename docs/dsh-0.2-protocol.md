@@ -2,6 +2,8 @@
 
 对象版本：`@deepseek-ai/dsh@0.2.0-rc.2`（所有 `@deepseek-ai/*` 依赖同为 `0.2.0-rc.2`，cordis 系为 `~4.0.4` 等）。
 
+**2026-10-08 复核 0.2.1-alpha.1**（npm `alpha`，也是公开仓库 `github.com/deepseek-ai/deepseek-harness` 的 `master` 最新提交，没有未发布的改动）：本文依赖的包（`dsh-client-connection`、`dsh-api-gateway`、`dsh-api-workspace-controller`、`dsh-host-webserver`、`dsh-user-approval`、`dsh-tool-ask-user`、`dsh-api-remotes` 的事件白名单、CLI 本体）代码与 rc.2 逐字节相同；全部 140 个 typert 方法的名字、参数、是否为流没有差别；认证、一元调用、`remote.mux`、follow/control/page、`$events`、工作区、发送、版本识别、本地路径插件在隔离实例上重测通过（未调用模型）。差异只有三处，分别记在 §1.3、§6、§9：打印的 URL 可以是 `publicUrl`；`session/list` 改为分时执行、连接断开即取消；`listBundles` 每项多了可选的 `version`、`source`。
+
 本文是参考，不是设计。所有结论都有出处：
 
 - 源码引用格式 `包名/文件:行`，根目录统一为 `@deepseek-ai/`（下文省略这个前缀；CLI 本体在 `lib/`）。
@@ -64,7 +66,9 @@ WebSocket 升级 `/api/remote.mux` 用同一个 `connection.admit()`（`dsh-api-
 dsh web: http://127.0.0.1:<port>/?token=<token>
 ```
 
-如果绑定 `0.0.0.0`，同一行后面追加 ` (LAN: http://<ip>:<port>/?token=<token>)`。没加 `--no-open` 时还会多打一行 `dsh web: opening the default browser; pass --no-open to disable`，并把带 token 的 URL 交给系统浏览器（`:204-209`）。URL 的 host 永远是 `127.0.0.1`（`localWebUrl`，`:95-99`）。
+如果绑定 `0.0.0.0`，同一行后面追加 ` (LAN: http://<ip>:<port>/?token=<token>)`。没加 `--no-open` 时还会多打一行 `dsh web: opening the default browser; pass --no-open to disable`，并把带 token 的 URL 交给系统浏览器（`:204-209`）。rc.2 里 URL 的 host 永远是 `127.0.0.1`（`localWebUrl`，`:95-99`）。
+
+**0.2.1-alpha.1 起不再保证**：新增 `--public-url <url>` 和配置项 `publicUrl`（`dsh-web-app/lib/index.js:103-106,205-211`、`lib/startup.js:24,46-55`），设了以后这一行变成 `dsh web: <publicUrl>?token=<token>`，`DSH_WEB_URL` 也跟着变。token 和认证逻辑不变，插件拿到的 `authenticatedUrl` 仍是 loopback。[live] `dsh web: https://app.example/ui/?token=…`，同时插件的 `authenticatedUrl` 为 `http://127.0.0.1:3093/?token=<同一个>`。所以读这一行的客户端只能从中取 `token` 参数，换 cookie 时用自己知道的 loopback 地址和端口。
 
 [live] `--no-open` 时 stdout 只有一行：`dsh web: http://127.0.0.1:3092/?token=-75uZst7Vwi1CgB-E94rVs_Wtenamq8intrytWUES-s`。
 
@@ -660,6 +664,8 @@ timed 模式未实测。
 
 `args: {_request: {}}`。返回 `{ items: SessionSummary[] }`，按活跃度排序（`dsh-api-session-controller/lib/index.js:2954-2956`）。没有分页，`cursor` 被忽略。只读存储的 header 和投影缓存，不打开冷会话日志（README）。
 
+0.2.1-alpha.1 起，列表构建按时间片让出主循环（`listWorkSliceMs`，默认 16 ms），请求所在连接断开时以取消结束（`dsh-api-session-controller/lib/index.js:1892-1922,2848-2851`）。返回形状不变。
+
 `SessionSummary`（`types.d.ts:159-170`）：
 
 ```ts
@@ -931,12 +937,12 @@ PromptContentPart = { type:'text', text }
 | 有 cookie `POST /api/session.list` | 404 `not found` [live] | — |
 | 有 cookie `POST /api/session/list`（`args:{_request:{}}`） | 200 [live] | 0.1 没有这个两段式 session 方法（0.1 的 typert 端点只有 goals/messageFeedback/pluginInventory/cordisRunner） |
 | WebSocket 路径 | `/api/remote.mux`；`/api/events.mux` 普通 GET 返回 404 [live] | `/api/events.mux` 普通 GET 返回 426 |
-| 精确版本 | `pluginManager/listBundles {}` → 其中 `@deepseek-ai/dsh-base` 的 `version: "0.2.0-rc.2"` [live] | — |
+| 精确版本 | `pluginManager/listBundles {}` → 其中 `@deepseek-ai/dsh-base` 的 `version: "0.2.0-rc.2"` [live]；0.2.1-alpha.1 起每项多了可选的 `version`、`source` 字段，按 `name === '@deepseek-ai/dsh-base'` 取 `version` 即可 [live] | — |
 | CLI | `dsh --version`（`lib/bin.js:105`） | 同 |
 
 注意 `/api/session.export` 在两个版本里路径相同（0.2 实测 200 zip），不能用来区分。
 
-推荐的最小判定：先无 cookie 打一个 `POST /api/session.list`。401 → 0.2+；200 → 0.1。
+推荐的判定：先无 cookie 打一个 `POST /api/session.list`。200 → ≤0.1.1。**401 不是版本判据**：0.1.2 起的所有版本（含过渡版 0.1.2–0.1.7）都要认证、都回 401（0.1.7-rc.2 已实测）。拿到 cookie 后读 `listBundles` 的精确版本再判断；读不到就当作"无法确认"，不要推断为 0.2。
 
 ---
 
