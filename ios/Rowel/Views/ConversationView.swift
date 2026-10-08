@@ -159,8 +159,10 @@ struct ConversationView: View {
                 // it within ten gestures on two runs out of two; with this stack
                 // it ran 49 gestures across 12 streamed answers without one.
                 //
-                // What it costs is laying out every loaded row, which history
-                // paging keeps bounded (a page is 25 messages): on the simulator
+                // What it costs is laying out every loaded row. A conversation
+                // opens with one page (25 messages), but each "Load earlier
+                // messages" adds a page and nothing takes rows away, so the cost
+                // grows with how far back the reader has gone: on the simulator
                 // a 360-row transcript's first layout went from 80 to 520 ms,
                 // linear in rows, and the heaviest streaming rig dropped 16% of
                 // frames instead of 10%. A slower open is a cost; a freeze that
@@ -295,8 +297,11 @@ struct ConversationView: View {
     /// upward drag somewhere in the middle, which used to pin the end of a
     /// conversation the reader was halfway up.
     ///
-    /// iOS 17 cannot split the roles; it gets one anchor, the follow state, under
-    /// the same invariant.
+    /// iOS 17 has neither the split roles nor the scroll phase that says where a
+    /// scroll came to rest. It keeps one anchor, the follow state, and the rule
+    /// it had before: an upward drag is the tail coming to meet the reader.
+    /// Without that, nothing but the button would re-arm following there, and a
+    /// reader who scrolled back down would watch the answer run off the screen.
     private struct TailAnchor: ViewModifier {
         let opensAtEnd: Bool
         let follows: Bool
@@ -320,7 +325,11 @@ struct ConversationView: View {
                         }
                     }
             } else {
-                content.defaultScrollAnchor(follows ? .bottom : nil)
+                content
+                    .defaultScrollAnchor(follows ? .bottom : nil)
+                    .simultaneousGesture(DragGesture().onChanged { value in
+                        if value.translation.height < 0 { reachedEnd() }
+                    })
             }
         }
     }

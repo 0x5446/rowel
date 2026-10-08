@@ -267,6 +267,19 @@ final class ConversationFoldTests: XCTestCase {
         guard case .generic = card.presentation else { return XCTFail("unreadable arguments keep the generic card") }
     }
 
+    func testQuestionWithOneUnreadableItemStaysGeneric() {
+        let held = conversation()
+        held.apply(event: event("tool/call", seq: 1, data: .object([
+            "callId": .string("q3"),
+            "name": .string("ask_user_question"),
+            "arguments": .string(#"{"questions":[{"id":"a","question":"Which?","options":[{"label":"One"}]},{"id":"b"}]}"#),
+        ])), view: nil)
+        guard case .tool(let card) = held.items.first else { return XCTFail("expected a card") }
+        guard case .generic = card.presentation else {
+            return XCTFail("a card that drops one of the questions must not stand in for the call")
+        }
+    }
+
     func testFailedToolIsMarked() {
         let held = conversation()
         held.apply(event: event("tool/call", seq: 1, data: .object([

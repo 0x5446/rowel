@@ -2,8 +2,8 @@
 ///
 /// Two mechanisms have claimed this job at different times: the scroll view's
 /// own bottom anchor (`.defaultScrollAnchor`), which is part of layout, and an
-/// explicit `scrollTo` on every change that grows the content, which makes the
-/// lazy stack lay itself out to the end to find the anchor it is being sent to.
+/// explicit `scrollTo` on every change that grows the content, which lays the
+/// transcript out to the end to find the anchor it is being sent to.
 /// The second one is what the starvation rig caught — 42% of all frames at the
 /// rate this harness streams, and a TestFlight build killed by iOS inside
 /// `AttributeGraph` for it.
