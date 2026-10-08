@@ -10,9 +10,10 @@
 /// Two faults met in that state before it was named:
 ///
 ///  1. A conversation opened at the top of its own history. The open position
-///     is now the scroll view's own anchor (`.defaultScrollAnchor`), which is
-///     part of layout rather than a `scrollTo` asked for after layout, and that
-///     anchor is this state: following means anchored to the end.
+///     is the scroll view's own anchor (`.defaultScrollAnchor`), part of
+///     layout rather than a `scrollTo` asked for after it. This state drives
+///     only the anchor's growth role, and it promises one thing for it:
+///     following means the reader is at the end (`ConversationView.TailAnchor`).
 ///  2. Only a drag could stop the following. Someone who flicked back to the
 ///     bottom stayed disarmed, and the next answer slid in under their thumb.
 ///     Reaching the end re-arms, which is what `reachedEnd` records.
@@ -40,20 +41,22 @@ final class FollowState {
     /// person leaving the tail.
     private static let backThreshold: CGFloat = 24
 
-    /// The transcript is at its end: follow again, and anchor the next open
-    /// there. Called where the reader's own hand arrives at the end — the
-    /// button that returns to the bottom, and sending, which puts their words
-    /// there — and by an upward drag, which is the tail coming to meet them.
+    /// The transcript is at its end: follow again. Called where the reader
+    /// actually arrives there — the scroll position reaching the end (iOS 18),
+    /// the button that returns to the bottom, and sending, which puts their
+    /// words there.
     func reachedEnd() {
         follows = true
     }
 
-    /// A drag moved by this much on screen. Only the direction matters:
-    /// downward is reading back, upward is the tail coming to meet the reader.
+    /// A drag moved by this much on screen. Downward past the threshold is
+    /// reading back. Upward used to count as the tail coming to meet the
+    /// reader and re-armed following from anywhere in the history — which,
+    /// when following still drove the scroll anchor, flipped it under a
+    /// thumb moving up and down; arriving at the end is what re-arms now.
     /// - Parameter translation: the drag's translation, in points.
     func drag(_ translation: CGFloat) {
         if translation > FollowState.backThreshold { follows = false }
-        else if translation < 0 { follows = true }
     }
 
     /// A new arrival: should the transcript be pulled to the end?

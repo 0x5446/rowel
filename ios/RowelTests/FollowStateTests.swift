@@ -46,12 +46,14 @@ final class FollowStateTests: XCTestCase {
         XCTAssertFalse(follow.shouldFollow())
     }
 
-    /// The other direction is the tail coming to meet the reader, so the
-    /// conversation follows again without them having to do anything else.
-    func testDraggingUpFollowsAgain() {
+    /// Pushing back up through the history is still reading: it does not
+    /// re-arm following on its own. Only arriving at the end does.
+    func testDraggingUpDoesNotFollowUntilTheEnd() {
         let follow = FollowState()
         follow.drag(300)
         follow.drag(-40)
+        XCTAssertFalse(follow.shouldFollow())
+        follow.reachedEnd()
         XCTAssertTrue(follow.shouldFollow())
     }
 

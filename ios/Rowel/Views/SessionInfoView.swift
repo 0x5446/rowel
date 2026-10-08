@@ -33,10 +33,10 @@ struct SessionInfoView: View {
     @State private var switching: String?
     @State private var accessError: String?
 
-    // `conversation(_:)` rather than a dictionary read: the sheet can be
-    // opened on a session whose history has not been fetched, and this is
-    // the accessor that starts that fetch.
-    private var conversation: Conversation? { session.conversation(sessionId) }
+    /// The conversation on screen, handed in by the view that opened the
+    /// sheet. Not looked up here: `body` must not have side effects, and the
+    /// lookup that also starts a fetch (`conversation(_:)`) has them.
+    let conversation: Conversation?
     private var summary: SessionSummary? { session.sessions.first { $0.id == sessionId } }
 
     var body: some View {

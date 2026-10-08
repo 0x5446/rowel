@@ -215,6 +215,58 @@ final class ConversationFoldTests: XCTestCase {
         XCTAssertEqual(exit, 0)
     }
 
+    func testAnsweredQuestionKeepsTheChoiceInTheTranscript() {
+        // The shape dsh logs for `ask_user_question`: questions in the call's
+        // arguments, the person's answer as JSON text in the result, and no
+        // render intent for either — so it fell through to a generic card that
+        // showed `{"answers":[…]}` instead of what was asked and what was picked.
+        let held = conversation()
+        let arguments = #"{"questions":[{"id":"quota_scope","header":"Scope","question":"Which quota?","options":[{"label":"Session context","description":"Tokens left in this session."},{"label":"Provider balance"}]}]}"#
+        held.apply(event: event("tool/call", seq: 1, data: .object([
+            "callId": .string("q1"),
+            "name": .string("ask_user_question"),
+            "arguments": .string(arguments),
+        ])), view: nil)
+
+        guard case .tool(let asked) = held.items.first,
+              case .question(let items, let pending) = asked.presentation
+        else { return XCTFail("expected a question card") }
+        XCTAssertEqual(items.map(\.question), ["Which quota?"])
+        XCTAssertEqual(items.first?.options.map(\.label), ["Session context", "Provider balance"])
+        XCTAssertNil(pending, "nothing is answered until the result lands")
+        XCTAssertEqual(asked.headline, "Scope")
+
+        held.apply(event: event("tool/result", seq: 2, data: .object([
+            "message": .object([
+                "source": .object(["callId": .string("q1")]),
+                "content": .array([.object([
+                    "type": .string("tool-result"),
+                    "toolCallId": .string("q1"),
+                    "content": text(#"{"answers":[{"id":"quota_scope","selected":["Session context"],"custom":"and the weekly cap"}]}"#),
+                ])]),
+            ]),
+        ])), view: nil)
+
+        XCTAssertEqual(held.items.count, 1, "the answer lands on the same card")
+        guard case .tool(let answered) = held.items[0],
+              case .question(_, let answers) = answered.presentation
+        else { return XCTFail("expected the question card to survive the result") }
+        XCTAssertFalse(answered.running)
+        XCTAssertEqual(answers?["quota_scope"]?.selected, ["Session context"])
+        XCTAssertEqual(answers?["quota_scope"]?.custom, "and the weekly cap")
+    }
+
+    func testQuestionWithUnreadableArgumentsStaysGeneric() {
+        let held = conversation()
+        held.apply(event: event("tool/call", seq: 1, data: .object([
+            "callId": .string("q2"),
+            "name": .string("ask_user_question"),
+            "arguments": .string("not json"),
+        ])), view: nil)
+        guard case .tool(let card) = held.items.first else { return XCTFail("expected a card") }
+        guard case .generic = card.presentation else { return XCTFail("unreadable arguments keep the generic card") }
+    }
+
     func testFailedToolIsMarked() {
         let held = conversation()
         held.apply(event: event("tool/call", seq: 1, data: .object([

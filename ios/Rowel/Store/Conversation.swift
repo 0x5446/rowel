@@ -485,7 +485,8 @@ public final class Conversation {
         guard let callId = data["callId"]?.stringValue else { return }
         let name = data["name"]?.stringValue ?? "tool"
         let arguments = data["arguments"]?.stringValue ?? "{}"
-        let presentation = Conversation.callPresentation(view?["view"], for: view?["for"]?.stringValue, name: name, arguments: arguments)
+        let presentation = Conversation.questionPresentation(name: name, arguments: arguments)
+            ?? Conversation.callPresentation(view?["view"], for: view?["for"]?.stringValue, name: name, arguments: arguments)
         let card = ToolCard(
             id: callId,
             name: name,
@@ -515,7 +516,9 @@ public final class Conversation {
         card.failed = data["error"] != nil && data["error"]?.isNull == false
             || block?["isError"]?.boolValue == true
         card.resultText = Conversation.plainText(block?["content"]?.arrayValue ?? [])
-        if view?["for"]?.stringValue == "result", let result = view?["view"] {
+        if case .question(let questions, _) = card.presentation {
+            card.presentation = .question(items: questions, answers: card.failed ? nil : Conversation.answers(in: card.resultText))
+        } else if view?["for"]?.stringValue == "result", let result = view?["view"] {
             card.presentation = Conversation.resultPresentation(result, current: card.presentation)
         }
         items[index] = .tool(card)
@@ -643,6 +646,33 @@ extension Conversation {
             .joined()
     }
 
+    /// `ask_user_question` as a question card, from the questions in its
+    /// arguments. Nil — and so the generic card — when they cannot be read: a
+    /// card that shows the raw call beats one that shows nothing.
+    static func questionPresentation(name: String, arguments: String) -> ToolPresentation? {
+        guard name == "ask_user_question",
+              let questions = (try? JSONValue(data: Data(arguments.utf8)))?["questions"]?.arrayValue
+        else { return nil }
+        let items = questions.compactMap(QuestionItem.init(json:))
+        return items.isEmpty ? nil : .question(items: items, answers: nil)
+    }
+
+    /// The person's answers, from the result text dsh logs for the tool:
+    /// `{"answers":[{"id":…,"selected":[…],"custom":…}]}` — the same shape
+    /// `Harness.answerQuestion` sends. Nil when it is not that.
+    static func answers(in text: String?) -> [String: QuestionAnswer]? {
+        guard let text, let list = (try? JSONValue(data: Data(text.utf8)))?["answers"]?.arrayValue else { return nil }
+        var answers: [String: QuestionAnswer] = [:]
+        for entry in list {
+            guard let id = entry["id"]?.stringValue else { continue }
+            answers[id] = QuestionAnswer(
+                selected: (entry["selected"]?.arrayValue ?? []).compactMap(\.stringValue),
+                custom: entry["custom"]?.stringValue
+            )
+        }
+        return answers
+    }
+
     /// Turn a call-time render intent into a card.
     static func callPresentation(_ view: JSONValue?, for slot: String?, name: String, arguments: String) -> ToolPresentation {
         guard slot == "call", let view, let card = view["card"]?.stringValue else {
@@ -749,6 +779,7 @@ extension Conversation {
         case .diff(let title, _): return title
         case .search(let title, _, _, _): return title
         case .read(let path, _, _): return path
+        case .question(let items, _): return items.first?.header ?? items.first?.question ?? ""
         }
     }
 

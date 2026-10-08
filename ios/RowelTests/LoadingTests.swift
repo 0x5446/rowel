@@ -7,6 +7,7 @@
 /// offline and was never asked for again, a resync that refetched every
 /// conversation ever opened.
 
+import Observation
 import XCTest
 @testable import Rowel
 
@@ -89,6 +90,24 @@ final class LoadingTests: XCTestCase {
             defaults: suite,
             transport: transport
         )
+    }
+
+    /// Asking for a conversation that is already open is a read. It used to
+    /// record "most recently opened" in observable state, and `SessionInfoView`
+    /// asked from its `body` — so rendering the sheet invalidated the sheet,
+    /// forever: a 36 s freeze on a phone, main thread inside
+    /// `SessionInfoView.body` → `conversation(_:)` → `recent.modify`.
+    func testAskingForAnOpenConversationNotifiesNobody() {
+        let session = machine(ScriptedTransport())
+        _ = session.conversation("s1")
+        var notified = false
+        withObservationTracking {
+            _ = session.conversation("s1")
+        } onChange: {
+            notified = true
+        }
+        _ = session.conversation("s1")
+        XCTAssertFalse(notified, "re-asking for an open conversation must not invalidate whoever asked")
     }
 
     private func event(_ type: String, seq: Int, data: JSONValue) -> JSONValue {

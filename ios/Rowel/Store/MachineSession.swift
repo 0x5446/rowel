@@ -139,16 +139,21 @@ public final class MachineSession {
     private var conversations: [String: Conversation] = [:]
     /// Conversation ids, most recently opened first. The first is the one on
     /// screen; see `conversation(_:)` and the `.resync` case.
-    private var recent: [String] = []
+    ///
+    /// Not observed — none of this bookkeeping is anything a view draws, and
+    /// observing it made a read into a write: `conversation(_:)` updates this
+    /// on every call, so a view that asked from its `body` invalidated itself
+    /// on every render (`SessionInfoView`, a 36 s freeze on a phone).
+    @ObservationIgnored private var recent: [String] = []
     /// Conversations whose `ensureLoaded` is in flight, so a reconnect landing
     /// mid-load does not start a second one.
     /// By object, not by session id: a conversation dropped by a resync and
     /// opened again is a new object with the same id, and must not wait on the
     /// load of the one it replaced.
-    private var ensuring: Set<ObjectIdentifier> = []
+    @ObservationIgnored private var ensuring: Set<ObjectIdentifier> = []
     /// Conversations asked to load again while a load was already running —
     /// a reconnect that beat the failure of the attempt it should replace.
-    private var ensureAgain: Set<ObjectIdentifier> = []
+    @ObservationIgnored private var ensureAgain: Set<ObjectIdentifier> = []
     /// How many conversations stay folded in memory. Each keeps receiving and
     /// folding its live events, so the cost of an unbounded cache is paid in
     /// main-thread work as well as memory.
@@ -533,21 +538,7 @@ public final class MachineSession {
     }
 
     private static func question(_ item: JSONValue) -> QuestionItem? {
-        guard let id = item["id"]?.stringValue, let question = item["question"]?.stringValue else { return nil }
-        let options = (item["options"]?.arrayValue ?? []).compactMap { option -> QuestionOption? in
-            guard let label = option["label"]?.stringValue else { return nil }
-            return QuestionOption(label: label, description: option["description"]?.stringValue)
-        }
-        let intent = item["intent"]
-        return QuestionItem(
-            id: id,
-            question: question,
-            header: item["header"]?.stringValue,
-            detail: item["detail"]?.stringValue,
-            options: options,
-            multiSelect: item["multiSelect"]?.boolValue ?? false,
-            approveLabel: intent?["kind"]?.stringValue == "plan-review" ? intent?["approve"]?.stringValue : nil
-        )
+        QuestionItem(json: item)
     }
 
     // MARK: - Reads
