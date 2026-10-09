@@ -1,100 +1,37 @@
 /**
  * The path a real user takes, end to end, with nothing stubbed: a phone pairs,
- * dials a Relay, and drives a DeepSeek Harness that is actually running on this
- * machine — including a real model turn.
+ * dials a Relay, and drives a real dsh 0.2 through the Bridle.
  *
- * Requires a harness. Point ROWEL_E2E_DSH_URL at one, or let the port probe find
- * it. Without one these tests skip rather than pass silently.
+ * Needs `ROWEL_E2E_DSH_BIN` (a throwaway dsh is started for this file; see
+ * e2e/src/dsh.ts). The one test that runs a real model turn also needs
+ * `ROWEL_E2E_MODEL=1`, because it hands that dsh this shell's provider
+ * credentials and spends them.
  */
 
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { probeDsh } from '@rowel/bridle'
-import { RowelPhone, startStack, waitFor } from '../lib/index.js'
+import { randomUUID } from 'node:crypto'
+import { RowelPhone, dshBinary, modelAllowed, startDsh, startStack, waitFor } from '../lib/index.js'
 
-const DSH_URL = process.env.ROWEL_E2E_DSH_URL ?? await probeDsh()
-const skip = DSH_URL === undefined ? 'no DeepSeek Harness is running; set ROWEL_E2E_DSH_URL' : false
+const dsh = dshBinary() === undefined ? undefined : await startDsh()
+test.after(() => dsh?.stop())
+const skip = dsh === undefined ? 'set ROWEL_E2E_DSH_BIN to a dsh 0.2 executable' : false
+const DSH = dsh === undefined ? {} : { dshUrl: dsh.url, dshToken: dsh.token }
 
 /** How long a real model turn may take before the test gives up. */
 const MODEL_TIMEOUT_MS = 180_000
 
-/**
- * Unwrap one tunnel event into the dsh mux frame it carries.
- * @param {{frame: unknown}} event - the phone-side event.
- * @returns {any} the mux frame, or undefined when the event is not one.
- */
-function muxFrame(event) {
-  const outer = event.frame
-  if (typeof outer !== 'object' || outer === null) return undefined
-  return 'payload' in outer ? outer.payload : outer
+/** Every session event a follow stream has delivered, snapshot and live. */
+function eventsOf(stream) {
+  return stream.items.flatMap((item) => {
+    if (item.type === 'snapshot') return item.records.map(record => record.event)
+    if (item.type === 'event') return [item.event]
+    return []
+  })
 }
 
-/**
- * Pull the session events for one session out of a phone's event list.
- * @param {Array<{frame: unknown}>} events - everything the phone has seen.
- * @param {string} sessionId - the session of interest.
- * @returns {any[]} the dsh session events, in arrival order.
- */
-function sessionEvents(events, sessionId) {
-  const found = []
-  for (const event of events) {
-    const frame = muxFrame(event)
-    if (frame?.type === 'session/event' && frame.sessionId === sessionId) found.push(frame.event)
-  }
-  return found
-}
-
-/**
- * Whether the model has finished a turn in this session.
- * @param {Array<{frame: unknown}>} events - everything the phone has seen.
- * @param {string} sessionId - the session of interest.
- * @returns {boolean} true once a `turn/end` has arrived.
- */
-function finished(events, sessionId) {
-  return sessionEvents(events, sessionId).some(event => event.type === 'turn/end')
-}
-
-/**
- * What the harness said when it could not reach its model.
- *
- * On the host stream rather than the session's, because it is a fact about the
- * machine rather than about the conversation.
- * @param {Array<{frame: unknown}>} events - everything the phone has seen.
- * @returns {string | undefined} the message, or undefined when nothing failed.
- */
-function agentError(events) {
-  for (const event of events) {
-    const payload = event.frame?.payload
-    if (payload?.type === 'host/agent-error') return String(payload.message ?? 'no detail')
-  }
-  return undefined
-}
-
-/**
- * The assistant's visible text for a session, assembled the way the app does.
- * @param {Array<{frame: unknown}>} events - everything the phone has seen.
- * @param {string} sessionId - the session of interest.
- * @returns {string} the concatenated text, preferring completed messages.
- */
-function assistantText(events, sessionId) {
-  const all = sessionEvents(events, sessionId)
-  const complete = all
-    .filter(event => event.type === 'assistant/message')
-    .flatMap(event => event.data.message.content ?? [])
-    .filter(block => block.type === 'text')
-    .map(block => block.text)
-    .join('')
-  if (complete.length > 0) return complete
-  // Streaming deltas are what the app renders while the turn is live; falling
-  // back to them keeps this honest if a provider skips the assembled message.
-  return all
-    .filter(event => event.type === 'assistant/chunk' && event.data.chunk?.type === 'text-delta')
-    .map(event => event.data.chunk.text)
-    .join('')
-}
-
-test('a phone pairs, reaches the harness through the relay, and gets a real model reply', { skip, timeout: MODEL_TIMEOUT_MS + 60_000 }, async (t) => {
-  const stack = await startStack({ dshUrl: DSH_URL, machineName: 'E2E Machine' })
+test('a phone pairs, reaches dsh through the relay, and follows a conversation', { skip, timeout: 120_000 }, async (t) => {
+  const stack = await startStack({ ...DSH, machineName: 'E2E Machine' })
   t.after(() => stack.stop())
   await stack.waitForRelay()
 
@@ -107,117 +44,83 @@ test('a phone pairs, reaches the harness through the relay, and gets a real mode
   assert.equal(stack.state.peers.length, 1, 'pairing recorded the device')
   assert.equal(stack.state.peers[0].name, 'E2E iPhone')
 
-  const describe = await phone.call('host.describe', {})
-  assert.equal(describe.ok, true, JSON.stringify(describe))
-  assert.equal(typeof describe.value.cwd, 'string')
-
-  // Subscribing before prompting is what a real client does.
-  const events = []
-  phone.onEvent(event => events.push(event))
-  phone.resume(ready.seq)
-
-  const created = await phone.call('session.create', { cwd: describe.value.cwd })
+  const created = await phone.call('session/create', { request: { cwd: ready.host.home } })
   assert.equal(created.ok, true, JSON.stringify(created))
-  const sessionId = created.value.sessionId
-  assert.equal(typeof sessionId, 'string')
-
-  const prompted = await phone.call('session.prompt', {
-    sessionId,
-    mode: 'queue',
-    content: [{ type: 'text', text: 'Reply with exactly one word and nothing else: PONG' }],
-  })
-  assert.equal(prompted.ok, true, JSON.stringify(prompted))
-
-  await waitFor(() => finished(events, sessionId), MODEL_TIMEOUT_MS, 'the model to finish its turn')
-
-  // Said before the assertion below, because an empty reply is what a provider
-  // outage, an expired key and a spent quota all look like from here — and
-  // "expected PONG, got \"\"" sends whoever sees it looking for a parsing bug
-  // in this file. Cost an hour once, against a plan that had run out of tokens.
-  const failure = agentError(events)
-  assert.equal(failure, undefined, `the harness could not reach its model: ${String(failure)}`)
-
-  const reply = assistantText(events, sessionId)
-  assert.match(reply.toUpperCase(), /PONG/u, `expected the model to answer PONG, got ${JSON.stringify(reply)}`)
-
-  const history = await phone.call('session.history', { sessionId })
-  assert.equal(history.ok, true, JSON.stringify(history))
-  assert.ok(Array.isArray(history.value.events), 'history comes back through the tunnel too')
+  const conversation = phone.open('session/follow', { request: { address: { kind: 'session', sessionId: created.value.sessionId }, maxMessages: 25 } })
+  await waitFor(() => conversation.items.length > 0, 10_000, 'the snapshot over the relay')
+  assert.equal(conversation.items[0].type, 'snapshot')
 })
 
 test('the same phone reconnects without the pairing token', { skip, timeout: 120_000 }, async (t) => {
-  const stack = await startStack({ dshUrl: DSH_URL })
+  const stack = await startStack({ ...DSH })
   t.after(() => stack.stop())
   await stack.waitForRelay()
-  const bundle = stack.invite().bundle
 
-  const first = new RowelPhone({ bundle, prefer: 'relay', name: 'Persistent iPhone' })
+  const first = new RowelPhone({ bundle: stack.invite().bundle, prefer: 'relay' })
   await first.connect()
-  const identity = first.keys
   first.close()
 
-  // A second launch of the same app: same key, no token, and the machine already
-  // knows it. This is every launch after the first one.
-  const second = new RowelPhone({ bundle, keys: identity, pairing: false, prefer: 'relay' })
+  // The token was spent on the first connect. A device that is already paired
+  // proves itself with its key alone.
+  const second = new RowelPhone({ bundle: stack.invite().bundle, keys: first.keys, pairing: false, prefer: 'relay' })
   t.after(() => { second.close() })
-  const ready = await second.connect()
-  assert.equal(ready.dshReachable, true)
-  assert.equal(stack.state.peers.length, 1, 'reconnecting did not create a second device')
-
-  const result = await second.call('session.list', {})
+  await second.connect()
+  const result = await second.call('session/list', { _request: {} })
   assert.equal(result.ok, true, JSON.stringify(result))
+  assert.equal(stack.state.peers.length, 1, 'reconnecting did not add a second device')
 })
 
-test('replay is gapless across a reconnect, and honest when it cannot be', { skip, timeout: 120_000 }, async (t) => {
-  const capacity = 16
-  const stack = await startStack({ dshUrl: DSH_URL, eventCapacity: capacity })
+test('after a reconnect, reopening a conversation gives a fresh snapshot of the same place', { skip, timeout: 120_000 }, async (t) => {
+  // dsh has no stream resumption, and neither does the Bridle any more: a
+  // phone that comes back reopens what it was showing and replaces its window
+  // with the new snapshot (docs/dsh-0.2-migration.md D4).
+  const stack = await startStack({ ...DSH })
   t.after(() => stack.stop())
-  await stack.waitForRelay()
   const bundle = stack.invite().bundle
 
-  const phone = new RowelPhone({ bundle, prefer: 'relay', name: 'Flaky iPhone' })
-  t.after(() => { phone.close() })
+  const phone = new RowelPhone({ bundle, prefer: 'direct' })
   const ready = await phone.connect()
-
-  const seen = []
-  phone.onEvent(event => seen.push(event.seq))
-  phone.resume(ready.seq)
-
-  // Frames sourced through the bridle's own log, so the test does not depend on
-  // the model choosing to say anything.
-  stack.core.events.append('mux', { type: 'session/subscribed', sessionId: 'a', lastSeq: 1 })
-  stack.core.events.append('mux', { type: 'session/subscribed', sessionId: 'b', lastSeq: 1 })
-  await waitFor(() => seen.length >= 2, 5_000, 'live frames to arrive')
-
-  const caughtUpTo = phone.seq
+  const { value: { sessionId } } = await phone.call('session/create', { request: { cwd: ready.host.home } })
+  await phone.call('session/rename', { request: { sessionId, title: 'before the drop' } })
+  const before = phone.open('session/follow', { request: { address: { kind: 'session', sessionId }, maxMessages: 25 } })
+  await waitFor(() => before.items.length > 0, 10_000, 'the first snapshot')
   phone.close()
 
-  // Two more while nobody is listening: well inside the buffer.
-  stack.core.events.append('mux', { type: 'session/subscribed', sessionId: 'c', lastSeq: 1 })
-  stack.core.events.append('mux', { type: 'session/subscribed', sessionId: 'd', lastSeq: 1 })
-
-  const back = new RowelPhone({ bundle, keys: phone.keys, pairing: false, prefer: 'relay' })
+  const back = new RowelPhone({ bundle, keys: phone.keys, pairing: false, prefer: 'direct' })
   t.after(() => { back.close() })
   await back.connect()
-  const replayed = []
-  back.onEvent(event => replayed.push(event.seq))
-  back.resume(caughtUpTo)
-  await waitFor(() => replayed.length >= 2, 5_000, 'the gap to be replayed')
-  assert.equal(replayed[0], caughtUpTo + 1, 'replay resumes at the first frame the phone missed')
-  assert.deepEqual(replayed, replayed.map((_, index) => caughtUpTo + 1 + index), 'no gaps and no repeats')
+  const after = back.open('session/follow', { request: { address: { kind: 'session', sessionId }, maxMessages: 25 } })
+  await waitFor(() => after.items.length > 0, 10_000, 'the snapshot after reconnecting')
+  assert.equal(after.items[0].type, 'snapshot')
+  assert.equal(after.items[0].cursor, before.items[0].cursor, 'nothing happened in between, so it is the same place')
+})
 
-  // Now overflow the buffer while nothing is attached, and confirm the bridle
-  // admits the gap instead of pretending it can reach back.
-  back.close()
-  for (let index = 0; index < capacity + 4; index += 1) {
-    stack.core.events.append('mux', { type: 'session/subscribed', sessionId: `overflow-${String(index)}`, lastSeq: 1 })
-  }
-  const late = new RowelPhone({ bundle, keys: phone.keys, pairing: false, prefer: 'relay' })
-  t.after(() => { late.close() })
-  await late.connect()
-  const resyncs = []
-  late.onResync(from => resyncs.push(from))
-  late.resume(caughtUpTo)
-  await waitFor(() => resyncs.length === 1, 5_000, 'a resync instruction')
-  assert.equal(resyncs[0], stack.core.events.head, 'the app is told exactly where the bridle now is')
+test('a real model turn streams back to the phone', { skip: skip || (modelAllowed() ? false : 'set ROWEL_E2E_MODEL=1 to spend a model turn'), timeout: MODEL_TIMEOUT_MS + 60_000 }, async (t) => {
+  const withModel = await startDsh({ model: true })
+  t.after(() => withModel.stop())
+  const stack = await startStack({ dshUrl: withModel.url, dshToken: withModel.token })
+  t.after(() => stack.stop())
+
+  const phone = new RowelPhone({ bundle: stack.invite().bundle, prefer: 'direct' })
+  t.after(() => { phone.close() })
+  const ready = await phone.connect()
+  const { value: { sessionId } } = await phone.call('session/create', { request: { cwd: ready.host.home } })
+  const conversation = phone.open('session/follow', { request: { address: { kind: 'session', sessionId }, assistantStream: true, maxMessages: 25 } })
+  await waitFor(() => conversation.items.length > 0, 10_000, 'the snapshot')
+
+  const sent = await phone.call('session/prompt', {
+    request: { requestId: randomUUID(), sessionId, mode: 'queue', content: [{ type: 'text', text: 'Reply with exactly the word: pong' }] },
+  })
+  assert.equal(sent.ok, true, JSON.stringify(sent))
+  await waitFor(() => eventsOf(conversation).some(event => event.type === 'turn/end'), MODEL_TIMEOUT_MS, 'the model to finish')
+  const end = eventsOf(conversation).find(event => event.type === 'turn/end')
+  assert.notEqual(end.data.reason.kind, 'error', `the turn failed: ${JSON.stringify(end.data.reason)}`)
+  const text = eventsOf(conversation)
+    .filter(event => event.type === 'assistant/message')
+    .flatMap(event => event.data.message.content ?? [])
+    .filter(block => block.type === 'text')
+    .map(block => block.text)
+    .join('')
+  assert.match(text.toLowerCase(), /pong/u)
+  assert.ok(conversation.items.some(item => item.type === 'assistant-stream'), 'the reply streamed as it was written')
 })

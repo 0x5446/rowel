@@ -1,0 +1,84 @@
+# Is the next dsh going to break Rowel?
+#
+# The app talks to dsh's own API through the Bridle (docs/dsh-0.2-migration.md
+# D3), so a dsh that changes an endpoint needs an app release to fix — and an
+# app release waits on App Review. The only buffer is noticing early. Every
+# week, the same tests CI runs against the pinned dsh run against what npm
+# would install today (@latest) and what is coming next (@alpha).
+#
+# A failure opens an issue (one per tag, not one per week). @alpha failing is a
+# warning: start the app-side fix now, so it ships before the change reaches
+# @latest. @latest failing means new installs are broken: no release goes out
+# until it is fixed (D8).
+
+name: dsh drift
+
+on:
+  schedule:
+    - cron: '17 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  drift:
+    name: dsh@${{ matrix.tag }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        tag: [latest, alpha]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+      - run: npm run build
+
+      - id: install
+        run: |
+          npm install --prefix "$RUNNER_TEMP/dsh" --no-audit --no-fund "@deepseek-ai/dsh@${{ matrix.tag }}"
+          echo "version=$(node -p "require('$RUNNER_TEMP/dsh/node_modules/@deepseek-ai/dsh/package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: contract and end to end, against dsh@${{ matrix.tag }} (${{ steps.install.outputs.version }})
+        env:
+          ROWEL_E2E_DSH_BIN: ${{ runner.temp }}/dsh/node_modules/.bin/dsh
+        run: >
+          node --test --test-concurrency=1
+          e2e/tests/contract.test.js
+          e2e/tests/tunnel.test.js
+          e2e/tests/direct.test.js
+          e2e/tests/security.test.js
+          e2e/tests/cli.test.js
+
+      - name: open an issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ matrix.tag }}
+          VERSION: ${{ steps.install.outputs.version }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="dsh@$TAG no longer passes the Rowel contract"
+          if [ -n "$(gh issue list --state open --search "in:title \"$title\"" --json number --jq '.[0].number')" ]; then
+            echo "an open issue already tracks this"; exit 0
+          fi
+          if [ "$TAG" = "latest" ]; then
+            impact="New installs of dsh are affected now. Per docs/dsh-0.2-migration.md D8, no release goes out until this is fixed or shown not to matter."
+          else
+            impact="A warning: this change has not reached @latest yet. Start the app-side fix now, so it can pass App Review before it does."
+          fi
+          gh issue create --title "$title" --body "dsh@$TAG ($VERSION) fails the contract tests that pass against the pinned version.
+
+          $impact
+
+          Run: $RUN
+
+          Once compatible, update docs/dsh-0.2-protocol.md and move the pinned version in .github/workflows/ci.yml forward."

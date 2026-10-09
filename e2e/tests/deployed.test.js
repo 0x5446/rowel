@@ -17,11 +17,9 @@
 
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { probeDsh } from '@rowel/bridle'
-import { FakeAgent, RowelPhone, startStack, waitFor } from '../lib/index.js'
+import { FakeAgent, RowelPhone, dshBinary, startDsh, startStack, waitFor } from '../lib/index.js'
 
 const RELAY_URL = process.env.ROWEL_E2E_RELAY_URL
-const DSH_URL = process.env.ROWEL_E2E_DSH_URL ?? await probeDsh()
 
 const skip = RELAY_URL === undefined
   ? 'no deployed relay; set ROWEL_E2E_RELAY_URL to test one'
@@ -29,7 +27,7 @@ const skip = RELAY_URL === undefined
 
 const skipLive = skip !== false
   ? skip
-  : DSH_URL === undefined ? 'no DeepSeek Harness is running; set ROWEL_E2E_DSH_URL' : false
+  : dshBinary() === undefined ? 'set ROWEL_E2E_DSH_BIN to a dsh 0.2 executable' : false
 
 /** A public Relay is a round trip to another continent, not a loopback hop. */
 const NET_TIMEOUT_MS = 60_000
@@ -95,17 +93,15 @@ test('a phone pairs and drives a machine through the deployed relay', { skip, ti
   const ready = await phone.connect()
   assert.equal(ready.machine, 'Deployed Relay Probe', 'the handshake completed across the public path')
 
-  const events = []
-  phone.onEvent(event => events.push(event))
-  phone.resume(ready.seq)
-
-  const described = await phone.call('host.describe', {})
-  assert.equal(described.ok, true, JSON.stringify(described))
+  const listed = await phone.call('session/list', { _request: {} })
+  assert.equal(listed.ok, true, JSON.stringify(listed))
 
   // Streaming, not just request/response: a proxy that buffers would pass the
   // call above and fail here.
-  agent.emit({ type: 'session/subscribed', sessionId: 'probe', lastSeq: 1 })
-  await waitFor(() => events.length >= 1, NET_TIMEOUT_MS, 'a pushed frame to cross the tunnel')
+  const events = phone.open('$events', {})
+  await waitFor(() => events.items.length >= 1, NET_TIMEOUT_MS, 'the stream\'s first item to cross the tunnel')
+  agent.requestApproval({ sessionId: 'probe', toolName: 'bash' })
+  await waitFor(() => events.items.some(item => item.type === 'waterfall'), NET_TIMEOUT_MS, 'a pushed item to cross the tunnel')
 
   const during = await health()
   assert.ok(during.circuits >= 1, 'the relay is switching a circuit for this phone')
@@ -137,9 +133,12 @@ test('the relay forgets a phone that hangs up', { skip, timeout: NET_TIMEOUT_MS 
 })
 
 test('a real harness is reachable through the deployed relay', { skip: skipLive, timeout: NET_TIMEOUT_MS * 4 }, async (t) => {
+  const dsh = await startDsh()
+  t.after(() => dsh.stop())
   const stack = await startStack({
     relayUrl: RELAY_URL,
-    dshUrl: DSH_URL,
+    dshUrl: dsh.url,
+    dshToken: dsh.token,
     noDirect: true,
     machineName: 'Deployed Relay Live',
   })
@@ -151,14 +150,12 @@ test('a real harness is reachable through the deployed relay', { skip: skipLive,
   const ready = await phone.connect()
   assert.equal(ready.dshReachable, true, 'the bridle found its harness')
 
-  const sessions = await phone.call('session.list', {})
+  const sessions = await phone.call('session/list', { _request: {} })
   assert.equal(sessions.ok, true, JSON.stringify(sessions))
   assert.ok(Array.isArray(sessions.value.items), 'the session list came back over the public path')
 
-  // A response big enough to be split across WebSocket frames. The session list
-  // carries every session's projections; a tunnel that mangles fragmentation
-  // survives a `host.describe` and dies here.
-  const described = await phone.call('host.describe', {})
-  assert.equal(described.ok, true, JSON.stringify(described))
-  assert.equal(typeof described.value.cwd, 'string')
+  // A stream, end to end through the public path: the first thing a phone
+  // opens, and the thing a buffering proxy breaks.
+  const workspaces = phone.open('workspace/follow', {})
+  await waitFor(() => workspaces.items.some(item => item.type === 'baseline'), NET_TIMEOUT_MS, 'the workspace baseline')
 })

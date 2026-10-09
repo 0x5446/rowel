@@ -18,8 +18,10 @@ import {
   type AgentClient,
   RelayClient,
   createInvitation,
+  exchangeToken,
   loadState,
   probeDsh,
+  rememberCookie,
   saveState,
   type BridleState,
   type Invitation,
@@ -34,8 +36,12 @@ export interface StackOptions {
   noDirect?: boolean
   /** Machine name the app will see. */
   machineName?: string
-  /** Frames the Bridle retains for replay; small values make resync easy to test. */
-  eventCapacity?: number
+  /**
+   * The launch token the dsh at `dshUrl` printed, to sign in with before the
+   * Bridle starts; defaults to `ROWEL_E2E_DSH_TOKEN`. A real dsh 0.2 refuses
+   * everything without it.
+   */
+  dshToken?: string
   /**
    * Dial a Relay that is already running somewhere else instead of starting one.
    *
@@ -105,10 +111,11 @@ export async function startStack(options: StackOptions = {}): Promise<Stack> {
   if (options.machineName !== undefined) state.machineName = options.machineName
   saveState(state)
 
-  const core = new BridleCore(state, {
-    dsh: options.agent ?? new DshClient({ baseUrl: dshUrl }),
-    ...(options.eventCapacity === undefined ? {} : { eventCapacity: options.eventCapacity }),
-  })
+  const token = options.dshToken ?? process.env['ROWEL_E2E_DSH_TOKEN']
+  if (options.agent === undefined && token !== undefined && token.length > 0) {
+    rememberCookie(dshUrl, await exchangeToken(dshUrl, token))
+  }
+  const core = new BridleCore(state, { dsh: options.agent ?? new DshClient({ baseUrl: dshUrl }) })
   await core.start()
 
   let direct: DirectServer | undefined

@@ -70,6 +70,49 @@ jobs:
           e2e/tests/waiting.test.js
           e2e/tests/wake.test.js
 
+  # A real dsh 0.2, because a fake can only agree with what we believed dsh
+  # does. Rowel stopped working on every dsh from 0.1.2 on and this repository
+  # did not notice for a month; this job is the reason it cannot happen again
+  # (docs/dsh-0.2-migration.md D8). No model: each test starts a throwaway dsh
+  # with an empty home and a bare environment, and a turn that needs a model
+  # fails for want of credentials — which is how the prompt test knows its
+  # request was well formed.
+  dsh:
+    name: dsh ${{ matrix.dsh }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # The version the protocol reference was checked against. Moved
+        # forward only once the weekly run against @latest and @alpha
+        # (dsh-drift.yml) is green and docs/dsh-0.2-protocol.md is updated.
+        dsh: ['0.2.0-rc.2']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+      - run: npm run build
+
+      # Outside the repository, so its dependencies cannot leak into ours.
+      - run: npm install --prefix "$RUNNER_TEMP/dsh" --no-audit --no-fund "@deepseek-ai/dsh@${{ matrix.dsh }}"
+
+      - name: contract and end to end, against a real dsh
+        env:
+          ROWEL_E2E_DSH_BIN: ${{ runner.temp }}/dsh/node_modules/.bin/dsh
+        run: >
+          node --test --test-concurrency=1
+          e2e/tests/contract.test.js
+          e2e/tests/tunnel.test.js
+          e2e/tests/direct.test.js
+          e2e/tests/security.test.js
+          e2e/tests/cli.test.js
+
   ios:
     name: ios
     # macOS minutes are free on public repositories, which is the only reason
@@ -105,9 +148,8 @@ jobs:
 #   deployed form by .github/workflows/deployed.yml.
 #   (relay-worker/tests/bucket.test.js needs neither, and runs in npm test.)
 #
-#   e2e/tests/{cli,direct,security,tunnel}.test.js need a DeepSeek Harness
-#   serving on the machine. Installing one on a runner is possible; getting it
-#   to answer with a real model is not, and a harness that boots but cannot
-#   think would make some of those tests fail rather than skip.
+#   The one test in e2e/tests/tunnel.test.js that runs a real model turn. It
+#   needs provider credentials and spends them, so it runs only on a
+#   developer's machine with ROWEL_E2E_MODEL=1, and skips (saying why) here.
 #
 #   ios/run-ui-tests.sh needs a booted simulator and a paired Bridle.

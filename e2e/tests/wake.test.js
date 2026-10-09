@@ -24,14 +24,13 @@ import test from 'node:test'
 import { FakeAgent, RowelPhone, startStack, waitFor } from '../lib/index.js'
 import { RelayServer } from '@rowel/relay'
 
-/** A dsh mux request, shaped as the wire carries it. */
-function request(type, sessionId, extra = {}) {
-  return { type: 'server-request', rpcId: `rpc-${sessionId}`, method: type, payload: { type, sessionId, ...extra } }
-}
-
-/** An approval, the kind of thing worth waking someone for. */
-function approval(sessionId, approvalId) {
-  return request('approval/requested', sessionId, { approvalId, toolName: 'Bash' })
+/**
+ * An approval, the kind of thing worth waking someone for, asked the way dsh
+ * 0.2 asks: a waterfall on `$events`.
+ * @returns {string} its eventId.
+ */
+function approval(agent, sessionId) {
+  return agent.requestApproval({ sessionId, toolName: 'Bash' })
 }
 
 const TOKEN = 'a'.repeat(64)
@@ -41,7 +40,7 @@ test('a machine with nobody attached rings the phone it was given', { timeout: 6
   const stack = await startStack({ agent, machineName: 'Pocket Mac', noDirect: true })
   t.after(() => stack.stop())
   await stack.waitForRelay(20_000)
-  await waitFor(() => agent.isPumping('mux'), 10_000, 'the Bridle to subscribe')
+  await waitFor(() => agent.eventStreams > 0, 10_000, 'the Bridle to follow $events')
 
   // The phone attaches once, says where it can be rung, and leaves — which is
   // what a phone does: it is in a pocket a minute later.
@@ -53,7 +52,7 @@ test('a machine with nobody attached rings the phone it was given', { timeout: 6
   phone.close()
   await waitFor(() => stack.core.attached === 0, 5_000, 'the tunnel to be released')
 
-  agent.emit(approval('s1', 'a1'))
+  approval(agent, 's1')
 
   await waitFor(() => stack.relay.wakes.length > 0, 5_000, 'the machine to ring the phone')
   assert.deepEqual(stack.relay.wakes[0], {
@@ -67,7 +66,7 @@ test('a machine somebody is watching does not ring anyone', { timeout: 60_000 },
   const stack = await startStack({ agent, machineName: 'Watched Mac', noDirect: true })
   t.after(() => stack.stop())
   await stack.waitForRelay(20_000)
-  await waitFor(() => agent.isPumping('mux'), 10_000, 'the Bridle to subscribe')
+  await waitFor(() => agent.eventStreams > 0, 10_000, 'the Bridle to follow $events')
 
   const phone = new RowelPhone(stack.invite())
   await phone.connect()
@@ -76,7 +75,7 @@ test('a machine somebody is watching does not ring anyone', { timeout: 60_000 },
 
   // Still attached. The app will post its own notification, with the actual
   // words in it, and a push on top would be the same interruption twice.
-  agent.emit(approval('s1', 'a1'))
+  approval(agent, 's1')
   const seen = await new Promise((resolve) => {
     setTimeout(() => { resolve(stack.relay.wakes.length) }, 600)
   })
@@ -89,7 +88,7 @@ test('a phone that turns notifications off stops being rung', { timeout: 60_000 
   const stack = await startStack({ agent, machineName: 'Quiet Mac', noDirect: true })
   t.after(() => stack.stop())
   await stack.waitForRelay(20_000)
-  await waitFor(() => agent.isPumping('mux'), 10_000, 'the Bridle to subscribe')
+  await waitFor(() => agent.eventStreams > 0, 10_000, 'the Bridle to follow $events')
 
   const phone = new RowelPhone(stack.invite())
   await phone.connect()
@@ -100,7 +99,7 @@ test('a phone that turns notifications off stops being rung', { timeout: 60_000 
   phone.close()
   await waitFor(() => stack.core.attached === 0, 5_000, 'the tunnel to be released')
 
-  agent.emit(approval('s1', 'a1'))
+  approval(agent, 's1')
   const seen = await new Promise((resolve) => {
     setTimeout(() => { resolve(stack.relay.wakes.length) }, 600)
   })
@@ -112,7 +111,7 @@ test('the token survives the phone reconnecting, and is not asked for again', { 
   const stack = await startStack({ agent, machineName: 'Returning Mac', noDirect: true })
   t.after(() => stack.stop())
   await stack.waitForRelay(20_000)
-  await waitFor(() => agent.isPumping('mux'), 10_000, 'the Bridle to subscribe')
+  await waitFor(() => agent.eventStreams > 0, 10_000, 'the Bridle to follow $events')
 
   const invitation = stack.invite()
   const first = new RowelPhone(invitation)
@@ -131,7 +130,7 @@ test('the token survives the phone reconnecting, and is not asked for again', { 
   again.close()
   await waitFor(() => stack.core.attached === 0, 5_000, 'the tunnel to be released')
 
-  agent.emit(approval('s1', 'a1'))
+  approval(agent, 's1')
   await waitFor(() => stack.relay.wakes.length > 0, 5_000, 'the machine to ring the phone')
 })
 
@@ -147,7 +146,7 @@ test('a request that arrives while the relay is down is rung when it comes back'
   const stack = await startStack({ agent, machineName: 'Offline Mac', noDirect: true, relayUrl })
   t.after(() => stack.stop())
   await stack.waitForRelay(20_000)
-  await waitFor(() => agent.isPumping('mux'), 10_000, 'the Bridle to subscribe')
+  await waitFor(() => agent.eventStreams > 0, 10_000, 'the Bridle to follow $events')
 
   const phone = new RowelPhone(stack.invite())
   await phone.connect()
@@ -161,7 +160,7 @@ test('a request that arrives while the relay is down is rung when it comes back'
   // took the phone off the network.
   await first.close()
   await waitFor(() => stack.relayClient.connectionState !== 'online', 15_000, 'the relay to go down')
-  agent.emit(approval('s1', 'a1'))
+  approval(agent, 's1')
 
   // `onWaiting` fires once and the request is deduped afterwards, so a Bridle
   // that dropped the wake here would never ring for this question at all. It
@@ -180,7 +179,7 @@ test('one phone holding two pairings is rung once, not twice', { timeout: 60_000
   const stack = await startStack({ agent, machineName: 'Twice Mac', noDirect: true })
   t.after(() => stack.stop())
   await stack.waitForRelay(20_000)
-  await waitFor(() => agent.isPumping('mux'), 10_000, 'the Bridle to subscribe')
+  await waitFor(() => agent.eventStreams > 0, 10_000, 'the Bridle to follow $events')
 
   // Two pairings, one handset. This is not contrived: `bridle revoke` is
   // manual, and a phone that has been reset arrives with a fresh device
@@ -195,7 +194,7 @@ test('one phone holding two pairings is rung once, not twice', { timeout: 60_000
   await waitFor(() => stack.state.peers.filter(p => p.push === TOKEN).length === 2, 5_000, 'both pairings to hold it')
   await waitFor(() => stack.core.attached === 0, 5_000, 'the tunnels to be released')
 
-  agent.emit(approval('s1', 'a1'))
+  approval(agent, 's1')
   await waitFor(() => stack.relay.wakes.length > 0, 5_000, 'the machine to ring')
   await new Promise((resolve) => { setTimeout(resolve, 400) })
   assert.equal(stack.relay.wakes.length, 1, 'the same handset was buzzed once per pairing')
@@ -215,7 +214,7 @@ test('a question answered while the relay was down does not ring afterwards', { 
   const stack = await startStack({ agent, machineName: 'Answered Mac', noDirect: true, relayUrl })
   t.after(() => stack.stop())
   await stack.waitForRelay(20_000)
-  await waitFor(() => agent.isPumping('mux'), 10_000, 'the Bridle to subscribe')
+  await waitFor(() => agent.eventStreams > 0, 10_000, 'the Bridle to follow $events')
 
   const phone = new RowelPhone(stack.invite())
   await phone.connect()
@@ -227,11 +226,11 @@ test('a question answered while the relay was down does not ring afterwards', { 
   await first.close()
   await waitFor(() => stack.relayClient.connectionState !== 'online', 15_000, 'the relay to go down')
 
-  agent.emit(approval('s1', 'a1'))
+  const eventId = approval(agent, 's1')
   // Answered on the machine itself, which is what the browser two feet away is
-  // for. dsh reports it on the same stream, and the Bridle stops holding it.
-  agent.emit(request('approval/resolved', 's1'))
-  await waitFor(() => stack.core.pendingRequests.length === 0, 5_000, 'the request to be cleared')
+  // for. dsh sends every holder `cancel`, and the Bridle stops holding it.
+  agent.withdraw(eventId)
+  await waitFor(() => stack.core.dueForRing().length === 0, 5_000, 'the request to be cleared')
 
   const second = new RelayServer({ port, host: '127.0.0.1', recordWakes: true })
   await second.listen()
@@ -250,7 +249,7 @@ test('a question asked while somebody was attached rings once they leave', { tim
   const stack = await startStack({ agent, machineName: 'Watched Then Away', noDirect: true })
   t.after(() => stack.stop())
   await stack.waitForRelay(20_000)
-  await waitFor(() => agent.isPumping('mux'), 10_000, 'the Bridle to subscribe')
+  await waitFor(() => agent.eventStreams > 0, 10_000, 'the Bridle to follow $events')
 
   const phone = new RowelPhone(stack.invite())
   await phone.connect()
@@ -258,7 +257,7 @@ test('a question asked while somebody was attached rings once they leave', { tim
   await waitFor(() => stack.state.peers[0]?.push !== undefined, 5_000, 'the token to be stored')
 
   // Asked while they are looking at it. Nothing should ring yet.
-  agent.emit(approval('s1', 'a1'))
+  approval(agent, 's1')
   await new Promise((resolve) => { setTimeout(resolve, 400) })
   assert.equal(stack.relay.wakes.length, 0, 'rang a phone that was holding the tunnel')
 

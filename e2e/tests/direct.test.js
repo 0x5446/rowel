@@ -6,14 +6,18 @@
 
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { DIRECT_PATH, localAddresses, probeDsh } from '@rowel/bridle'
-import { RowelPhone, startStack } from '../lib/index.js'
+import { DIRECT_PATH, localAddresses } from '@rowel/bridle'
+import { RowelPhone, dshBinary, startDsh, startStack } from '../lib/index.js'
 
-const DSH_URL = process.env.ROWEL_E2E_DSH_URL ?? await probeDsh()
-const skip = DSH_URL === undefined ? 'no DeepSeek Harness is running; set ROWEL_E2E_DSH_URL' : false
+// A throwaway dsh 0.2 for this file, isolated from the one on this machine
+// (see e2e/src/dsh.ts). Skipped without one.
+const dsh = dshBinary() === undefined ? undefined : await startDsh()
+test.after(() => dsh?.stop())
+const skip = dsh === undefined ? 'set ROWEL_E2E_DSH_BIN to a dsh 0.2 executable' : false
+const DSH = dsh === undefined ? {} : { dshUrl: dsh.url, dshToken: dsh.token }
 
 test('a phone on the same network works with the relay switched off', { skip, timeout: 60_000 }, async (t) => {
-  const stack = await startStack({ dshUrl: DSH_URL, machineName: 'Desk Mac' })
+  const stack = await startStack({ ...DSH, machineName: 'Desk Mac' })
   t.after(() => stack.stop())
   await stack.waitForRelay()
 
@@ -35,13 +39,13 @@ test('a phone on the same network works with the relay switched off', { skip, ti
     `ready.direct ${JSON.stringify(ready.direct)} does not name the live listener`,
   )
 
-  const describe = await phone.call('host.describe', {})
-  assert.equal(describe.ok, true, JSON.stringify(describe))
-  assert.equal(typeof describe.value.version, 'string')
+  assert.equal(typeof ready.dsh, 'string', 'ready names the dsh version')
+  const listed = await phone.call('session/list', { _request: {} })
+  assert.equal(listed.ok, true, JSON.stringify(listed))
 })
 
 test('a stale LAN address costs one failed connect, not the session', { skip, timeout: 60_000 }, async (t) => {
-  const stack = await startStack({ dshUrl: DSH_URL, machineName: 'Away Mac' })
+  const stack = await startStack({ ...DSH, machineName: 'Away Mac' })
   t.after(() => stack.stop())
   await stack.waitForRelay()
 
@@ -53,11 +57,11 @@ test('a stale LAN address costs one failed connect, not the session', { skip, ti
 
   const ready = await phone.connect()
   assert.equal(ready.machine, 'Away Mac', 'the phone fell through to the relay')
-  assert.equal((await phone.call('host.describe', {})).ok, true)
+  assert.equal((await phone.call('session/list', { _request: {} })).ok, true)
 })
 
 test('the same device is one identity on either path', { skip, timeout: 60_000 }, async (t) => {
-  const stack = await startStack({ dshUrl: DSH_URL })
+  const stack = await startStack({ ...DSH })
   t.after(() => stack.stop())
   await stack.waitForRelay()
   const base = stack.invite().bundle
@@ -75,11 +79,11 @@ test('the same device is one identity on either path', { skip, timeout: 60_000 }
   t.after(() => { overLan.close() })
   await overLan.connect()
   assert.equal(stack.state.peers.length, 1, 'switching carriers did not create a second device')
-  assert.equal((await overLan.call('session.list', {})).ok, true)
+  assert.equal((await overLan.call('session/list', { _request: {} })).ok, true)
 })
 
 test('the direct listener is not a web server', { skip, timeout: 60_000 }, async (t) => {
-  const stack = await startStack({ dshUrl: DSH_URL })
+  const stack = await startStack({ ...DSH })
   t.after(() => stack.stop())
 
   const response = await fetch(`http://127.0.0.1:${String(stack.direct.port)}/`)
@@ -88,7 +92,7 @@ test('the direct listener is not a web server', { skip, timeout: 60_000 }, async
 })
 
 test('the advertised LAN addresses are dialable websocket urls', { skip, timeout: 60_000 }, async (t) => {
-  const stack = await startStack({ dshUrl: DSH_URL })
+  const stack = await startStack({ ...DSH })
   t.after(() => stack.stop())
 
   const advertised = stack.direct.addresses

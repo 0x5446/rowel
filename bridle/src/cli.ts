@@ -19,7 +19,7 @@ import { DirectServer } from './direct-server.ts'
 import { DshClient } from './dsh/client.ts'
 import { dshHomeUrl, ensureDsh, probeDsh } from './dsh/discovery.ts'
 import { cookieFor } from './dsh/credentials.ts'
-import { describeIdentity, identifyDsh } from './dsh/identify.ts'
+import { describeIdentity, identifyDsh, speaksCurrentApi } from './dsh/identify.ts'
 import { dshHome, installPlugin, uninstallPlugin, PLUGIN_ID } from './dsh/plugin-entry.ts'
 import { approveClaimant, loadState, overrideState, reloadState, rowelHome, revokePeer, saveState, signingKeys, staticKeys, updateState, withdrawOffer } from './identity.ts'
 import { deviceIdFor } from '@rowel/protocol'
@@ -670,13 +670,10 @@ async function status(): Promise<void> {
     if (runtime.direct.length > 0) say(`local     ${runtime.direct.join(', ')}`)
   }
   const dshUrl = runtime?.dshUrl ?? state.dshUrl
-  // Up means a dsh answered, signed in or not; only dsh 0.1 has the method the
-  // health check asks, so that check is for 0.1 alone.
+  // Up means a dsh answered, signed in or not; the line under it says whether
+  // this Bridle can use it.
   const identity = await identifyDsh(dshUrl, cookieFor(dshUrl))
-  const health = identity.kind === 'legacy' ? await new DshClient({ baseUrl: dshUrl }).health() : undefined
-  const up = health === undefined ? identity.kind !== 'unknown' : health.reachable
-  const why = health !== undefined && !health.reachable ? ` (${health.detail ?? 'no answer'})` : ''
-  say(`harness   ${up ? 'up' : 'down'} · ${dshUrl}${state.dshHome === undefined ? '' : ` · DSH_HOME ${state.dshHome}`}${why}`)
+  say(`harness   ${identity.kind === 'unknown' ? 'down' : 'up'} · ${dshUrl}${state.dshHome === undefined ? '' : ` · DSH_HOME ${state.dshHome}`}`)
   say(`          ${describeIdentity(identity)}`)
   say('')
   printDevices(state)
@@ -868,9 +865,7 @@ async function doctor(): Promise<void> {
   check(found !== undefined, `harness at ${found ?? state.dshUrl}`, 'no dsh web server answered; "bridle start" can launch one')
   if (found !== undefined) {
     const identity = await identifyDsh(found, cookieFor(found))
-    // Until M1, the only dsh this Bridle can serve is 0.1.1; signing in to 0.2
-    // works, but is not yet enough.
-    check(identity.kind === 'legacy', describeIdentity(identity), describeIdentity(identity))
+    check(identity.kind === 'signed-in' && speaksCurrentApi(identity.version), describeIdentity(identity), describeIdentity(identity))
   }
   let relayReachable = false
   let relayDetail = ''

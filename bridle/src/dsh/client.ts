@@ -1,22 +1,20 @@
 /**
- * Loopback client for a running dsh web server. Speaks the exact wire the
- * browser speaks: unary methods as `POST /api/<method>` carrying a
- * `client-request` envelope, answers to approvals and questions as
- * `POST /api/respond`, and the two downlinks as WebSockets that only ever
- * receive.
+ * Loopback client for a running dsh 0.2 web server. Speaks the wire the
+ * browser speaks: a unary endpoint as `POST /api/<endpoint>` carrying a
+ * `client-request` envelope whose payload is `{ args }`, and every stream as a
+ * logical stream on one `/api/remote.mux` socket (`remote-mux.ts`).
  *
- * dsh 0.1.1 has no authentication; its fence is the Host header plus a
- * loopback bind. dsh 0.2 adds a signed cookie on every request, loopback
- * included; whatever cookie is known for this address (`credentials.ts`) rides
- * along on every call and socket, and one that is refused is dropped. Nothing
- * in this file may ever be pointed at a non-loopback dsh — {@link assertLoopback}
+ * dsh 0.2 lets nothing into `/api` without a signed cookie, loopback included.
+ * Whatever cookie is known for this address (`credentials.ts`) rides along on
+ * every call and socket, and one that is refused is dropped. Nothing in this
+ * file may ever be pointed at a non-loopback dsh — {@link assertLoopback}
  * enforces that at construction.
  */
 
 import { isIP } from 'node:net'
-import WebSocket from 'ws'
 import type { AgentClient } from '../agents/types.ts'
 import { cookieFor, forgetCookie } from './credentials.ts'
+import { RemoteMux, type MuxState, type StreamHandle, type StreamSink } from './remote-mux.ts'
 
 /** The dsh unary response body. */
 export type DshResult =
@@ -42,15 +40,6 @@ export function assertLoopback(base: string): URL {
   return url
 }
 
-/** Result of one dsh reachability probe. */
-export interface DshHealth {
-  reachable: boolean
-  /** `host.describe` value when reachable. */
-  host?: unknown
-  /** Operator-facing reason when unreachable. */
-  detail?: string
-}
-
 /** Options for {@link DshClient}. */
 export interface DshClientOptions {
   /** Loopback base URL of the dsh web server. */
@@ -59,11 +48,8 @@ export interface DshClientOptions {
   requestTimeoutMs?: number
 }
 
-/** Default ceiling for one unary call; long-running work streams over the downlinks instead. */
+/** Default ceiling for one unary call; long-running work streams instead. */
 const DEFAULT_REQUEST_TIMEOUT_MS = 120_000
-
-/** How long to wait before redialing a dropped downlink. */
-const STREAM_RETRY_MS = 1_000
 
 let rpcCounter = 0
 
@@ -76,11 +62,48 @@ function nextRpcId(): string {
 export class DshClient implements AgentClient {
   private readonly base: URL
   private readonly requestTimeoutMs: number
+  private readonly mux: RemoteMux
 
   /** @param options - the loopback base URL and timeouts. */
   constructor(options: DshClientOptions) {
     this.base = assertLoopback(options.baseUrl)
     this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+    this.mux = new RemoteMux(this.base.origin)
+  }
+
+  /** Begin connecting the stream socket. */
+  start(): void {
+    this.mux.start()
+  }
+
+  /** Close the stream socket for good. */
+  stop(): void {
+    this.mux.stop()
+  }
+
+  /** Whether the stream socket is connected. */
+  get connection(): MuxState {
+    return this.mux.state
+  }
+
+  /**
+   * Watch the stream socket.
+   * @param listener - called on every change.
+   * @returns a function that stops watching.
+   */
+  onConnection(listener: (state: MuxState) => void): () => void {
+    return this.mux.onState(listener)
+  }
+
+  /**
+   * Open a stream on the shared socket.
+   * @param endpoint - e.g. `session/follow`, or `$events`.
+   * @param args - the endpoint's arguments.
+   * @param sink - receives items, then the end or an error.
+   * @returns the handle.
+   */
+  open(endpoint: string, args: unknown, sink: StreamSink): StreamHandle {
+    return this.mux.open(endpoint, args, sink)
   }
 
   /** The configured base URL. */
@@ -108,13 +131,15 @@ export class DshClient implements AgentClient {
   }
 
   /**
-   * Invoke one dsh method.
-   * @param method - path segment, e.g. `session.list` or `goals/create`.
-   * @param payload - the method's request payload.
+   * Invoke one dsh endpoint.
+   * @param endpoint - `<namespace>/<method>`, e.g. `session/list`.
+   * @param args - the endpoint's arguments; dsh wants exactly the names it declares.
    * @param signal - abandons the call; dsh maps it onto its own AbortSignal.
    * @returns the business result; carrier failures fold into the error branch.
    */
-  async call(method: string, payload: unknown, signal?: AbortSignal): Promise<DshResult> {
+  async call(endpoint: string, args: unknown, signal?: AbortSignal): Promise<DshResult> {
+    const method = endpoint
+    const payload = { args }
     const timeout = AbortSignal.timeout(this.requestTimeoutMs)
     const composite = signal === undefined ? timeout : AbortSignal.any([signal, timeout])
     const rpcId = nextRpcId()
@@ -153,103 +178,6 @@ export class DshClient implements AgentClient {
       return { ok: false, error: { code: 'internal', message: 'dsh returned a malformed envelope', details: {} } }
     }
     return envelope.result
-  }
-
-  /**
-   * Answer an approval or question by echoing the frame's rpcId.
-   * @param message - the dsh `client-response` message, verbatim.
-   * @returns the carrier receipt dsh reports.
-   */
-  async respond(message: unknown): Promise<unknown> {
-    const sent = this.credentials()
-    const response = await fetch(new URL('/api/respond', this.base), {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', ...sent },
-      body: JSON.stringify(message),
-      signal: AbortSignal.timeout(this.requestTimeoutMs),
-    })
-    this.refused(response.status, sent)
-    if (!response.ok) throw new Error(`dsh /api/respond answered HTTP ${String(response.status)}`)
-    return response.json()
-  }
-
-  /**
-   * Probe whether dsh is up.
-   * @returns reachability plus the `host.describe` value when it answers.
-   */
-  async health(): Promise<DshHealth> {
-    try {
-      const result = await this.call('host.describe', {}, AbortSignal.timeout(3_000))
-      if (result.ok) return { reachable: true, host: result.value }
-      return { reachable: false, detail: result.error.message }
-    } catch (error) {
-      return { reachable: false, detail: describe(error) }
-    }
-  }
-
-  /**
-   * Stream one downlink, redialing until the signal aborts. dsh treats any
-   * client message on these sockets as a protocol violation, so this never
-   * writes.
-   * @param stream - which downlink to open.
-   * @param onFrame - receives each `server-request` frame verbatim.
-   * @param onState - reports connect and disconnect transitions.
-   * @param signal - stops the stream and its retries.
-   */
-  async pump(
-    stream: 'mux' | 'host',
-    onFrame: (frame: unknown) => void,
-    onState: (connected: boolean, detail?: string) => void,
-    signal: AbortSignal,
-  ): Promise<void> {
-    const address = new URL(`/api/events.${stream}`, this.base)
-    address.protocol = address.protocol === 'https:' ? 'wss:' : 'ws:'
-    while (!signal.aborted) {
-      const closed = await this.pumpOnce(address, onFrame, onState, signal)
-      if (signal.aborted) return
-      onState(false, closed)
-      await sleep(STREAM_RETRY_MS, signal)
-    }
-  }
-
-  private pumpOnce(
-    address: URL,
-    onFrame: (frame: unknown) => void,
-    onState: (connected: boolean, detail?: string) => void,
-    signal: AbortSignal,
-  ): Promise<string | undefined> {
-    return new Promise((resolve) => {
-      const sent = this.credentials()
-      const socket = new WebSocket(address, { headers: { host: this.base.host, ...sent } })
-      let settled = false
-      const settle = (detail?: string): void => {
-        if (settled) return
-        settled = true
-        signal.removeEventListener('abort', onAbort)
-        resolve(detail)
-      }
-      const onAbort = (): void => {
-        socket.close()
-        settle()
-      }
-      signal.addEventListener('abort', onAbort, { once: true })
-      socket.on('open', () => { onState(true) })
-      socket.on('message', (data) => {
-        try {
-          onFrame(JSON.parse(data.toString()))
-        } catch {
-          // A frame dsh could not have produced; dropping one malformed frame
-          // is strictly better than tearing down a live conversation.
-        }
-      })
-      socket.on('unexpected-response', (_request, response) => {
-        this.refused(response.statusCode ?? 0, sent)
-        socket.terminate()
-        settle(`dsh refused the downlink (HTTP ${String(response.statusCode)})`)
-      })
-      socket.on('error', (error: Error) => { settle(error.message) })
-      socket.on('close', () => { settle('dsh closed the downlink') })
-    })
   }
 
   /**
@@ -307,16 +235,4 @@ function describe(error: unknown): string {
     current = current.cause
   }
   return chain.join(': ')
-}
-
-function sleep(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(finish, ms)
-    signal.addEventListener('abort', finish, { once: true })
-    function finish(): void {
-      clearTimeout(timer)
-      signal.removeEventListener('abort', finish)
-      resolve()
-    }
-  })
 }

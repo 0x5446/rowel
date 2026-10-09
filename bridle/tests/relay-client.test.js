@@ -17,29 +17,11 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { WebSocketServer } from 'ws'
 import { BridleCore, RelayClient } from '@rowel/bridle'
+import { ask, fakeAgent, machineState } from './fixtures/agent.js'
 
 /** A core whose dsh never answers; only the relay loop is under test. */
 function core(relayUrl) {
-  return new BridleCore(
-    {
-      version: 1,
-      deviceId: 'd',
-      privateKey: Buffer.alloc(32).toString('base64url'),
-      signingKey: Buffer.alloc(64).toString('base64url'),
-      machineName: 'a-mac',
-      relayUrl,
-      dshUrl: 'http://127.0.0.1:9',
-      peers: [],
-    },
-    {
-      dsh: {
-        baseUrl: 'http://127.0.0.1:9',
-        call: async () => ({ ok: true, value: {} }),
-        health: async () => ({ reachable: false }),
-        pump: async () => {},
-      },
-    },
-  )
+  return new BridleCore(machineState({ relayUrl }), { dsh: fakeAgent().agent })
 }
 
 /**
@@ -236,29 +218,14 @@ test('a Relay that reconnects does not ring the phone again for the same questio
   })
   const url = `http://127.0.0.1:${String(server.address().port)}`
 
-  let feed = () => {}
+  const fake = fakeAgent()
   const machine = new BridleCore(
-    {
-      version: 1,
-      deviceId: 'd',
-      privateKey: Buffer.alloc(32).toString('base64url'),
-      signingKey: Buffer.alloc(64).toString('base64url'),
-      machineName: 'a-mac',
-      relayUrl: url,
-      dshUrl: 'http://127.0.0.1:9',
-      peers: [{ key: 'k', name: 'phone', pairedAt: 0, lastSeen: 0, push: 'ab'.repeat(32) }],
-    },
-    {
-      dsh: {
-        baseUrl: 'http://127.0.0.1:9',
-        call: async () => ({ ok: true, value: {} }),
-        health: async () => ({ reachable: false }),
-        pump: async (stream, onFrame) => { if (stream === 'mux') feed = onFrame },
-      },
-    },
+    machineState({ relayUrl: url, peers: [{ key: 'k', name: 'phone', pairedAt: 0, lastSeen: 0, push: 'ab'.repeat(32) }] }),
+    { dsh: fake.agent },
   )
   await machine.start()
-  feed({ type: 'server-request', rpcId: 'r1', payload: { type: 'approval/requested', sessionId: 's1', approvalId: 'a1' } })
+  await until(() => fake.eventStreams().length > 0, 3_000, 'the Bridle to follow $events')
+  fake.emit(ask('e1'))
   const relay = new RelayClient(machine, { version: 'test/0', log: () => {} })
   t.after(async () => {
     relay.stop()

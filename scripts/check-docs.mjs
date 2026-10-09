@@ -71,7 +71,6 @@ function envDefault(source, name) {
 const protocolDoc = read('docs/protocol.md')
 const deployDoc = read('docs/deployment.md')
 const session = read('bridle/src/tunnel/session.ts')
-const eventLog = read('bridle/src/tunnel/event-log.ts')
 const registry = read('relay/src/registry.ts')
 const offers = read('relay/src/offers.ts')
 const relayServer = read('relay/src/server.ts')
@@ -93,8 +92,8 @@ const checks = [
   // writing, so it is a protocol fact rather than one relay's setting.
   ['单帧最大（字节）', constant(frameConstants, 'MAX_FRAME_BYTES'), [protocolDoc, deployDoc], ['32 MiB']],
   ['在途请求上限', constant(session, 'MAX_INFLIGHT'), [protocolDoc], null],
+  ['同时打开的流上限', constant(session, 'MAX_STREAMS'), [protocolDoc], null],
   ['心跳间隔（毫秒）', constant(session, 'PING_INTERVAL_MS'), [protocolDoc, deployDoc], ['25 秒', '25s']],
-  ['重放缓冲容量', constant(eventLog, 'DEFAULT_CAPACITY'), [protocolDoc], null],
   ['每机器线路上限', constant(registry, 'MAX_CIRCUITS_PER_MACHINE'), [deployDoc], null],
   ['全局机器上限（默认）', envDefault(registry, 'ROWEL_MAX_MACHINES'), [deployDoc], null],
   ['全局线路上限（默认）', envDefault(registry, 'ROWEL_MAX_CIRCUITS'), [deployDoc], null],
@@ -142,7 +141,13 @@ expect(swiftPrologue === prologue,
 
 // --- Frame kinds the docs enumerate ------------------------------------------
 
-const FRAME_KINDS = ['hello', 'req', 'res', 'cancel', 'respond', 'resume', 'wake', 'ev', 'resync', 'status', 'ping', 'pong', 'fault', 'ready']
+const FRAME_KINDS = ['hello', 'call', 'result', 'abort', 'open', 'item', 'end', 'cancel', 'error', 'wake', 'status', 'ping', 'pong', 'fault', 'ready']
+
+// Tunnel version 1's frames. The app still speaks them until it is ported to
+// version 2 (milestone M2 of docs/dsh-0.2-migration.md); until then the Swift
+// side may define them without the TypeScript side or the docs knowing them.
+// Delete this list, and the exemption below, with the port.
+const VERSION_1_ONLY = ['req', 'res', 'respond', 'resume', 'ev', 'resync']
 const documentedFrames = new Set(
   [...protocolDoc.matchAll(/\*\*`([a-z]+)`\*\*/g)].map(match => match[1]),
 )
@@ -155,10 +160,12 @@ for (const kind of FRAME_KINDS) {
 // frame without touching it — which is exactly what happened with `wake`.
 const tsKinds = [...read('protocol/src/frames.ts').matchAll(/^\s{2}t: '([a-z]+)'$/gm)].map(m => m[1])
 const swiftKinds = [...read('ios/Rowel/Protocol/Frames.swift').matchAll(/^\s{4}public let t = "([a-z]+)"$/gm)].map(m => m[1])
-for (const kind of new Set([...tsKinds, ...swiftKinds])) {
+for (const kind of tsKinds) {
   expect(FRAME_KINDS.includes(kind), `\`${kind}\` 帧存在于源码，但 check-docs 的清单里没有`)
 }
 for (const kind of swiftKinds) {
+  if (VERSION_1_ONLY.includes(kind)) continue
+  expect(FRAME_KINDS.includes(kind), `\`${kind}\` 帧存在于 Swift，但 check-docs 的清单里没有`)
   expect(tsKinds.includes(kind), `Swift 定义了 \`${kind}\` 帧，TypeScript 没有 —— 两份协议已漂移`)
 }
 

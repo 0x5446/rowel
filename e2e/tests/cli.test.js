@@ -12,13 +12,17 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { probeDsh } from '@rowel/bridle'
+import { exchangeToken } from '@rowel/bridle'
 import { decodePairingLink } from '@rowel/protocol'
 import { RelayServer } from '@rowel/relay'
-import { RowelPhone, waitFor } from '../lib/index.js'
+import { RowelPhone, dshBinary, startDsh, waitFor } from '../lib/index.js'
 
-const DSH_URL = process.env.ROWEL_E2E_DSH_URL ?? await probeDsh()
-const skip = DSH_URL === undefined ? 'no DeepSeek Harness is running; set ROWEL_E2E_DSH_URL' : false
+// A throwaway dsh 0.2 for this file, isolated from the one on this machine
+// (see e2e/src/dsh.ts). Skipped without one.
+const dsh = dshBinary() === undefined ? undefined : await startDsh()
+test.after(() => dsh?.stop())
+const skip = dsh === undefined ? 'set ROWEL_E2E_DSH_BIN to a dsh 0.2 executable' : false
+const DSH_URL = dsh?.url
 
 const CLI = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'bridle', 'lib', 'cli.js')
 
@@ -82,6 +86,13 @@ const RELAY_UP = /relay online as/u
 async function fixture(t) {
   const home = mkdtempSync(join(tmpdir(), 'rowel-cli-'))
   t.after(() => { rmSync(home, { recursive: true, force: true }) })
+  // Signed in before the CLI runs, the way a Bridle that started this dsh
+  // would be: the cookie it would have kept. The CLI never sees the token.
+  if (dsh !== undefined) {
+    mkdirSync(join(home, 'secrets'), { recursive: true, mode: 0o700 })
+    writeFileSync(join(home, 'secrets', 'dsh-cookies.json'),
+      JSON.stringify({ [new URL(dsh.url).host]: await exchangeToken(dsh.url, dsh.token) }), { mode: 0o600 })
+  }
   const relay = new RelayServer({ port: 0, host: '127.0.0.1' })
   const port = await relay.listen()
   t.after(() => relay.close())
@@ -125,7 +136,7 @@ test('the first run pairs a phone with no configuration at all', { skip, timeout
   // sending them would fail silently everywhere else.
   assert.equal(ready.harness?.url, DSH_URL, 'the ready frame does not say which harness this identity fronts')
   assert.equal(ready.harness?.home, cli.home, 'the ready frame does not say where the identity lives')
-  assert.equal((await phone.call('host.describe', {})).ok, true)
+  assert.equal((await phone.call('session/list', { _request: {} })).ok, true)
 })
 
 test('pair with nothing running becomes the bridle, so the scan is answered', { skip, timeout: 120_000 }, async (t) => {

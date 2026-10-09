@@ -2,8 +2,8 @@
  * A phone, in TypeScript.
  *
  * This is the reference implementation of the app side of the tunnel: the same
- * Noise IK handshake, the same frames, the same resume semantics that
- * `ios/Rowel/Protocol` implements in Swift. Keeping it here does two things —
+ * Noise IK handshake and the same version-2 frames — unary calls and dsh
+ * streams, passed through — that `ios/Rowel/Protocol` implements in Swift. Keeping it here does two things —
  * it lets the end-to-end tests drive a real Bridle against a real harness with
  * no simulator in the loop, and it gives the Swift code something authoritative
  * to be checked against.
@@ -22,19 +22,35 @@ import {
   type SecureChannel,
   type ServerFrame,
   type StaticKeyPair,
-  type StreamName,
+  type FrameError,
 } from '@rowel/protocol'
 
-/** The result shape every dsh method answers with. */
+/** The result shape every dsh endpoint answers with. */
 export type CallResult =
   | { ok: true; value: unknown }
-  | { ok: false; error: { code: string; message: string; details: unknown } }
+  | { ok: false; error: FrameError }
 
-/** One downlink frame as the phone sees it. */
-export interface PhoneEvent {
-  seq: number
-  stream: StreamName
-  frame: unknown
+/** How a stream finished. */
+export type StreamOutcome = { kind: 'end' } | { kind: 'error'; error: FrameError }
+
+/** One dsh stream, as the phone holds it. */
+export interface PhoneStream {
+  readonly sid: string
+  /** Every item received so far, in order. */
+  readonly items: unknown[]
+  /** Settles once the Bridle ends or fails the stream. Never settles after `cancel`. */
+  readonly done: Promise<StreamOutcome>
+  /**
+   * Watch items as they arrive.
+   * @returns a function that stops watching.
+   */
+  onItem: (listener: (value: unknown) => void) => () => void
+  /** Send one uplink item. */
+  send: (value: unknown) => void
+  /** Half-close the uplink. */
+  end: () => void
+  /** Stop the stream. */
+  cancel: () => void
 }
 
 /** Options for {@link RowelPhone}. */
@@ -72,6 +88,7 @@ export class HandshakeRefused extends Error {
 }
 
 let requestCounter = 0
+let streamCounter = 0
 
 /** An app-side tunnel to one Bridle. */
 export class RowelPhone {
@@ -79,10 +96,12 @@ export class RowelPhone {
   private socket: WebSocket | undefined
   private channel: SecureChannel | undefined
   private readonly pending = new Map<string, (result: CallResult) => void>()
-  private readonly eventListeners = new Set<(event: PhoneEvent) => void>()
-  private readonly resyncListeners = new Set<(from: number) => void>()
+  private readonly streams = new Map<string, {
+    items: unknown[]
+    listeners: Set<(value: unknown) => void>
+    settle: (outcome: StreamOutcome) => void
+  }>()
   private ready: ReadyFrame | undefined
-  private highestSeq = 0
 
   /** @param options - the pairing bundle and this device's identity. */
   constructor(private readonly options: PhoneOptions) {
@@ -92,11 +111,6 @@ export class RowelPhone {
   /** The `ready` frame from the last successful connection. */
   get readyFrame(): ReadyFrame | undefined {
     return this.ready
-  }
-
-  /** Highest event sequence this phone has seen. */
-  get seq(): number {
-    return this.highestSeq
   }
 
   /**
@@ -163,73 +177,88 @@ export class RowelPhone {
   private onReady: ((frame: ReadyFrame) => void) | undefined
 
   /**
-   * Ask for everything that happened while this phone was away.
-   * @param since - the highest sequence already held; defaults to this phone's own.
-   */
-  resume(since: number = this.highestSeq): void {
-    this.send({ t: 'resume', since })
-  }
-
-  /**
-   * Invoke one dsh method.
-   * @param method - method path, e.g. `session.list`.
-   * @param payload - the method's request payload.
+   * Invoke one dsh endpoint.
+   * @param endpoint - e.g. `session/list`.
+   * @param args - the endpoint's arguments, with exactly the names dsh declares.
    * @returns the dsh result.
    */
-  call(method: string, payload: unknown = {}): Promise<CallResult> {
-    requestCounter += 1
-    const id = `p${String(requestCounter)}`
+  call(endpoint: string, args: unknown = {}): Promise<CallResult> {
+    const id = this.callId()
     return new Promise((resolve) => {
       this.pending.set(id, resolve)
-      this.send({ t: 'req', id, method, payload })
+      this.send({ t: 'call', id, endpoint, args })
     })
   }
 
   /**
-   * Answer an approval or question.
-   * @param message - the dsh `client-response` message.
-   * @returns the carrier receipt.
+   * Invoke one dsh endpoint, keeping the id so the call can be abandoned.
+   * @param endpoint - e.g. `session/list`.
+   * @param args - the endpoint's arguments.
+   * @returns the id and the eventual result.
    */
-  /**
-   * Answer an approval or a question.
-   *
-   * Builds the envelope the harness expects, which is the part a client has to
-   * get right: the answer is routed by the `rpcId` of the request it replies
-   * to, so echoing the wrong one answers somebody else's question. The iOS app
-   * builds the same shape; keeping it here too is what makes this a reference
-   * rather than a test helper.
-   * @param rpcId - from the `server-request` frame being answered.
-   * @param value - that responder's own payload.
-   * @returns the harness receipt.
-   */
-  answer(rpcId: string, value: unknown): Promise<CallResult> {
-    return this.respond({
-      type: 'client-response',
-      rpcId,
-      result: { ok: true, value },
-    })
-  }
-
-  /**
-   * Send a pre-built response envelope.
-   * @param message - the `client-response` message, verbatim.
-   * @returns the harness receipt.
-   */
-  respond(message: unknown): Promise<CallResult> {
-    requestCounter += 1
-    const id = `r${String(requestCounter)}`
-    return new Promise((resolve) => {
+  callAbortable(endpoint: string, args: unknown = {}): { id: string; result: Promise<CallResult> } {
+    const id = this.callId()
+    const result = new Promise<CallResult>((resolve) => {
       this.pending.set(id, resolve)
-      this.send({ t: 'respond', id, message })
+      this.send({ t: 'call', id, endpoint, args })
     })
+    return { id, result }
   }
 
   /**
    * Abandon an in-flight call.
-   * @param id - the request id.
+   * @param id - the call id.
    */
-  cancel(id: string): void {
-    this.send({ t: 'cancel', id })
+  abort(id: string): void {
+    this.send({ t: 'abort', id })
+  }
+
+  /**
+   * Open a dsh stream through the Bridle.
+   * @param endpoint - e.g. `session/follow`, or `$events`.
+   * @param args - the endpoint's arguments.
+   * @returns the stream.
+   */
+  open(endpoint: string, args: unknown = {}): PhoneStream {
+    streamCounter += 1
+    const sid = `s${String(streamCounter)}`
+    const items: unknown[] = []
+    const listeners = new Set<(value: unknown) => void>()
+    let settle: (outcome: StreamOutcome) => void = () => {}
+    const done = new Promise<StreamOutcome>((resolve) => { settle = resolve })
+    this.streams.set(sid, { items, listeners, settle })
+    this.send({ t: 'open', sid, endpoint, args })
+    return {
+      sid,
+      items,
+      done,
+      onItem: (listener) => {
+        listeners.add(listener)
+        return (): void => { listeners.delete(listener) }
+      },
+      send: (value) => { this.send({ t: 'item', sid, value }) },
+      end: () => { this.send({ t: 'end', sid }) },
+      cancel: () => {
+        this.streams.delete(sid)
+        this.send({ t: 'cancel', sid })
+      },
+    }
+  }
+
+  /**
+   * Answer an approval or a question that arrived on this phone's `$events`.
+   *
+   * The part a client has to get right: dsh routes the answer by the
+   * `clientId` its own `$events` stream was given in its `ready` item, and the
+   * `eventId` of the waterfall being answered. The first answer from any
+   * client wins; a late one is accepted and changes nothing.
+   * @param clientId - from the `ready` item of this phone's `$events` stream.
+   * @param eventId - from the waterfall item being answered.
+   * @param value - the answer: `'allowed-once'` / `'rejected'`, or `{ answers }`.
+   * @returns dsh's receipt.
+   */
+  answer(clientId: string, eventId: string, value: unknown): Promise<CallResult> {
+    return this.call('$events/result', { clientId, eventId, outcome: { kind: 'result', value } })
   }
 
   /**
@@ -238,26 +267,6 @@ export class RowelPhone {
    */
   wake(token: string | null): void {
     this.send({ t: 'wake', token })
-  }
-
-  /**
-   * Watch downlink events.
-   * @param listener - called for every event frame, in sequence order.
-   * @returns a function that detaches the listener.
-   */
-  onEvent(listener: (event: PhoneEvent) => void): () => void {
-    this.eventListeners.add(listener)
-    return (): void => { this.eventListeners.delete(listener) }
-  }
-
-  /**
-   * Watch for replay gaps.
-   * @param listener - called when the Bridle could not replay far enough back.
-   * @returns a function that detaches the listener.
-   */
-  onResync(listener: (from: number) => void): () => void {
-    this.resyncListeners.add(listener)
-    return (): void => { this.resyncListeners.delete(listener) }
   }
 
   /** Close the tunnel. */
@@ -299,20 +308,26 @@ export class RowelPhone {
         this.onReady?.(frame)
         this.onReady = undefined
         return
-      case 'res': {
+      case 'result': {
         const resolve = this.pending.get(frame.id)
         this.pending.delete(frame.id)
         resolve?.(frame.result)
         return
       }
-      case 'ev':
-        this.highestSeq = Math.max(this.highestSeq, frame.seq)
-        for (const listener of this.eventListeners) listener({ seq: frame.seq, stream: frame.stream, frame: frame.frame })
+      case 'item': {
+        const stream = this.streams.get(frame.sid)
+        if (stream === undefined) return
+        stream.items.push(frame.value)
+        for (const listener of stream.listeners) listener(frame.value)
         return
-      case 'resync':
-        this.highestSeq = frame.from
-        for (const listener of this.resyncListeners) listener(frame.from)
+      }
+      case 'end':
+      case 'error': {
+        const stream = this.streams.get(frame.sid)
+        this.streams.delete(frame.sid)
+        stream?.settle(frame.t === 'end' ? { kind: 'end' } : { kind: 'error', error: frame.error })
         return
+      }
       case 'ping':
         this.send({ t: 'pong', nonce: frame.nonce })
         return
@@ -333,6 +348,15 @@ export class RowelPhone {
       resolve({ ok: false, error: { code: 'disconnected', message: reason, details: {} } })
     }
     this.pending.clear()
+    for (const stream of this.streams.values()) {
+      stream.settle({ kind: 'error', error: { code: 'disconnected', message: reason, details: {} } })
+    }
+    this.streams.clear()
+  }
+
+  private callId(): string {
+    requestCounter += 1
+    return `p${String(requestCounter)}`
   }
 }
 

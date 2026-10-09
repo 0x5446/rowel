@@ -1,14 +1,22 @@
 /**
  * Tunnel frames: the application protocol carried inside the Noise channel.
- * One tunnel multiplexes every dsh interaction — unary RPC, the two event
- * downlinks, and cancellation — so the phone holds exactly one socket.
+ * One tunnel multiplexes every dsh interaction — unary calls, any number of
+ * dsh streams, and cancellation of either — so the phone holds exactly one
+ * socket.
+ *
+ * Version 2 is dsh 0.2's own API, passed through. A `call` is
+ * `POST /api/<endpoint>` and a stream is a logical stream on dsh's
+ * `/api/remote.mux`, frame for frame: the Bridle signs in, keeps one
+ * connection to dsh, and maps stream ids. It does not know what any endpoint
+ * means, so a new dsh endpoint is a change to the app alone
+ * (docs/dsh-0.2-migration.md D3).
  *
  * Frames are JSON. The dsh API is JSON end to end (attachments ride as base64
  * inside it), so a binary framing would buy nothing and cost debuggability.
  */
 
-/** Protocol version mixed into the Noise prologue; a mismatch aborts the handshake. */
-export const TUNNEL_VERSION = 1
+/** The tunnel version this build speaks. */
+export const TUNNEL_VERSION = 2
 
 /**
  * Versions this build can speak, preferred first.
@@ -39,7 +47,15 @@ export const TUNNEL_VERSION = 1
  */
 export const MAX_FRAME_BYTES = 32 * 1024 * 1024
 
-export const TUNNEL_VERSIONS: readonly number[] = [1]
+/**
+ * Only version 2. The protocol's rule is to speak the current version and the
+ * one before (docs/protocol.md §4.6), and this is the deliberate exception:
+ * version 1 was dsh 0.1's API passed through, dsh 0.2 removed that API, and
+ * the owner chose not to keep a translation layer for it. An app that only
+ * speaks 1 is refused in the handshake with `supported: [2]`, which it already
+ * turns into "update the app" — the one useful thing it could be told.
+ */
+export const TUNNEL_VERSIONS: readonly number[] = [2]
 
 /**
  * Noise prologue both ends mix in before the first handshake message.
@@ -71,50 +87,85 @@ export function negotiateVersion(
   return shared.length === 0 ? undefined : Math.max(...shared)
 }
 
-/** Which dsh downlink an event frame came from. */
-export type StreamName = 'mux' | 'host'
+/** A failure, in dsh's own shape. */
+export interface FrameError {
+  code: string
+  message: string
+  details: unknown
+}
 
-/** App to Bridle: invoke one unary dsh method (`POST /api/<method>`). */
-export interface RequestFrame {
-  t: 'req'
+/** The outcome of one unary call. */
+export type CallResult = { ok: true; value: unknown } | { ok: false; error: FrameError }
+
+/** App to Bridle: invoke one unary dsh endpoint (`POST /api/<endpoint>`). */
+export interface CallFrame {
+  t: 'call'
   /** App-minted correlation id, unique per tunnel. */
   id: string
-  /** dsh method path segment, e.g. `session.prompt` or `goals/create`. */
-  method: string
-  /** The dsh request payload (`{ args }` for Typert Remote methods). */
-  payload: unknown
+  /** dsh endpoint, `<namespace>/<method>`, e.g. `session/list`. */
+  endpoint: string
+  /** The endpoint's arguments: dsh's `payload.args`, verbatim. */
+  args: unknown
 }
 
-/** Bridle to App: the result of one {@link RequestFrame}. */
-export interface ResponseFrame {
-  t: 'res'
+/** Bridle to App: the outcome of one {@link CallFrame}. */
+export interface ResultFrame {
+  t: 'result'
   id: string
-  /** The dsh `server-response.result`, or a locally synthesized failure. */
-  result: { ok: true; value: unknown } | { ok: false; error: { code: string; message: string; details: unknown } }
+  /** dsh's `server-response.result`, or a failure the Bridle made itself. */
+  result: CallResult
 }
 
-/** App to Bridle: abandon an in-flight request (maps to aborting the dsh fetch). */
+/** App to Bridle: abandon an in-flight call. Unknown ids are ignored. */
+export interface AbortFrame {
+  t: 'abort'
+  id: string
+}
+
+/** App to Bridle: open a dsh stream (a logical stream on `/api/remote.mux`). */
+export interface OpenFrame {
+  t: 'open'
+  /** App-minted stream id, unique per tunnel among streams still open. */
+  sid: string
+  /** dsh endpoint, e.g. `session/follow`, or `$events`. */
+  endpoint: string
+  /** The endpoint's arguments: dsh's `payload.args`, verbatim. */
+  args: unknown
+}
+
+/**
+ * Either direction: one item on an open stream. From the App it is uplink data
+ * (most dsh streams read none); from the Bridle it is dsh's item, verbatim.
+ */
+export interface ItemFrame {
+  t: 'item'
+  sid: string
+  value: unknown
+}
+
+/**
+ * Either direction: the stream is finished. From the App it half-closes the
+ * uplink; from the Bridle it is dsh's end, and the stream is gone.
+ */
+export interface EndFrame {
+  t: 'end'
+  sid: string
+}
+
+/** App to Bridle: stop a stream. No terminal frame follows. */
 export interface CancelFrame {
   t: 'cancel'
-  id: string
+  sid: string
 }
 
-/** App to Bridle: answer an approval or question (`POST /api/respond`). */
-export interface RespondFrame {
-  t: 'respond'
-  id: string
-  /** The dsh `client-response` message, verbatim. */
-  message: unknown
-}
-
-/** Bridle to App: one downlink frame, tagged with a tunnel-level sequence. */
-export interface EventFrame {
-  t: 'ev'
-  /** Monotonic per-tunnel sequence used by {@link ResumeFrame}. */
-  seq: number
-  stream: StreamName
-  /** The dsh `server-request` frame, verbatim. */
-  frame: unknown
+/**
+ * Bridle to App: the stream failed and is gone — dsh's error, verbatim, or one
+ * the Bridle made (the connection to dsh dropped, an item too large to carry).
+ */
+export interface ErrorFrame {
+  t: 'error'
+  sid: string
+  error: FrameError
 }
 
 /**
@@ -148,30 +199,6 @@ export interface WakeFrame {
   token: string | null
 }
 
-/** App to Bridle: after a reconnect, replay everything past `since`. */
-export interface ResumeFrame {
-  t: 'resume'
-  /** Highest sequence the app already has; `0` requests a fresh subscription. */
-  since: number
-  /**
-   * The `ready.epoch` of the connection `since` was counted on. A Bridle that
-   * restarted has a different one and answers `resync`. Omitted on the first
-   * connection, and by apps that predate it.
-   */
-  epoch?: string
-}
-
-/**
- * Bridle to App: events were lost to this app — the replay buffer no longer
- * reaches `since`, the Bridle restarted, or an event was too large to carry —
- * so refetch state. Events continue after `from`.
- */
-export interface ResyncFrame {
-  t: 'resync'
-  /** Events resume after this sequence; the app keeps it as its high-water mark. */
-  from: number
-}
-
 /** App to Bridle: opening frame stating what the app expects. */
 export interface HelloFrame {
   t: 'hello'
@@ -188,36 +215,36 @@ export interface ReadyFrame {
   bridle: string
   /** Display name of the paired machine. */
   machine: string
-  /** Whether the local dsh is reachable right now. */
+  /** Whether the Bridle holds a signed-in connection to dsh right now. */
   dshReachable: boolean
+  /** Why not, when it does not. */
+  detail?: string
+  /** dsh's version, when known. */
+  dsh?: string
   /**
    * Which harness this identity fronts (`url`) and where the identity lives
    * on disk (`home`). One machine can run several Bridles; this is how the
    * app tells them apart and how its rescue guidance names the right
-   * `ROWEL_HOME`. Optional: an older Bridle not sending it costs a label.
+   * `ROWEL_HOME`.
    */
   harness?: { url: string; home: string }
-  /** dsh `host.describe` value when reachable. */
-  host?: unknown
+  /**
+   * The machine itself: the account's home directory, which dsh 0.2 no longer
+   * describes through a method (`host.describe` is gone) and the app needs as
+   * the starting point of its folder picker.
+   */
+  host?: { home: string }
   /**
    * Where this machine can be dialled directly right now, best first.
    *
    * The pairing bundle's copy is frozen at pairing time; this one is current.
-   * Absent from Bridles that predate it — a client must then keep whatever
-   * addresses it has. Present-but-empty means the direct listener is off,
-   * which is a reason to *drop* stored addresses, not keep them.
+   * Present-but-empty means the direct listener is off, which is a reason to
+   * *drop* stored addresses, not keep them.
    */
   direct?: string[]
-  /** Highest event sequence the Bridle has produced. */
-  seq: number
-  /**
-   * Identifies this Bridle process's event numbering, which restarts with
-   * every process. The app echoes it in its next `resume`.
-   */
-  epoch?: string
 }
 
-/** Bridle to App: the local dsh went away or came back. */
+/** Bridle to App: the connection to dsh went away or came back. */
 export interface StatusFrame {
   t: 'status'
   dshReachable: boolean
@@ -246,10 +273,10 @@ export interface FaultFrame {
 }
 
 /** Frames the app may send. */
-export type ClientFrame = HelloFrame | RequestFrame | CancelFrame | RespondFrame | ResumeFrame | WakeFrame | PingFrame | PongFrame
+export type ClientFrame = HelloFrame | CallFrame | AbortFrame | OpenFrame | ItemFrame | EndFrame | CancelFrame | WakeFrame | PingFrame | PongFrame
 
 /** Frames the Bridle may send. */
-export type ServerFrame = ReadyFrame | ResponseFrame | EventFrame | ResyncFrame | StatusFrame | PingFrame | PongFrame | FaultFrame
+export type ServerFrame = ReadyFrame | ResultFrame | ItemFrame | EndFrame | ErrorFrame | StatusFrame | PingFrame | PongFrame | FaultFrame
 
 /** Every tunnel frame. */
 export type TunnelFrame = ClientFrame | ServerFrame

@@ -16,25 +16,16 @@ import {
   negotiateVersion,
   decodeFrame,
   encodeFrame,
+  type CallResult,
   type ClientFrame,
   type SecureChannel,
   type ServerFrame,
   MAX_FRAME_BYTES,
 } from '@rowel/protocol'
+import { homedir } from 'node:os'
 import { findPeer, redeemOffer, rowelHome, touchPeer, updateState } from '../identity.ts'
 import type { BridleCore, DshStatus } from '../core.ts'
-import type { LoggedEvent } from './event-log.ts'
-import { thinHistory } from './history.ts'
-import { thinRoster } from './roster.ts'
-import type { AgentResult } from '../agents/types.ts'
-
-/**
- * What to ask dsh for when the caller named no page size.
- *
- * dsh's own default is 50. This is only the starting point for the shrink
- * loop below — the app states its own, and the loop lowers whatever it gets.
- */
-const DEFAULT_HISTORY_MESSAGES = 25
+import type { StreamHandle } from '../agents/types.ts'
 
 /** The carrier a session writes through. */
 export interface TunnelTransport {
@@ -42,6 +33,12 @@ export interface TunnelTransport {
   send: (bytes: Buffer) => void
   /** Tear the carrier down. */
   close: (reason: string) => void
+  /**
+   * Bytes written but not yet handed to the network, when the carrier can say.
+   * dsh does not slow down for a slow reader, so this is where a phone that
+   * cannot keep up shows.
+   */
+  buffered?: () => number
 }
 
 /** What the app states in the handshake payload. */
@@ -98,6 +95,25 @@ export function deviceName(raw: unknown): string {
 /** Concurrent dsh calls one phone may have outstanding. */
 const MAX_INFLIGHT = 64
 
+/** Streams one phone may have open at once. */
+const MAX_STREAMS = 64
+
+/**
+ * How far behind a phone may fall before its streams are cut, in bytes. dsh
+ * writes as fast as it produces and never waits for a reader; past this, the
+ * stream being written to is cancelled with a `slow-consumer` error the app can
+ * recover from by reopening it, instead of the Bridle holding an ever-growing
+ * buffer for a phone on a bad connection.
+ */
+const MAX_BUFFERED_BYTES = 8 * 1024 * 1024
+
+/**
+ * The one endpoint the Bridle answers itself: dsh serves a session archive as
+ * a plain download (`GET /api/session.export`), not as an endpoint a call can
+ * reach, so the Bridle fetches it and hands it over base64.
+ */
+const EXPORT_ENDPOINT = '$export'
+
 /** Tunnel-level liveness probe interval. */
 const PING_INTERVAL_MS = 25_000
 
@@ -121,13 +137,13 @@ export class TunnelSession {
   private readonly responder: NoiseResponder
   private channel: SecureChannel | undefined
   private readonly inflight = new Map<string, AbortController>()
-  private unsubscribe: (() => void) | undefined
+  /** The streams this phone opened, by the id it chose. */
+  private readonly streams = new Map<string, StreamHandle>()
   private detach: (() => void) | undefined
   private unwatchStatus: (() => void) | undefined
   private pingTimer: NodeJS.Timeout | undefined
   /** When anything last arrived from the peer. */
   private heardAt = Date.now()
-  private lastSent = 0
   private closed = false
   /** The version this session negotiated. Set once, at handshake. */
   private version = TUNNEL_VERSION
@@ -176,7 +192,10 @@ export class TunnelSession {
     this.closed = true
     for (const controller of this.inflight.values()) controller.abort()
     this.inflight.clear()
-    this.unsubscribe?.()
+    // A phone that went away leaves no stream behind on dsh; it reopens what
+    // it needs on its next tunnel and gets a fresh baseline.
+    for (const handle of this.streams.values()) handle.cancel()
+    this.streams.clear()
     this.unwatchStatus?.()
     if (this.pingTimer !== undefined) clearInterval(this.pingTimer)
     this.detach?.()
@@ -271,33 +290,23 @@ export class TunnelSession {
       bridle: this.options.version,
       machine: this.core.state.machineName,
       dshReachable: status.reachable,
+      ...(status.detail === undefined ? {} : { detail: status.detail }),
+      ...(status.version === undefined ? {} : { dsh: status.version }),
       // Which harness this identity fronts, and where the identity lives on
       // disk. One machine can run several Bridles, and until the app knows
       // which one it is talking to, every offline screen says the same name
-      // and every rescue command defaults to the wrong home. Nothing here is
-      // a new disclosure: a paired peer can already call `host.describe`
-      // through this same channel and read cwd and home from the harness.
+      // and every rescue command defaults to the wrong home.
       harness: { url: this.core.state.dshUrl, home: rowelHome() },
-      ...(status.host === undefined ? {} : { host: status.host }),
+      // What `host.describe` used to answer and dsh 0.2 no longer does: where
+      // the account's home is, for the app's folder picker. A paired peer can
+      // already reach the same fact through dsh.
+      host: { home: homedir() },
       // Where this machine can be dialled directly *now*, so the app can
       // retire the addresses frozen into its pairing bundle. Sent even when
       // empty: an empty list is the truth about a machine whose direct
-      // listener is off, and withholding it would leave the app dialling a
-      // listener that no longer exists.
+      // listener is off.
       direct: this.core.directAddresses(),
-      seq: this.core.events.head,
-      epoch: this.core.events.epoch,
     })
-    // Whatever the machine is already waiting on, said before anything else.
-    //
-    // Sent at sequence zero on purpose: these are not a position in the event
-    // log but a statement of what is true now, and a real sequence here would
-    // move the app's resume point past events it has not been given yet. The
-    // app folds them exactly as it folds the live ones, and being told twice
-    // is harmless — the card is keyed by session, not appended to a list.
-    for (const request of this.core.pendingRequests) {
-      this.sendFrame({ t: 'ev', seq: 0, stream: 'mux', frame: request })
-    }
     // The ready frame may have failed to send, which disposes the session.
     // Registering listeners and timers on a corpse leaks both.
     if (this.closed) return
@@ -324,18 +333,25 @@ export class TunnelSession {
 
   private handleFrame(frame: ClientFrame | ServerFrame): void {
     switch (frame.t) {
-      case 'req':
-        void this.handleRequest(frame.id, frame.method, frame.payload)
+      case 'call':
+        void this.handleCall(frame.id, frame.endpoint, frame.args)
         return
-      case 'cancel':
+      case 'abort':
         this.inflight.get(frame.id)?.abort()
         this.inflight.delete(frame.id)
         return
-      case 'respond':
-        void this.handleRespond(frame.id, frame.message)
+      case 'open':
+        this.handleOpen(frame.sid, frame.endpoint, frame.args)
         return
-      case 'resume':
-        this.handleResume(frame.since, frame.epoch)
+      case 'item':
+        this.streams.get(frame.sid)?.item(frame.value)
+        return
+      case 'end':
+        this.streams.get(frame.sid)?.end()
+        return
+      case 'cancel':
+        this.streams.get(frame.sid)?.cancel()
+        this.streams.delete(frame.sid)
         return
       case 'wake':
         this.rememberToken(frame.token)
@@ -379,70 +395,90 @@ export class TunnelSession {
     })
   }
 
-  private handleResume(since: number, epoch?: string): void {
-    this.unsubscribe?.()
-    const result = this.core.events.replay(since, epoch)
-    if (result.kind === 'resync') {
-      this.lastSent = result.from
-      this.sendFrame({ t: 'resync', from: result.from })
-    } else {
-      this.lastSent = since
-      for (const event of result.events) this.emit(event)
-    }
-    // Subscribing in the same synchronous tick as the replay is what makes this
-    // gapless: no append can land between the two.
-    this.unsubscribe = this.core.events.subscribe((event: LoggedEvent) => { this.emit(event) })
-  }
-
-  private emit(event: LoggedEvent): void {
-    if (event.seq <= this.lastSent) return
-    this.lastSent = event.seq
-    this.sendFrame({ t: 'ev', seq: event.seq, stream: event.stream, frame: event.frame })
-  }
-
-  private async handleRequest(id: string, method: string, payload: unknown): Promise<void> {
+  private async handleCall(id: string, endpoint: string, args: unknown): Promise<void> {
     if (this.inflight.size >= MAX_INFLIGHT) {
-      this.sendFrame({
-        t: 'res',
-        id,
-        result: { ok: false, error: { code: 'busy', message: `more than ${String(MAX_INFLIGHT)} calls in flight`, details: {} } },
-      })
+      this.sendFrame({ t: 'result', id, result: failure('busy', `more than ${String(MAX_INFLIGHT)} calls in flight`) })
       return
     }
     const controller = new AbortController()
     this.inflight.set(id, controller)
     try {
-      const result = method === 'session.history'
-        ? await this.historyThatFits(payload, controller.signal)
-        : method === 'session.export'
-          ? await this.exportSession(payload)
-          : method === 'session.list'
-            ? this.trimRoster(await this.core.dsh.call(method, payload, controller.signal))
-            : await this.core.dsh.call(method, payload, controller.signal)
-      if (!this.closed) this.sendFrame({ t: 'res', id, result })
+      const result = endpoint === EXPORT_ENDPOINT
+        ? await this.exportSession(args)
+        : await this.core.dsh.call(endpoint, args, controller.signal)
+      if (!this.closed) this.sendFrame({ t: 'result', id, result })
     } finally {
       this.inflight.delete(id)
     }
   }
 
   /**
-   * Drop the list projections the app does not read.
-   * @param result - whatever dsh answered `session.list` with.
-   * @returns the same result, lighter.
+   * Open a dsh stream on this phone's behalf and relay it frame for frame.
+   *
+   * The stream belongs to this tunnel: it is cancelled when the tunnel closes,
+   * and only this tunnel hears from it.
    */
-  private trimRoster(result: AgentResult): AgentResult {
-    if (!result.ok) return result
-    const { value, trimming } = thinRoster(result.value)
-    if (trimming !== undefined) {
-      this.options.log?.(`session.list ${String(trimming.before)} to ${String(trimming.after)} bytes`)
+  private handleOpen(sid: string, endpoint: string, args: unknown): void {
+    if (this.streams.has(sid)) {
+      // dsh closes its whole socket for this; here it costs only the stream.
+      this.sendFrame({ t: 'error', sid, error: { code: 'bad-request', message: `stream ${sid} is already open`, details: {} } })
+      return
     }
-    return { ok: true, value }
+    if (this.streams.size >= MAX_STREAMS) {
+      this.sendFrame({ t: 'error', sid, error: { code: 'busy', message: `more than ${String(MAX_STREAMS)} streams open`, details: {} } })
+      return
+    }
+    // Registered before dsh is asked, because the first item can arrive while
+    // `open` is still running. The entry stands in for the handle until it
+    // exists, and a cancel that lands in that window is carried out the
+    // moment it does.
+    let opened: StreamHandle | undefined
+    let cancelledEarly = false
+    const entry: StreamHandle = {
+      item: (value) => { opened?.item(value) },
+      end: () => { opened?.end() },
+      cancel: () => {
+        if (opened === undefined) cancelledEarly = true
+        else opened.cancel()
+      },
+    }
+    this.streams.set(sid, entry)
+    opened = this.core.dsh.open(endpoint, args, {
+      item: (value) => {
+        if (this.streams.get(sid) !== entry) return
+        if ((this.transport.buffered?.() ?? 0) > MAX_BUFFERED_BYTES) {
+          this.cutStream(sid, 'slow-consumer', 'this phone fell too far behind the stream; reopen it')
+          return
+        }
+        this.sendFrame({ t: 'item', sid, value })
+      },
+      end: () => {
+        if (this.streams.get(sid) !== entry) return
+        this.streams.delete(sid)
+        this.sendFrame({ t: 'end', sid })
+      },
+      error: (error) => {
+        if (this.streams.get(sid) !== entry) return
+        this.streams.delete(sid)
+        this.sendFrame({ t: 'error', sid, error })
+      },
+    })
+    if (cancelledEarly) opened.cancel()
   }
 
-  private async exportSession(payload: unknown): Promise<{ ok: true; value: unknown } | { ok: false; error: { code: string; message: string; details: unknown } }> {
-    const request = payload as { sessionId?: unknown; includeDescendants?: unknown }
+  /** Cancel a stream at dsh and tell the phone why. */
+  private cutStream(sid: string, code: string, message: string, details: unknown = {}): void {
+    const handle = this.streams.get(sid)
+    if (handle === undefined) return
+    this.streams.delete(sid)
+    handle.cancel()
+    this.sendFrame({ t: 'error', sid, error: { code, message, details } })
+  }
+
+  private async exportSession(args: unknown): Promise<CallResult> {
+    const request = (args ?? {}) as { sessionId?: unknown; includeDescendants?: unknown }
     if (typeof request.sessionId !== 'string') {
-      return { ok: false, error: { code: 'bad-request', message: 'session.export needs a sessionId', details: {} } }
+      return failure('bad-request', `${EXPORT_ENDPOINT} needs a sessionId`)
     }
     const response = await this.core.dsh.export(request.sessionId, request.includeDescendants === true)
     if (!response.ok) {
@@ -470,19 +506,6 @@ export class TunnelSession {
     }
   }
 
-  private async handleRespond(id: string, message: unknown): Promise<void> {
-    try {
-      const receipt = await this.core.dsh.respond(message)
-      this.sendFrame({ t: 'res', id, result: { ok: true, value: receipt } })
-    } catch (error) {
-      this.sendFrame({
-        t: 'res',
-        id,
-        result: { ok: false, error: { code: 'internal', message: error instanceof Error ? error.message : String(error), details: {} } },
-      })
-    }
-  }
-
   private sendFrame(frame: ServerFrame): void {
     const channel = this.channel
     if (channel === undefined || this.closed) return
@@ -499,100 +522,37 @@ export class TunnelSession {
   }
 
   /**
-   * Fetch a history page small enough to send, halving the ask until it fits.
-   *
-   * A page is bounded by *messages*, and dsh is explicit that each one stays
-   * one contiguous raw event range — so a single message can span tens of
-   * thousands of `assistant/chunk` events and the byte size of a page has no
-   * ceiling at all. This is not hypothetical: a 25-message page came back as
-   * 22 MB. `thinHistory` handles the usual shape of that by dropping chunks
-   * that a committed message has already superseded, but a page still
-   * streaming has nothing to drop.
-   *
-   * So when the thinned page is still too big, ask for fewer messages. That is
-   * not a workaround — smaller pages are what `maxMessages` is *for*, and the
-   * caller already knows how to follow `hasMore`. It gets a shorter page and
-   * carries on, instead of an error about a limit it did not set and cannot do
-   * anything about.
-   *
-   * Only history, because only history has a size knob. `session.export` takes
-   * no page argument and `session.list` returns what it returns; for those the
-   * ceiling check in `sendFrame` is the whole answer.
-   */
-  private async historyThatFits(payload: unknown, signal: AbortSignal): Promise<AgentResult> {
-    const request = (payload ?? {}) as Record<string, unknown>
-    const asked = typeof request['maxMessages'] === 'number' ? request['maxMessages'] : DEFAULT_HISTORY_MESSAGES
-    let messages = Math.max(1, Math.floor(asked))
-
-    for (;;) {
-      const attempt = await this.core.dsh.call(
-        'session.history',
-        { ...request, maxMessages: messages },
-        signal,
-      )
-      if (!attempt.ok) return attempt
-
-      const { value, thinning } = thinHistory(attempt.value)
-      if (thinning !== undefined) {
-        this.options.log?.(`history thinned ${String(thinning.before)} → ${String(thinning.after)} events`)
-      }
-      const result: AgentResult = { ok: true, value }
-
-      const size = encodeFrame({ t: 'res', id: 'sizing', result }).length
-      // One message that still does not fit is the end of the line: there is
-      // nothing smaller to ask for. Send it and let `sendFrame` turn it into an
-      // error the caller can read, rather than looping forever.
-      if (size <= MAX_FRAME_BYTES || messages === 1) return result
-
-      const smaller = Math.max(1, Math.floor(messages / 2))
-      this.options.log?.(
-        `history page was ${(size / (1024 * 1024)).toFixed(1)} MB at ${String(messages)} messages; retrying with ${String(smaller)}`,
-      )
-      messages = smaller
-    }
-  }
-
-  /**
    * Deal with a frame nobody on the path will carry.
    *
    * Writing it anyway is the worst option available: the relay closes the
-   * connection with a 1009 before the app sees a byte, the app reconnects and
-   * resumes, the same call is answered with the same oversized frame, and the
-   * tunnel drops again — forever, with no error anywhere that names the cause.
-   * The observed shape of this is a `session.history` page that came back as
-   * 22 MB of streaming chunks; `thinHistory` keeps that one under the ceiling
-   * now, but `session.export` has no such guard and a long session's archive
-   * has no upper bound at all.
+   * connection with a 1009 before the app sees a byte, the app reconnects,
+   * asks again, gets the same oversized frame, and the tunnel drops again —
+   * forever, with no error anywhere that names the cause.
    *
-   * A response can fail on its own, so it does. An event cannot — there is no
-   * request waiting on it — so it is dropped, which loses one frame instead of
-   * the connection, and the app is told to refetch. It cannot notice the gap
-   * itself: if the dropped event was the last one, no later sequence arrives.
+   * So the one call or stream responsible fails, and nothing else does: a
+   * result becomes a `too-large` failure; a stream item cancels its stream at
+   * dsh and the phone hears `too-large` for that stream. (A conversation whose
+   * snapshot is too big is reopened by the app with fewer messages.)
    */
   private sendOversize(frame: ServerFrame, size: number): void {
     const megabytes = (size / (1024 * 1024)).toFixed(1)
     const ceiling = (MAX_FRAME_BYTES / (1024 * 1024)).toFixed(0)
-    this.options.log?.(`dropping a ${megabytes} MB ${frame.t} frame; the ceiling is ${ceiling} MB`)
-    if (frame.t === 'ev') {
-      // Not for the `seq: 0` snapshot of pending requests: it is not a position
-      // in the log, and `from: 0` would throw away the app's resume point.
-      if (frame.seq > 0) this.sendFrame({ t: 'resync', from: frame.seq })
+    this.options.log?.(`refusing a ${megabytes} MB ${frame.t} frame; the ceiling is ${ceiling} MB`)
+    const message = `That is ${megabytes} MB, over the ${ceiling} MB the tunnel can carry in one piece.`
+    const details = { bytes: size, limit: MAX_FRAME_BYTES }
+    if (frame.t === 'item') {
+      this.cutStream(frame.sid, 'too-large', message, details)
       return
     }
-    if (frame.t !== 'res') return
-    this.sendFrame({
-      t: 'res',
-      id: frame.id,
-      result: {
-        ok: false,
-        error: {
-          code: 'too-large',
-          message: `That answer is ${megabytes} MB, over the ${ceiling} MB the tunnel can carry in one piece.`,
-          details: { bytes: size, limit: MAX_FRAME_BYTES },
-        },
-      },
-    })
+    if (frame.t === 'result') {
+      this.sendFrame({ t: 'result', id: frame.id, result: { ok: false, error: { code: 'too-large', message, details } } })
+    }
   }
+}
+
+/** A failure the Bridle makes itself. */
+function failure(code: string, message: string): CallResult {
+  return { ok: false, error: { code, message, details: {} } }
 }
 
 /**

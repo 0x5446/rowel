@@ -1,145 +1,150 @@
 /**
- * The long-lived half of a Bridle: identity, the loopback dsh client, and the
- * downlink pumps that keep the replay buffer filled whether or not a phone is
- * currently attached.
+ * The long-lived half of a Bridle: identity, the signed-in connection to dsh,
+ * and the one stream the Bridle reads for itself — `$events`, to know when a
+ * phone that is not attached has to be woken.
  *
  * Tunnels come and go with the phone's radio. This does not.
  */
 
 import { watch, type FSWatcher } from 'node:fs'
 import { basename } from 'node:path'
-import { DshClient, type DshHealth } from './dsh/client.ts'
-import type { AgentClient } from './agents/types.ts'
-import { EventLog } from './tunnel/event-log.ts'
+import { DshClient } from './dsh/client.ts'
+import type { AgentClient, MuxState, StreamHandle } from './agents/types.ts'
+import { identifyDsh, type DshIdentity } from './dsh/identify.ts'
+import { cookieFor } from './dsh/credentials.ts'
 import { loadState, reloadState, rowelHome, statePath, staticKeys, type BridleState } from './identity.ts'
 import type { StaticKeyPair } from '@rowel/protocol'
 
 /**
- * What makes one pending request distinguishable from another.
- *
- * `rpcId` is what dsh routes an answer by, so it is unique per request and
- * stable across the re-sends dsh performs for new subscribers. The approval or
- * question id is the fallback for a frame shaped differently.
- * @param frame - a mux frame, verbatim.
- * @returns a comparable identity, or undefined when the frame carries none.
+ * How long dsh has, after a new `$events` stream opens, to re-send what is
+ * still waiting. It re-sends every pending approval and question to a new
+ * subscriber at once, under the same `eventId`; a ring recorded for one it does
+ * not re-send is for a request that is gone.
  */
-function identityOf(frame: unknown): string | undefined {
-  const outer = frame as { rpcId?: unknown; payload?: { approvalId?: unknown; id?: unknown } }
-  if (typeof outer.rpcId === 'string') return outer.rpcId
-  if (typeof outer.payload?.approvalId === 'string') return outer.payload.approvalId
-  if (typeof outer.payload?.id === 'string') return outer.payload.id
-  return undefined
-}
-
-/** How long dsh has to re-send its pending requests after the downlink reconnects. */
 const RESEND_GRACE_MS = 2_000
+
+/** The two `$events` waterfalls a person has to answer. */
+const ASKS = new Set(['approval/request', 'user-questions/request'])
 
 /** Current dsh reachability as the core last observed it. */
 export interface DshStatus {
   reachable: boolean
-  /** `host.describe` value from the last successful probe. */
-  host?: unknown
+  /** dsh's version, when known. */
+  version?: string
   /** Operator-facing reason when unreachable. */
   detail?: string
 }
-
-/** How often to re-probe dsh while its downlinks are down. */
-const HEALTH_INTERVAL_MS = 5_000
 
 /** Everything a tunnel needs from the machine it is attached to. */
 export class BridleCore {
   readonly state: BridleState
   readonly keys: StaticKeyPair
   readonly dsh: AgentClient
-  readonly events: EventLog
 
-  private readonly abort = new AbortController()
   private readonly statusListeners = new Set<(status: DshStatus) => void>()
-  private readonly connected = new Set<'mux' | 'host'>()
-  private status: DshStatus = { reachable: false, detail: 'not probed yet' }
+  private status: DshStatus = { reachable: false, detail: 'not connected yet' }
+  private identity: DshIdentity | undefined
+  private unwatchConnection: (() => void) | undefined
+  private events: StreamHandle | undefined
 
   /**
-   * The requests dsh is still waiting on a person for, by session.
+   * The requests dsh is waiting on a person for right now, by `eventId`.
    *
-   * An approval or a question crosses the wire once, as a live event. A phone
-   * that is not attached at that instant never learns the machine has stopped
-   * — and "not attached at that instant" is the normal case for this app,
-   * whose whole premise is that you are somewhere else. Opening Rowel to find
-   * out why the agent went quiet showed a conversation that simply stopped.
-   *
-   * dsh does not have this problem because it re-sends pending requests to
-   * every new subscriber on the mux stream, which is what makes a browser
-   * reload work. Bridle's subscription is long-lived, so it collects that
-   * re-send only when *it* restarts, never when a phone reconnects. Holding
-   * them here puts the same guarantee one layer further out, where the phones
-   * actually come and go.
-   *
-   * Keyed by kind and session because that is the shape of the thing: a
-   * session waits on one approval or one question at a time, and the
-   * `resolved` event names the session rather than the request it closes.
+   * Rebuilt for every `$events` stream: when the stream reopens — dsh restarted,
+   * the socket dropped — dsh re-sends whatever is still pending, and nothing
+   * from before is kept, so a request answered meanwhile on another device does
+   * not linger here and ring someone for nothing.
    */
-  private readonly waiting = new Map<string, unknown>()
+  private readonly waiting = new Set<string>()
 
   /**
-   * Live tunnels, counted rather than listed.
+   * The requests a phone has already been rung for, by `eventId`.
    *
-   * The only question anyone asks of it is "is there anybody there", which
-   * decides whether a request that has stopped the agent needs a push to reach
-   * a phone or will be delivered over a socket that already exists. A count
-   * answers that; a list would invite someone to start addressing them
-   * individually, and the two transports create their sessions in different
-   * files.
+   * Kept across `$events` streams on purpose: dsh re-sends a pending request
+   * under the same `eventId`, and a network blip that reopened the stream must
+   * not ring the same phone twice for the same question. An id is dropped when
+   * its request ends (`cancel`), or when a fresh stream's re-send window closes
+   * without it.
+   */
+  private readonly rung = new Set<string>()
+  private resendTimer: NodeJS.Timeout | undefined
+
+  /**
+   * Live tunnels, counted rather than listed. The only question anyone asks of
+   * it is "is there anybody there", which decides whether a request needs a
+   * push to reach a phone or will be seen by one already attached.
    */
   private attachments = 0
-
   private readonly waitingListeners = new Set<() => void>()
-  /**
-   * Requests held from before the mux downlink last reconnected, and not yet
-   * re-sent by dsh since. dsh re-sends everything still pending to a new
-   * subscriber, so whatever it does not re-send is gone — dsh restarted, and
-   * the request went with it. See {@link BridleCore.sweepUnconfirmed}.
-   */
-  private readonly unconfirmed = new Set<string>()
-  private sweepTimer: NodeJS.Timeout | undefined
-  /**
-   * The request frames a phone has already been rung for. By frame, because a
-   * re-sent request keeps the frame first held (see `trackWaiting`) and a new
-   * one replaces it — so nothing here needs forgetting. See {@link BridleCore.dueForRing}.
-   */
-  private readonly rung = new WeakSet<object>()
 
   /**
    * The LAN addresses a phone can dial this machine on right now, best first.
    *
-   * A function, not an array, and that is the whole point. The first version
-   * stored the value the direct listener reported when it started, which made
-   * every `ready` frame advertise the network the Mac was on at boot: a laptop
-   * that moved from a hotspot to an office went on telling every phone to dial
-   * the hotspot, forever, while `bridle status` — which recomputes — showed the
-   * right one. Measured from the phone's own connection log, dialling an
-   * address from the night before.
-   *
-   * Set by whoever owns the listener. The pairing bundle carries a copy too,
-   * but that one is frozen at pairing time and this is what corrects it.
+   * A function, not an array: the first version stored the value the direct
+   * listener reported when it started, which made every `ready` frame advertise
+   * the network the Mac was on at boot. Set by whoever owns the listener.
    */
   directAddresses: () => string[] = () => []
-  private healthTimer: NodeJS.Timeout | undefined
   private watcher: FSWatcher | undefined
 
   /**
    * @param state - loaded identity state; `dshUrl` selects the harness.
-   * @param overrides - injection points for the dsh client and the replay depth.
+   * @param overrides - injection point for the agent client.
    */
-  constructor(state: BridleState = loadState(), overrides: { dsh?: AgentClient; eventCapacity?: number } = {}) {
+  constructor(state: BridleState = loadState(), overrides: { dsh?: AgentClient } = {}) {
     this.state = state
     this.keys = staticKeys(state)
     this.dsh = overrides.dsh ?? new DshClient({ baseUrl: state.dshUrl })
-    this.events = overrides.eventCapacity === undefined ? new EventLog() : new EventLog(overrides.eventCapacity)
   }
 
-  /** Every request still waiting on a person, for an app that just attached. */
-  get pendingRequests(): unknown[] {
-    return [...this.waiting.values()]
+  /** dsh reachability as of the last change. */
+  get dshStatus(): DshStatus {
+    return this.status
+  }
+
+  /**
+   * Connect to dsh and follow its `$events`.
+   * @returns once the first identification has finished.
+   */
+  async start(): Promise<void> {
+    this.unwatchConnection = this.dsh.onConnection((state) => { void this.onConnection(state) })
+    this.dsh.start()
+    await this.identify()
+    this.watchState()
+  }
+
+  /** Disconnect and release timers. */
+  stop(): void {
+    this.unwatchConnection?.()
+    this.events?.cancel()
+    this.events = undefined
+    if (this.resendTimer !== undefined) clearTimeout(this.resendTimer)
+    this.dsh.stop()
+    this.watcher?.close()
+  }
+
+  /**
+   * Re-read what another `bridle` invocation may have changed — the paired
+   * devices, the outstanding offer, the machine name. The keys are never
+   * re-read (see `reloadState`), and this process's overrides survive.
+   */
+  refreshState(): void {
+    try {
+      reloadState(this.state)
+    } catch {
+      // A missing or unreadable file is not a reason to forget who is paired;
+      // the in-memory copy is the better answer until the file is back.
+    }
+  }
+
+  /**
+   * Watch dsh reachability.
+   * @param listener - called on every transition.
+   * @returns a function that detaches the listener.
+   */
+  onDshStatus(listener: (status: DshStatus) => void): () => void {
+    this.statusListeners.add(listener)
+    return (): void => { this.statusListeners.delete(listener) }
   }
 
   /** Whether any phone currently holds a tunnel, over either transport. */
@@ -168,17 +173,9 @@ export class BridleCore {
   /**
    * Watch for any change to whether somebody needs fetching.
    *
-   * Not "a request arrived" — that was the first version and it was the wrong
-   * event. Whether a phone should be rung is a *state*, standing on two facts
-   * that both move: something is waiting on a person, and nobody is attached to
-   * be told. A listener fired only when the first became true was wrong in both
-   * directions. Asked while the phone was in someone's hand, no ring was ever
-   * owed, so putting the phone down without answering left the machine waiting
-   * in silence forever. And a ring owed while the Relay was down was still owed
-   * when it returned, even if the question had been answered in the browser
-   * meanwhile.
-   *
-   * So this fires whenever either fact changes and the listener decides again.
+   * Whether a phone should be rung is a *state*, standing on two facts that
+   * both move: something is waiting on a person, and nobody is attached to be
+   * told. This fires whenever either changes and the listener decides again.
    * @param listener - called after the change is recorded.
    * @returns a function that detaches the listener.
    */
@@ -187,193 +184,120 @@ export class BridleCore {
     return (): void => { this.waitingListeners.delete(listener) }
   }
 
+  /**
+   * The waiting requests nobody has been rung for yet.
+   *
+   * A ring is owed once per request, not once per reason to reconsider — and
+   * the reasons come often: every attach and detach, every Relay reconnect.
+   */
+  dueForRing(): string[] {
+    return [...this.waiting].filter(id => !this.rung.has(id))
+  }
+
+  /** Record that a phone has been rung for everything waiting right now. */
+  markRung(): void {
+    for (const id of this.waiting) this.rung.add(id)
+  }
+
+  private async onConnection(state: MuxState): Promise<void> {
+    if (state.connected) {
+      // A fresh socket: identify again (dsh may have been upgraded or swapped
+      // underneath us) and follow `$events` on it.
+      await this.identify()
+      this.followEvents()
+      return
+    }
+    this.events = undefined
+    this.publish({ reachable: false, ...(state.detail === undefined ? {} : { detail: state.detail }) })
+  }
+
+  private async identify(): Promise<void> {
+    this.identity = await identifyDsh(this.dsh.baseUrl, cookieFor(this.dsh.baseUrl)).catch(() => undefined)
+    const connected = this.dsh.connection.connected
+    const version = this.identity?.kind === 'signed-in' ? this.identity.version : undefined
+    if (connected) {
+      this.publish({ reachable: true, ...(version === undefined ? {} : { version }) })
+      return
+    }
+    this.publish({ reachable: false, detail: this.reasonOffline() })
+  }
+
+  /** Why dsh cannot be used, in the words a person needs. */
+  private reasonOffline(): string {
+    switch (this.identity?.kind) {
+      case 'legacy':
+        return 'dsh 0.1.1 is running; this Bridle needs dsh 0.2 or later (or keep Bridle 0.1.x)'
+      case 'locked':
+        return 'dsh asks to sign in — run "bridle plugin install" and restart dsh, or let bridle start dsh'
+      default:
+        return this.dsh.connection.detail ?? 'dsh is not reachable'
+    }
+  }
+
+  /**
+   * Open the Bridle's own `$events` stream. It only reads: the Bridle never
+   * answers an approval or a question, so it cannot race the phone or the
+   * browser for them (dsh gives a request to whichever client answers first).
+   */
+  private followEvents(): void {
+    this.events?.cancel()
+    // A new stream is a new generation of what is waiting.
+    this.waiting.clear()
+    this.waitingChanged()
+    if (this.resendTimer !== undefined) clearTimeout(this.resendTimer)
+    this.resendTimer = setTimeout(() => {
+      this.resendTimer = undefined
+      // Rings for requests dsh did not re-send are for requests that are gone.
+      for (const id of [...this.rung]) if (!this.waiting.has(id)) this.rung.delete(id)
+    }, RESEND_GRACE_MS)
+    this.resendTimer.unref()
+    const reopen = (): void => {
+      this.events = undefined
+      // dsh ended the stream on a live socket — not the usual way, which is
+      // the socket dropping and `onConnection` reopening. Follow it again, or
+      // nobody is ever rung until the socket happens to drop.
+      if (!this.dsh.connection.connected) return
+      setTimeout(() => { if (this.events === undefined && this.dsh.connection.connected) this.followEvents() }, 1_000).unref()
+    }
+    this.events = this.dsh.open('$events', {}, {
+      item: (value) => { this.onEvent(value) },
+      end: reopen,
+      error: reopen,
+    })
+  }
+
+  private onEvent(value: unknown): void {
+    const event = value as { type?: unknown; event?: unknown; eventId?: unknown }
+    if (typeof event.eventId !== 'string') return
+    if (event.type === 'waterfall' && typeof event.event === 'string' && ASKS.has(event.event)) {
+      if (this.waiting.has(event.eventId)) return
+      this.waiting.add(event.eventId)
+      this.waitingChanged()
+      return
+    }
+    if (event.type === 'cancel') {
+      // Answered — by a phone, the browser, or the turn was cancelled.
+      this.rung.delete(event.eventId)
+      if (this.waiting.delete(event.eventId)) this.waitingChanged()
+    }
+  }
+
   /** Tell every listener the answer may have changed. */
   private waitingChanged(): void {
     for (const listener of this.waitingListeners) {
       try {
         listener()
       } catch {
-        // Same reasoning as every other listener here: one bad subscriber must
-        // not stop the rest, and must not stop the event fold.
+        // One bad subscriber must not stop the rest.
       }
-    }
-  }
-
-  /**
-   * Note a request that has stopped the agent, or forget one that was answered.
-   * @param frame - a mux frame, verbatim.
-   */
-  private trackWaiting(frame: unknown): void {
-    const payload = (frame as { payload?: { type?: unknown; sessionId?: unknown } }).payload
-    const type = payload?.type
-    const sessionId = payload?.sessionId
-    if (typeof type !== 'string' || typeof sessionId !== 'string') return
-    if (type === 'approval/requested' || type === 'question/requested') {
-      const key = `${type}:${sessionId}`
-      // The same request or a different one? dsh re-sends everything pending to
-      // each new subscriber, and this Bridle resubscribes whenever dsh
-      // restarts, so a repeat is usually a replay and ringing again would wake
-      // someone for a question they were already woken for an hour ago.
-      //
-      // Usually, but not always. A downlink that drops can lose the `resolved`
-      // event, and then a genuinely new question for the same session looks
-      // exactly like a replay of the old one — nobody is rung, and the phone
-      // shows the stale card. So the identity of the request decides, not the
-      // session it belongs to.
-      const identity = identityOf(frame)
-      if (this.waiting.has(key) && identityOf(this.waiting.get(key)) === identity) {
-        this.unconfirmed.delete(key)
-        return
-      }
-      this.unconfirmed.delete(key)
-      this.waiting.set(key, frame)
-      for (const listener of this.waitingListeners) {
-        try {
-          listener()
-        } catch {
-          // Same reasoning as every other listener here: one bad subscriber
-          // must not stop the rest, and must not stop the event fold.
-        }
-      }
-      return
-    }
-    // Answered — by this phone, another one, or the browser on the machine
-    // itself. Whoever it was, nobody should be asked again.
-    // Answered — by this phone, another one, or the browser on the machine
-    // itself. A listener re-deciding whether to ring has to hear this too:
-    // an owed ring that was never sent because the Relay was down must not
-    // survive the answer.
-    const answered = (type === 'approval/resolved' && this.forget(`approval/requested:${sessionId}`))
-      || (type === 'question/resolved' && this.forget(`question/requested:${sessionId}`))
-    if (answered) this.waitingChanged()
-  }
-
-  /**
-   * Stop holding a request for a session that no longer exists.
-   *
-   * The only way an entry could outlive its answer: a session deleted while it
-   * was waiting on someone resolves nothing, so without this it would be
-   * offered to every phone that ever attached, forever. Small, but the only
-   * part of this bookkeeping that was not already bounded by construction.
-   * @param frame - a host-stream frame, verbatim.
-   */
-  private forgetRemoved(frame: unknown): void {
-    const payload = (frame as { payload?: { type?: unknown; sessionId?: unknown } }).payload
-    if (payload?.type !== 'host/session-removed') return
-    const sessionId = payload.sessionId
-    if (typeof sessionId !== 'string') return
-    const forgot = [this.forget(`approval/requested:${sessionId}`), this.forget(`question/requested:${sessionId}`)]
-    if (forgot.includes(true)) this.waitingChanged()
-  }
-
-  /**
-   * Drop one held request, with its bookkeeping.
-   * @param key - `<type>:<sessionId>`.
-   * @returns whether anything was held under that key.
-   */
-  private forget(key: string): boolean {
-    const frame = this.waiting.get(key)
-    if (frame === undefined) return false
-    this.waiting.delete(key)
-    this.unconfirmed.delete(key)
-    return true
-  }
-
-  /**
-   * The held requests nobody has been rung for yet.
-   *
-   * A ring is owed once per request, not once per reason to reconsider. The
-   * reasons come often — every attach and detach, every time the Relay
-   * re-registers after a Mac wakes or changes network — and deciding from
-   * "is anything pending" alone rang the phone again for a question it had
-   * already been rung for, each time.
-   */
-  dueForRing(): unknown[] {
-    return [...this.waiting.values()].filter(frame => !this.rung.has(frame as object))
-  }
-
-  /** Record that a phone has been rung for everything held right now. */
-  markRung(): void {
-    for (const frame of this.waiting.values()) this.rung.add(frame as object)
-  }
-
-  /**
-   * Forget the requests dsh did not re-send after the downlink came back.
-   *
-   * A request dies with the dsh process that asked it, and the `resolved`
-   * event never comes. Left alone it was offered to every phone that attached
-   * and rung on every Relay reconnect, for a question nobody could answer any
-   * more. A phone attached right now is told as if it had been answered — the
-   * same event it already knows how to fold — so its card goes too.
-   */
-  private sweepUnconfirmed(): void {
-    this.sweepTimer = undefined
-    let forgot = false
-    for (const key of [...this.unconfirmed]) {
-      const sessionId = key.slice(key.indexOf(':') + 1)
-      const resolved = key.startsWith('approval/') ? 'approval/resolved' : 'question/resolved'
-      if (!this.forget(key)) continue
-      forgot = true
-      this.events.append('mux', { payload: { type: resolved, sessionId } })
-    }
-    if (forgot) this.waitingChanged()
-  }
-
-  /** dsh reachability as of the last probe or downlink transition. */
-  get dshStatus(): DshStatus {
-    return this.status
-  }
-
-  /**
-   * Start the downlink pumps and the health probe.
-   * @returns once the first health probe has completed.
-   */
-  async start(): Promise<void> {
-    const signal = this.abort.signal
-    void this.dsh.pump('mux', frame => {
-      this.trackWaiting(frame)
-      this.events.append('mux', frame)
-    }, (up, detail) => { this.onStream('mux', up, detail) }, signal)
-    void this.dsh.pump('host', frame => {
-      this.forgetRemoved(frame)
-      this.events.append('host', frame)
-    }, (up, detail) => { this.onStream('host', up, detail) }, signal)
-    await this.probe()
-    this.healthTimer = setInterval(() => { void this.probe() }, HEALTH_INTERVAL_MS)
-    this.healthTimer.unref()
-    this.watchState()
-  }
-
-  /** Stop the pumps and release timers. */
-  stop(): void {
-    this.abort.abort()
-    if (this.healthTimer !== undefined) clearInterval(this.healthTimer)
-    if (this.sweepTimer !== undefined) clearTimeout(this.sweepTimer)
-    this.watcher?.close()
-  }
-
-  /**
-   * Re-read what another `bridle` invocation may have changed — the paired
-   * devices, the outstanding offer, the machine name. The keys are never
-   * re-read (see `reloadState`), and this process's overrides survive.
-   */
-  refreshState(): void {
-    try {
-      reloadState(this.state)
-    } catch {
-      // A missing or unreadable file is not a reason to forget who is paired;
-      // the in-memory copy is the better answer until the file is back.
     }
   }
 
   /**
    * Pick up pairing offers and revocations made by another `bridle` invocation.
-   * A running daemon and a `bridle pair` in a second terminal are the normal
-   * case, so the daemon follows the file rather than owning it.
-   *
    * The directory is watched rather than the file: `saveState` writes to a
    * temporary and renames it into place, which replaces the inode a file watch
-   * is pinned to and would stop delivering events after the first save.
+   * is pinned to.
    */
   private watchState(): void {
     const name = basename(statePath())
@@ -387,60 +311,14 @@ export class BridleCore {
     }
   }
 
-  /**
-   * Watch dsh reachability.
-   * @param listener - called on every transition, not on every probe.
-   * @returns a function that detaches the listener.
-   */
-  onDshStatus(listener: (status: DshStatus) => void): () => void {
-    this.statusListeners.add(listener)
-    return (): void => { this.statusListeners.delete(listener) }
-  }
-
-  private onStream(stream: 'mux' | 'host', up: boolean, detail?: string): void {
-    if (!up && stream === 'mux' && this.sweepTimer !== undefined) {
-      // Gone again before dsh could re-send: silence on a dead downlink says
-      // nothing about what is still pending. The next connection starts over.
-      clearTimeout(this.sweepTimer)
-      this.sweepTimer = undefined
-    }
-    if (up && stream === 'mux' && this.waiting.size > 0) {
-      // dsh re-sends what is still pending as soon as a subscriber arrives;
-      // give it a moment, then drop whatever it did not.
-      for (const key of this.waiting.keys()) this.unconfirmed.add(key)
-      if (this.sweepTimer !== undefined) clearTimeout(this.sweepTimer)
-      this.sweepTimer = setTimeout(() => { this.sweepUnconfirmed() }, RESEND_GRACE_MS)
-      this.sweepTimer.unref()
-    }
-    if (up) this.connected.add(stream)
-    else this.connected.delete(stream)
-    // A live downlink is stronger evidence than a periodic probe, so let it
-    // drive the status directly rather than waiting up to five seconds.
-    if (up && !this.status.reachable) void this.probe()
-    else if (!up && this.connected.size === 0) this.publish({ reachable: false, ...(detail === undefined ? {} : { detail }) })
-  }
-
-  private async probe(): Promise<void> {
-    const health: DshHealth = await this.dsh.health()
-    this.publish(
-      health.reachable
-        ? { reachable: true, host: health.host }
-        : { reachable: false, ...(health.detail === undefined ? {} : { detail: health.detail }) },
-    )
-  }
-
   private publish(next: DshStatus): void {
-    if (next.reachable === this.status.reachable && next.detail === this.status.detail) {
-      // Refresh the cached describe value without waking every listener.
-      this.status = next
-      return
-    }
+    if (next.reachable === this.status.reachable && next.detail === this.status.detail && next.version === this.status.version) return
     this.status = next
     for (const listener of this.statusListeners) {
       try {
         listener(next)
       } catch {
-        // Same reasoning as EventLog: one bad listener must not stall the rest.
+        // One bad listener must not stall the rest.
       }
     }
   }
