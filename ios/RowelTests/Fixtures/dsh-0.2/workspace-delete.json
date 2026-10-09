@@ -2,7 +2,7 @@
   "endpoint": "workspace/delete",
   "args": {
     "request": {
-      "workspaceId": "7b82fb06-9c8d-4a70-b9f0-658e70844d67"
+      "workspaceId": "cbac518c-1d37-4ad0-9378-2af5bd5d4bf1"
     }
   },
   "result": {

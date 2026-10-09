@@ -144,6 +144,10 @@ final class PresetAndPluginTests: XCTestCase {
         XCTAssertEqual(sent, [.emptyObject], "no path means the account's home")
         XCTAssertEqual(listing.path, listing.home)
         XCTAssertEqual(listing.crumbs.first?.path, "/")
+        XCTAssertEqual(listing.crumbs.last?.path, listing.path)
+        XCTAssertEqual(listing.entries.map(\.name), [".cache", "checkout-api"])
+        XCTAssertEqual(listing.entries.map(\.hidden), [true, false], "dsh says which are hidden; the sheet filters on it")
+        XCTAssertEqual(listing.entries.last?.path, listing.path + "/checkout-api")
     }
 
     /// Without the browse picker — dsh's default on a Mac — the call fails
@@ -151,7 +155,8 @@ final class PresetAndPluginTests: XCTestCase {
     func testAMachineThatCannotBrowseSaysSoByCode() async throws {
         let recording = try fixture("directory-picker-unavailable")
         let error = CallError(recording.path("result", "error"), fallback: "")
-        XCTAssertEqual(error.code, "directory-picker/unavailable")
+        XCTAssertTrue(DirectoryListing.cannotBrowse(error), "the sheet shows how to switch browsing on, not an error")
+        XCTAssertFalse(DirectoryListing.cannotBrowse(CallError(code: "gateway/internal", message: "no such folder")))
     }
 
     func testSearchParsesAndSaysWhenItIsOff() async throws {

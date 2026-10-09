@@ -7,15 +7,15 @@
       "value": {
         "items": [
           {
-            "workspaceId": "7b82fb06-9c8d-4a70-b9f0-658e70844d67",
+            "workspaceId": "cbac518c-1d37-4ad0-9378-2af5bd5d4bf1",
             "path": "/private/tmp/dsh-home",
             "title": "Fixture workspace",
             "sessionIds": [
-              "session-ffa488ee-2af4-4e98-a866-b59768f4d85b",
-              "session-0344f751-738a-4b75-9a28-11565de7c831"
+              "session-39a2bf66-e62f-4e5f-a619-0564ba548204",
+              "session-8dce473f-5132-4d16-8230-0f128f60a0bf"
             ],
-            "createdAt": "2026-10-09T12:07:53.443Z",
-            "updatedAt": "2026-10-09T12:07:54.859Z"
+            "createdAt": "2026-10-09T13:28:24.098Z",
+            "updatedAt": "2026-10-09T13:28:25.369Z"
           }
         ],
         "archivedSessionIds": [],
@@ -25,7 +25,7 @@
     {
       "type": "archived",
       "archivedSessionIds": [
-        "session-0344f751-738a-4b75-9a28-11565de7c831"
+        "session-8dce473f-5132-4d16-8230-0f128f60a0bf"
       ]
     },
     {

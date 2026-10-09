@@ -108,7 +108,9 @@ port, zone, sample, log = sys.argv[1:5]
 def call(endpoint, args):
     # Signed in and enveloped by Tools/dsh.mjs; arguments on stdin.
     out = subprocess.run(["node", "Tools/dsh.mjs", port, log, endpoint],
-                         input=json.dumps(args), capture_output=True, text=True, check=True)
+                         input=json.dumps(args), capture_output=True, text=True)
+    if out.returncode != 0:
+        raise SystemExit(out.stderr.strip() or f"{endpoint} failed")
     return json.loads(out.stdout)
 
 # Retire any earlier take, so the list shows one of these and not four.
@@ -118,7 +120,11 @@ for session in call("session/list", {"_request": {}})["result"]["value"]["items"
 
 # Read-only for this conversation alone — `/permission`, which leaves the
 # machine's default where it was.
-session = call("session/create", {"request": {"cwd": sample}})["result"]["value"]["sessionId"]
+# In the sample's workspace, like every conversation the screenshots seeded,
+# so the Mac's sidebar and the app file it in the same place. Asking for the
+# workspace of a folder that already has one answers with that one.
+workspace = call("workspace/create", {"request": {"path": sample}})["result"]["value"]["workspace"]["workspaceId"]
+session = call("session/create", {"request": {"workspaceId": workspace}})["result"]["value"]["sessionId"]
 call("commands/execute", {"agentId": session, "line": "/permission read-only", "submittedAttachments": []})
 answer = call("session/prompt", {"request": {
     "requestId": str(uuid.uuid4()), "sessionId": session, "mode": "queue", "clientTimeZone": zone,

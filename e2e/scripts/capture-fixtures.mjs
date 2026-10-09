@@ -53,10 +53,25 @@ function scrub(value) {
   text = text.replace(/\b(?:\d{1,3}\.){3}\d{1,3}\b/gu, (address) => address.startsWith('127.') ? address : '192.0.2.1')
   return JSON.parse(text)
 }
-function save(name, record) {
-  writeFileSync(join(OUT, `${name}.json`), `${JSON.stringify(scrub(record), null, 2)}\n`)
+function save(name, record, tidy = (scrubbed) => scrubbed) {
+  writeFileSync(join(OUT, `${name}.json`), `${JSON.stringify(tidy(scrub(record)), null, 2)}\n`)
   process.stdout.write(`  ${name}\n`)
 }
+/**
+ * A folder listing's breadcrumbs name each folder on the way down, and the
+ * names of the temporary ones are this machine's: once their paths are
+ * scrubbed, the crumbs are rebuilt from what the paths say.
+ */
+function tidyCrumbs(record) {
+  const value = record.result?.value
+  if (value?.crumbs === undefined) return record
+  const seen = new Set()
+  value.crumbs = value.crumbs
+    .filter(crumb => !seen.has(crumb.path) && seen.add(crumb.path))
+    .map(crumb => ({ ...crumb, name: crumb.path === '/' ? '/' : crumb.path.split('/').filter(Boolean).at(-1) }))
+  return record
+}
+
 async function call(name, endpoint, args) {
   const result = await phone.call(endpoint, args)
   save(name, { endpoint, args, result })
@@ -185,8 +200,10 @@ const patchedStack = await startStack({ dshUrl: patched.url, dshToken: patched.t
 const patchedPhone = new RowelPhone({ bundle: patchedStack.invite().bundle, prefer: 'direct' })
 await patchedPhone.connect()
 try {
+  // Something to list: one folder a person would pick, one dsh marks hidden.
+  for (const name of ['checkout-api', '.cache']) mkdirSync(join(patched.home, 'user', name), { recursive: true })
   const listed = await patchedPhone.call('directoryPicker/list', {})
-  save('directory-picker-list', { endpoint: 'directoryPicker/list', args: {}, result: listed })
+  save('directory-picker-list', { endpoint: 'directoryPicker/list', args: {}, result: listed }, tidyCrumbs)
   const made = await patchedPhone.call('session/create', { request: { cwd: patched.home } })
   await patchedPhone.call('session/prompt', {
     request: { requestId: randomUUID(), sessionId: made.value.sessionId, mode: 'queue', content: [{ type: 'text', text: 'Where is the zebra crossing?' }], clientTimeZone: 'UTC' },

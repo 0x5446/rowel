@@ -8,12 +8,12 @@
     "value": {
       "items": [
         {
-          "sessionId": "session-ffa488ee-2af4-4e98-a866-b59768f4d85b",
-          "updatedAt": 1791547674833,
+          "sessionId": "session-39a2bf66-e62f-4e5f-a619-0564ba548204",
+          "updatedAt": 1791552505350,
           "agentAvailable": true,
           "running": false,
           "blank": false,
-          "parentSessionId": "session-0344f751-738a-4b75-9a28-11565de7c831",
+          "parentSessionId": "session-8dce473f-5132-4d16-8230-0f128f60a0bf",
           "cwd": "/private/tmp/dsh-home",
           "projections": {
             "kind": "sequenced",
@@ -89,7 +89,7 @@
               },
               "sessionListMetadata": {
                 "blank": false,
-                "lastPromptAt": 1791547673750
+                "lastPromptAt": 1791552504277
               },
               "imageLimits": {
                 "maxImageBytes": 20971520,
@@ -108,8 +108,8 @@
           }
         },
         {
-          "sessionId": "session-0344f751-738a-4b75-9a28-11565de7c831",
-          "updatedAt": 1791547673750,
+          "sessionId": "session-8dce473f-5132-4d16-8230-0f128f60a0bf",
+          "updatedAt": 1791552504277,
           "agentAvailable": true,
           "running": false,
           "blank": false,
@@ -188,7 +188,7 @@
               },
               "sessionListMetadata": {
                 "blank": false,
-                "lastPromptAt": 1791547673750
+                "lastPromptAt": 1791552504277
               },
               "imageLimits": {
                 "maxImageBytes": 20971520,

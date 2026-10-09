@@ -83,6 +83,9 @@ export async function startDsh(options: { model?: boolean; timeoutMs?: number; p
   const routes = options.model === true && settings !== undefined && settings.length > 0
     ? modelRows(readFileSync(settings, 'utf8'))
     : ''
+  if (options.model === true && settings !== undefined && settings.length > 0 && routes.length === 0) {
+    throw new Error(`${settings} has no llm-pi-ai or agent-default-model section to take model routes from`)
+  }
   const patch = [options.profilePatch ?? '', routes].filter(part => part.length > 0).join('\n')
   if (patch.length > 0) {
     mkdirSync(join(home, 'profiles', 'web'), { recursive: true })
@@ -94,7 +97,9 @@ export async function startDsh(options: { model?: boolean; timeoutMs?: number; p
     if (value !== undefined) bare[name] = value
   }
   const child = spawn(bin, ['web', '--host', '127.0.0.1', '--port', String(port), '--no-open'], {
-    env: options.model === true ? { ...process.env, DSH_HOME: home } : bare,
+    // With a model, the environment's credentials come along — never the
+    // developer's home, which would put their skills in every prompt.
+    env: options.model === true ? { ...process.env, DSH_HOME: home, HOME: userHome } : bare,
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   let output = ''
@@ -132,12 +137,14 @@ export async function startDsh(options: { model?: boolean; timeoutMs?: number; p
  * @returns rows to append to a profile patch, or an empty string.
  */
 export function modelRows(text: string): string {
+  const lines = text.replace(/\r\n?/gu, '\n').split('\n').map(line => line.trimEnd())
   const section = (name: string, indent: string): string | undefined => {
-    const lines = text.split('\n')
     const start = lines.indexOf(`${name}:`)
     if (start < 0) return undefined
     const body: string[] = []
     for (const line of lines.slice(start + 1)) {
+      // A comment at the margin is not the next section; it is dropped.
+      if (line.startsWith('#')) continue
       if (line.length > 0 && !line.startsWith(' ')) break
       body.push(line.length > 0 ? indent + line : line)
     }

@@ -1,14 +1,14 @@
 {
   "endpoint": "commands/execute",
   "args": {
-    "agentId": "session-0344f751-738a-4b75-9a28-11565de7c831",
+    "agentId": "session-8dce473f-5132-4d16-8230-0f128f60a0bf",
     "line": "/permission read-only",
     "submittedAttachments": []
   },
   "result": {
     "ok": true,
     "value": {
-      "commandId": "cmd-0f1dbf1b-1",
+      "commandId": "cmd-60473e47-1",
       "result": {
         "kind": "success",
         "text": "preset read-only"

@@ -2,13 +2,13 @@
   "endpoint": "session/fork",
   "args": {
     "request": {
-      "sessionId": "session-0344f751-738a-4b75-9a28-11565de7c831"
+      "sessionId": "session-8dce473f-5132-4d16-8230-0f128f60a0bf"
     }
   },
   "result": {
     "ok": true,
     "value": {
-      "sessionId": "session-ffa488ee-2af4-4e98-a866-b59768f4d85b"
+      "sessionId": "session-39a2bf66-e62f-4e5f-a619-0564ba548204"
     }
   }
 }

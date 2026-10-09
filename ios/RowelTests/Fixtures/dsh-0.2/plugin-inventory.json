@@ -1822,7 +1822,7 @@
           }
         },
         {
-          "entryId": "303f48e3",
+          "entryId": "66b982e5",
           "moduleName": "@deepseek-ai/dsh-host-directory-picker-native",
           "enabled": true,
           "fiberPhase": "active",
@@ -1832,7 +1832,7 @@
           }
         },
         {
-          "entryId": "dc50c01d",
+          "entryId": "6f4be102",
           "moduleName": "@deepseek-ai/dsh-client-ui-directory-picker-native",
           "enabled": true,
           "fiberPhase": "active",
