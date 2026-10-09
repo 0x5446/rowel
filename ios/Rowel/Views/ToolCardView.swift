@@ -1,8 +1,9 @@
-/// Tool calls, drawn the way the machine asked for.
+/// Tool calls, drawn by kind.
 ///
-/// The harness computes a render intent per tool — terminal, diff, search, read,
-/// or generic — so the app never has to know what any particular tool does. That
-/// is what keeps a plugin someone wrote last week rendering correctly here.
+/// `Conversation.callPresentation` picks the kind — terminal, diff, search, read,
+/// or generic — from the tool's name and arguments, since dsh 0.2 attaches no
+/// rendering hints. A tool it does not know, such as one a plugin added last
+/// week, still gets the generic card with its most telling argument.
 ///
 /// Every card is collapsed by default. A transcript where each tool call takes
 /// half a screen is unreadable on a phone; the headline is what matters, and the

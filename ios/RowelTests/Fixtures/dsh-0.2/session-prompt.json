@@ -1,0 +1,29 @@
+{
+  "endpoint": "session/prompt",
+  "args": {
+    "request": {
+      "requestId": "74168f6f-ee57-40b8-8a79-b947a548780d",
+      "sessionId": "session-a43fd407-8430-445a-892e-adea8dfcbea1",
+      "mode": "queue",
+      "content": [
+        {
+          "type": "text",
+          "text": "Hello from the fixture"
+        },
+        {
+          "type": "image",
+          "mediaType": "image/png",
+          "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+          "name": "dot.png"
+        }
+      ],
+      "clientTimeZone": "UTC"
+    }
+  },
+  "result": {
+    "ok": true,
+    "value": {
+      "accepted": true
+    }
+  }
+}

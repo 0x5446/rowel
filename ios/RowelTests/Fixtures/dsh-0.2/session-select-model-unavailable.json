@@ -1,0 +1,21 @@
+{
+  "endpoint": "session/selectModel",
+  "args": {
+    "request": {
+      "sessionId": "session-a43fd407-8430-445a-892e-adea8dfcbea1",
+      "provider": "nobody",
+      "model": "nothing"
+    }
+  },
+  "result": {
+    "ok": false,
+    "error": {
+      "code": "session/model-unavailable",
+      "message": "Select an available model before sending a message.",
+      "details": {
+        "provider": "nobody",
+        "model": "nothing"
+      }
+    }
+  }
+}

@@ -42,9 +42,8 @@ import QuartzCore
 /// Answers every harness call with an empty object. The reads the view fires
 /// on open (history, models, skills, subagents) all tolerate that shape; the
 /// transcript under test is preloaded directly into the `Conversation`.
-private actor SilentTransport: HarnessTransport {
+private actor SilentTransport: CallOnlyTransport {
     func call(_ method: String, _ payload: JSONValue) async throws -> JSONValue { .emptyObject }
-    func respond(rpcId: String, value: JSONValue) async throws -> JSONValue { .emptyObject }
 }
 
 // MARK: - Responsiveness probe
@@ -429,11 +428,11 @@ final class MainThreadStarvationTests: XCTestCase {
         // The stream. A fixed schedule with catch-up: a driver tick injects
         // every delta that is past due, so a stalled main thread delays
         // deltas but never drops them — both conditions always inject all 175.
-        var plan: [(offset: Double, signal: TunnelSignal)] = []
+        var plan: [(offset: Double, item: JSONValue)] = []
         for k in 0..<(reasoningDeltas + textDeltas) {
             let kind = k < reasoningDeltas ? "reasoning-delta" : "text-delta"
             let text = k < reasoningDeltas ? Corpus.reasoningDelta(k) : textDelta(k - reasoningDeltas)
-            plan.append((Double(k) / deltaHz, chunkSignal(seq: seq, kind: kind, text: text)))
+            plan.append((Double(k) / deltaHz, chunkItem(kind: kind, text: text)))
             seq += 1
         }
 
@@ -447,7 +446,7 @@ final class MainThreadStarvationTests: XCTestCase {
                 let elapsed = CACurrentMediaTime() - started
                 while next < plan.count, plan[next].offset <= elapsed {
                     maxLagMs = max(maxLagMs, (elapsed - plan[next].offset) * 1000)
-                    session.receiveForTesting(plan[next].signal)
+                    session.receiveForTesting(follow: plan[next].item, sessionId: self.sessionId)
                     next += 1
                 }
             }
@@ -564,7 +563,7 @@ final class MainThreadStarvationTests: XCTestCase {
                 "seq": .number(Double(seq)),
                 "time": .number(1_700_000_000_000 + Double(seq)),
                 "data": data,
-            ]), view: nil)
+            ]))
             seq += 1
         }
 
@@ -596,61 +595,27 @@ final class MainThreadStarvationTests: XCTestCase {
                 : "step \(block) ok\n" + Corpus.prose(20, seed: block + 500)
             apply("tool/result", .object([
                 "message": .object([
-                    "source": .object(["callId": .string(callId)]),
+                    "source": .object(["kind": .string("tool"), "callId": .string(callId)]),
+                    "toolCallId": .string(callId),
                     "content": .array([
-                        .object([
-                            "toolCallId": .string(callId),
-                            "content": .array([
-                                .object(["type": .string("text"), "text": .string(output)]),
-                            ]),
-                        ]),
+                .object(["type": .string("text"), "text": .string(output)]),
                     ]),
                 ]),
             ]))
         }
 
         apply("turn/start", .emptyObject)
-        apply("assistant/chunk", .object([
-            "turn": .number(999), "step": .number(0),
-            "chunk": .object([
-                "type": .string("reasoning-delta"),
-                "text": .string(Corpus.initialReasoning(paragraphs: scale.reasoningParagraphs)),
-            ]),
-        ]))
-        apply("assistant/chunk", .object([
-            "turn": .number(999), "step": .number(0),
-            "chunk": .object([
-                "type": .string("text-delta"),
-                "text": .string(Corpus.initialStreamText(copies: scale.textCopies)),
-            ]),
-        ]))
+        conversation.receiveStream(streamStart(turn: 999, step: 0))
+        conversation.receiveStream(streamChunk(kind: "reasoning-delta", Corpus.initialReasoning(paragraphs: scale.reasoningParagraphs)))
+        conversation.receiveStream(streamChunk(Corpus.initialStreamText(copies: scale.textCopies)))
         if scale.openFenceBytes > 0 {
-            apply("assistant/chunk", .object([
-                "turn": .number(999), "step": .number(0),
-                "chunk": .object([
-                    "type": .string("text-delta"),
-                    "text": .string(Corpus.openCodeBlock(bytes: scale.openFenceBytes)),
-                ]),
-            ]))
+            conversation.receiveStream(streamChunk(Corpus.openCodeBlock(bytes: scale.openFenceBytes)))
         }
     }
 
-    /// One streamed delta, wrapped the way the tunnel pump would hand it over.
-    private func chunkSignal(seq: Int, kind: String, text: String) -> TunnelSignal {
-        .event(EventFrame(seq: seq, stream: .mux, frame: .object([
-            "type": .string("session/event"),
-            "sessionId": .string(sessionId),
-            "event": .object([
-                "type": .string("assistant/chunk"),
-                "seq": .number(Double(seq)),
-                "time": .number(1_700_000_000_000 + Double(seq)),
-                "data": .object([
-                    "turn": .number(999),
-                    "step": .number(0),
-                    "chunk": .object(["type": .string(kind), "text": .string(text)]),
-                ]),
-            ]),
-        ])))
+    /// One streamed delta, as its conversation's `session/follow` delivers it.
+    private func chunkItem(kind: String, text: String) -> JSONValue {
+        streamItem(streamChunk(kind: kind, text))
     }
 
     // MARK: Plumbing

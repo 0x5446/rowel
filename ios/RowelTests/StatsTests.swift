@@ -348,12 +348,12 @@ final class CommandOutcomeTests: XCTestCase {
             "commandId": .string("cmd-1"),
             "name": .string("permission"),
             "args": .string(" read-only"),
-        ])), view: nil)
+        ])))
         c.apply(event: event(2, "command/done", .object([
             "commandId": .string("cmd-1"),
             "kind": .string("success"),
             "text": .string("preset read-only"),
-        ])), view: nil)
+        ])))
 
         // The done event carries an id and an outcome, never the words: without
         // the pairing the transcript says "preset read-only" and nothing about
@@ -368,12 +368,12 @@ final class CommandOutcomeTests: XCTestCase {
             "commandId": .string("cmd-2"),
             "name": .string("permission"),
             "args": .string(" nonsense"),
-        ])), view: nil)
+        ])))
         c.apply(event: event(2, "command/done", .object([
             "commandId": .string("cmd-2"),
             "kind": .string("error"),
             "text": .string("unknown preset \"nonsense\" (available: read-only, workspace-write)"),
-        ])), view: nil)
+        ])))
 
         XCTAssertEqual(notices(c).first?.kind, .failure)
         XCTAssertEqual(
@@ -390,7 +390,7 @@ final class CommandOutcomeTests: XCTestCase {
             "commandId": .string("cmd-3"),
             "kind": .string("success"),
             "text": .string("preset read-only"),
-        ])), view: nil)
+        ])))
 
         XCTAssertEqual(notices(c).map(\.text), ["preset read-only"])
     }

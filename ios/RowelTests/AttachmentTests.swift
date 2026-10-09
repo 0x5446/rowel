@@ -14,9 +14,9 @@ import UIKit
 #endif
 @testable import Rowel
 
-/// A transport that answers `session.attachment`, counts the asking, and can
+/// A transport that answers `session/attachment`, counts the asking, and can
 /// be made slow enough that concurrent callers actually overlap.
-private actor CountingTransport: HarnessTransport {
+private actor CountingTransport: CallOnlyTransport {
     private(set) var calls = 0
     private(set) var peak = 0
     private var active = 0
@@ -33,23 +33,19 @@ private actor CountingTransport: HarnessTransport {
         peak = max(peak, active)
         defer { active -= 1 }
         if delay != .zero { try? await Task.sleep(for: delay) }
-        guard method == "session.attachment" else {
+        guard method == "session/attachment" else {
             throw CallError(code: "not-found", message: "no script for \(method)", details: .null)
         }
         calls += 1
         return .object([
             "attachment": .object([
-                "attachmentId": payload["attachmentId"] ?? .null,
+                "attachmentId": payload.path("request", "attachmentId") ?? .null,
                 "mediaType": .string("image/png"),
                 "bytes": .number(66594),
                 "name": .string("uber_cover.jpg"),
             ]),
             "data": .string(data),
         ])
-    }
-
-    func respond(rpcId: String, value: JSONValue) async throws -> JSONValue {
-        .emptyObject
     }
 }
 
@@ -137,7 +133,7 @@ final class AttachmentTests: XCTestCase {
                     ]),
                 ]),
             ]),
-        ]), view: nil)
+        ]))
 
         guard case .user(let turn)? = conversation.items.last else {
             return XCTFail("the message did not land as a user turn")

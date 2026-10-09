@@ -166,7 +166,7 @@ public struct SessionSummary: Identifiable, Equatable, Sendable {
         return "Untitled"
     }
 
-    /// Parse one `session.list` row.
+    /// Parse one `session/list` row, or the summary in `api-session/added`.
     public init?(_ value: JSONValue) {
         guard let id = value["sessionId"]?.stringValue else { return nil }
         self.id = id
@@ -174,7 +174,7 @@ public struct SessionSummary: Identifiable, Equatable, Sendable {
         running = value["running"]?.boolValue ?? false
         blank = value["blank"]?.boolValue ?? false
         cwd = value["cwd"]?.stringValue
-        agentPreset = value["agentPreset"]?.stringValue
+        agentPreset = value["agentPreset"]?.stringValue ?? value.path("projections", "values", "agentPreset")?.stringValue
         parentSessionId = value["parentSessionId"]?.stringValue
         isSubagent = value["origin"]?.stringValue == "subagent"
         title = value.path("projections", "values", "title")?.stringValue
@@ -217,7 +217,8 @@ public struct Workspace: Identifiable, Equatable, Sendable {
         return "Workspace"
     }
 
-    /// Parse one `workspace.list` row.
+    /// Parse one workspace, as `workspace/follow` and the workspace writes
+    /// spell it.
     public init?(_ value: JSONValue) {
         guard let id = value["workspaceId"]?.stringValue else { return nil }
         self.id = id
@@ -268,8 +269,7 @@ public enum WorkspacePlacement: Equatable, Sendable {
     /// No workspace stands for this folder, so the conversation will sit on its
     /// own until someone makes one.
     case ungrouped
-    /// The machine has not said whether it groups at all — an older dsh with no
-    /// `workspace.list`, or one that has not answered yet. Nothing may be
+    /// The machine has not described its workspaces yet. Nothing may be
     /// claimed either way, so the screens say nothing.
     case unknown
 
@@ -277,8 +277,8 @@ public enum WorkspacePlacement: Equatable, Sendable {
     ///   - path: the folder in question, or nil for "wherever the Mac defaults
     ///     to", which cannot be resolved from here.
     ///   - workspaces: the machine's groups as last read.
-    ///   - grouping: whether `workspace.list` has ever succeeded on this
-    ///     machine. False means unknown rather than empty — see the enum.
+    ///   - grouping: whether the machine has described its workspaces. False
+    ///     means unknown rather than empty — see the enum.
     public static func resolve(path: String?, workspaces: [Workspace], grouping: Bool) -> WorkspacePlacement {
         guard grouping else { return .unknown }
         guard let path, !path.isEmpty else { return .unknown }
@@ -435,8 +435,8 @@ public struct SessionBoard: Equatable {
         for workspace in workspaces {
             var members: [SessionSummary] = []
             for id in workspace.sessionIds {
-                // A workspace can name a session that `session.list` does not
-                // return — archived, deleted, or a subagent the list hides — and
+                // A workspace can name a session the list does not hold —
+                // archived, deleted, or a subagent the list leaves out — and
                 // the only honest thing to do with a name that resolves to
                 // nothing is skip it. First claim wins if two workspaces name
                 // the same session, so no conversation appears twice.
@@ -551,8 +551,8 @@ public struct AssistantTurn: Identifiable, Equatable {
     public var at: Date
 }
 
-/// How a tool call wants to be drawn. Mirrors the harness's render intent, which
-/// the machine computes so the app never has to know what a given tool does.
+/// How a tool call is drawn, chosen from the tool's name and arguments
+/// (`Conversation.callPresentation`).
 public enum ToolPresentation: Equatable {
     case generic(title: String, kind: String?, detail: String?)
     case terminal(command: String, cwd: String?, output: String?, exitCode: Int?)
@@ -560,8 +560,8 @@ public enum ToolPresentation: Equatable {
     case search(title: String, lines: [String], truncated: Bool, total: Int)
     case read(path: String, lines: [NumberedLine], totalLines: Int)
     /// `ask_user_question`: what was asked and, once the person answered, what
-    /// they picked — keyed by question id. dsh gives this tool no render intent,
-    /// so without this the transcript showed the answer as raw JSON.
+    /// they picked — keyed by question id. Without this the transcript showed
+    /// the answer as raw JSON.
     case question(items: [QuestionItem], answers: [String: QuestionAnswer]?)
 }
 
@@ -632,9 +632,13 @@ public struct Notice: Identifiable, Equatable {
 
 /// A tool waiting for the person to allow or refuse it.
 public struct ApprovalRequest: Identifiable, Equatable {
-    /// The harness rpcId, echoed back with the answer.
+    /// dsh's `eventId` for this request, which an answer names.
     public var id: String
+    /// The `$events` client that delivered it, which an answer must be sent as.
+    public var clientId: String
     public var sessionId: String
+    /// The tool call it is for, when dsh says (`callId`); matches the
+    /// `tool/call` in the transcript.
     public var approvalId: String
     public var toolName: String
     public var reason: String?
@@ -643,7 +647,10 @@ public struct ApprovalRequest: Identifiable, Equatable {
 
 /// A question the agent asked, with its options.
 public struct QuestionRequest: Identifiable, Equatable {
+    /// dsh's `eventId` for this request, which an answer names.
     public var id: String
+    /// The `$events` client that delivered it, which an answer must be sent as.
+    public var clientId: String
     public var sessionId: String
     public var items: [QuestionItem]
     public var at: Date
@@ -667,7 +674,7 @@ public struct QuestionItem: Identifiable, Equatable {
 }
 
 extension QuestionItem {
-    /// One question as dsh writes it — in a live `question/requested` and in
+    /// One question as dsh writes it — in a live `user-questions/request` and in
     /// the `ask_user_question` call that produced it, which share a shape.
     public init?(json item: JSONValue) {
         guard let id = item["id"]?.stringValue, let question = item["question"]?.stringValue else { return nil }
@@ -787,13 +794,15 @@ public struct MachineDescription: Equatable {
     public var model: String?
     public var attachedSessions: Int
 
-    public init?(_ value: JSONValue?) {
-        guard let value, let version = value["version"]?.stringValue else { return nil }
+    /// What the Bridle says about the machine on every `ready`: dsh's version
+    /// and the account's home. dsh 0.2 has no `host.describe` to ask.
+    public init?(ready: ReadyFrame) {
+        guard let version = ready.dsh else { return nil }
         self.version = version
-        cwd = value["cwd"]?.stringValue ?? "~"
-        provider = value["provider"]?.stringValue
-        model = value["model"]?.stringValue
-        attachedSessions = value["attachedSessions"]?.intValue ?? 0
+        cwd = ready.home ?? "~"
+        provider = nil
+        model = nil
+        attachedSessions = 0
     }
 }
 
@@ -901,8 +910,18 @@ public struct PermissionChoice: Equatable, Sendable {
 
     public init?(_ value: JSONValue?) {
         guard let value, let current = value["currentValue"]?.stringValue else { return nil }
+        self.init(current: current, options: PermissionChoice.options(value["options"]))
+    }
+
+    public init(current: String, options: [Option]) {
         self.current = current
-        options = (value["options"]?.arrayValue ?? []).compactMap { entry in
+        self.options = options
+    }
+
+    /// A list of `{value, name}` presets, as the catalog and the projection
+    /// spell them.
+    static func options(_ value: JSONValue?) -> [Option] {
+        (value?.arrayValue ?? []).compactMap { entry in
             guard let raw = entry["value"]?.stringValue else { return nil }
             return Option(value: raw, name: entry["name"]?.stringValue ?? raw)
         }
@@ -946,9 +965,8 @@ public struct PermissionChoice: Equatable, Sendable {
 
 /// One child the agent spawned to do something on its own.
 ///
-/// A subagent is a real session with its own log, which is why opening one
-/// needs nothing new — `session.history` serves it like any other. What it does
-/// *not* have is a row in `session.list`, which hides subagents on purpose. So
+/// A subagent is a real session with its own log. What it does *not* have is a
+/// row in the conversation list, which leaves subagents out on purpose. So
 /// without this the work is invisible: the parent shows a tool call that sits
 /// there for four minutes and no way to see what is happening inside it.
 public struct SubagentChild: Identifiable, Equatable, Sendable {
@@ -994,10 +1012,27 @@ public struct SubagentChild: Identifiable, Equatable, Sendable {
         running = value["activity"]?.stringValue == "running"
         hasChildren = value["hasChildren"]?.boolValue ?? false
 
-        guard let timing else {
-            elapsed = nil
-            return
-        }
+        elapsed = SubagentChild.elapsed(timing)
+    }
+
+    /// - Parameters:
+    ///   - catalog: one entry of the parent's `subagentCatalog` projection,
+    ///     `{id, mode, label?, createdAt}` — how dsh 0.2 lists children.
+    ///   - running: whether the child's session is running, from the list.
+    ///   - hasChildren: whether any session names this child as its parent.
+    public init?(catalog: JSONValue, running: Bool, hasChildren: Bool, timing: JSONValue? = nil) {
+        guard let id = catalog["id"]?.stringValue,
+              let mode = Mode(rawValue: catalog["mode"]?.stringValue ?? "") else { return nil }
+        self.id = id
+        self.mode = mode
+        label = catalog["label"]?.stringValue
+        self.running = running
+        self.hasChildren = hasChildren
+        elapsed = SubagentChild.elapsed(timing)
+    }
+
+    private static func elapsed(_ timing: JSONValue?) -> TimeInterval? {
+        guard let timing else { return nil }
         let settled = (timing["settledMs"]?.doubleValue ?? 0) / 1000
         // An open turn contributes the span folded into this cut so far, which
         // is why a running child's number keeps growing between refreshes.
@@ -1005,6 +1040,6 @@ public struct SubagentChild: Identifiable, Equatable, Sendable {
             .flatMap { through in
                 timing.path("active", "since")?.doubleValue.map { (through - $0) / 1000 }
             } ?? 0
-        elapsed = settled + open > 0 ? settled + open : nil
+        return settled + open > 0 ? settled + open : nil
     }
 }

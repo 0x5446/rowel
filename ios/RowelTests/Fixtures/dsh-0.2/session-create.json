@@ -1,0 +1,15 @@
+{
+  "endpoint": "session/create",
+  "args": {
+    "request": {
+      "workspaceId": "56ac5d65-05a8-4008-b957-f8027d2645b1"
+    }
+  },
+  "result": {
+    "ok": true,
+    "value": {
+      "sessionId": "session-a43fd407-8430-445a-892e-adea8dfcbea1",
+      "agentPreset": "standard"
+    }
+  }
+}

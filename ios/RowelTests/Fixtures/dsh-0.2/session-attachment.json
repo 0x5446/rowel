@@ -1,0 +1,23 @@
+{
+  "endpoint": "session/attachment",
+  "args": {
+    "request": {
+      "sessionId": "session-a43fd407-8430-445a-892e-adea8dfcbea1",
+      "attachmentId": "sha256:6b7fa434f92a8b80aab02d9bf1a12e49ffcae424e4013a1c4f68b67e3d2bbcd0"
+    }
+  },
+  "result": {
+    "ok": true,
+    "value": {
+      "attachment": {
+        "attachmentId": "sha256:6b7fa434f92a8b80aab02d9bf1a12e49ffcae424e4013a1c4f68b67e3d2bbcd0",
+        "mediaType": "image/png",
+        "width": 1,
+        "height": 1,
+        "bytes": 70,
+        "name": "dot.png"
+      },
+      "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    }
+  }
+}

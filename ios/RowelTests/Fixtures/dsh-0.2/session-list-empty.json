@@ -1,0 +1,12 @@
+{
+  "endpoint": "session/list",
+  "args": {
+    "_request": {}
+  },
+  "result": {
+    "ok": true,
+    "value": {
+      "items": []
+    }
+  }
+}

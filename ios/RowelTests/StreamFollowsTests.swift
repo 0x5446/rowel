@@ -26,9 +26,8 @@ import UIKit
 
 /// Answers every harness call with an empty object, so the reads the view fires
 /// on open come back immediately and the transcript is the only content.
-private actor QuietTransport: HarnessTransport {
+private actor QuietTransport: CallOnlyTransport {
     func call(_ method: String, _ payload: JSONValue) async throws -> JSONValue { .emptyObject }
-    func respond(rpcId: String, value: JSONValue) async throws -> JSONValue { .emptyObject }
 }
 
 // MARK: - The experiment
@@ -124,7 +123,7 @@ final class StreamFollowsTests: XCTestCase {
                 "seq": .number(Double(seq)),
                 "time": .number(1_700_000_000_000 + Double(seq)),
                 "data": data,
-            ]), view: nil)
+            ]))
             seq += 1
         }
         for turn in 0..<24 {
@@ -148,27 +147,14 @@ final class StreamFollowsTests: XCTestCase {
             ]))
         }
         apply("turn/start", .emptyObject)
-        apply("assistant/chunk", .object([
-            "turn": .number(99), "step": .number(0),
-            "chunk": .object(["type": .string("text-delta"), "text": .string("The answer is arriving")]),
-        ]))
+        conversation.receiveStream(streamStart(turn: 99, step: 0))
+        conversation.receiveStream(streamChunk("The answer is arriving"))
     }
 
     /// Grow the open bubble the way the tunnel does, a few deltas at a time.
     private func stream(into conversation: Conversation, deltas: Int) {
         for index in 0..<deltas {
-            conversation.apply(event: .object([
-                "type": .string("assistant/chunk"),
-                "seq": .number(Double(1_000 + index)),
-                "time": .number(1_700_000_100_000 + Double(index)),
-                "data": .object([
-                    "turn": .number(99), "step": .number(0),
-                    "chunk": .object([
-                        "type": .string("text-delta"),
-                        "text": .string(" and one more line of the answer, number \(index)."),
-                    ]),
-                ]),
-            ]), view: nil)
+            conversation.receiveStream(streamChunk(" and one more line of the answer, number \(index)."))
             pump(seconds: 0.12)
         }
         // A last moment for the layout and any follow to land.

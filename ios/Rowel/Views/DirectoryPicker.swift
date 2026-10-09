@@ -27,7 +27,7 @@ struct DirectoryPicker: View {
     @State private var loading = true
     @State private var problem: String?
     @State private var showHidden = false
-    /// True while `workspace.create` is in flight, so the button cannot start a
+    /// True while `workspace/create` is in flight, so the button cannot start a
     /// second one and can say it is doing something.
     @State private var claiming = false
     /// Why the folder could not become a workspace. Shown in place of the line
@@ -40,8 +40,7 @@ struct DirectoryPicker: View {
     /// A path typed by hand, for that case.
     @State private var typed = ""
     /// The agent preset the conversation will start as. nil is the machine's
-    /// default, which is also what an older dsh gets — the field is simply
-    /// omitted from `session.create`.
+    /// default — the field is simply omitted from `session/create`.
     @State private var preset: String?
 
     /// Folders a conversation has already been started in, most used first.
@@ -173,10 +172,8 @@ struct DirectoryPicker: View {
 
     /// One line above the start button saying where the conversation will land.
     ///
-    /// Silent on a machine that has not said it groups, which is the whole of
-    /// the fallback: an older dsh with no `workspace.list` gets exactly the
-    /// screen it got before any of this, rather than a claim the app cannot
-    /// back up or an error about a call that was never going to work.
+    /// Silent until the machine's workspace stream has spoken, rather than a
+    /// claim the app cannot back up yet.
     @ViewBuilder
     private func placementNote(_ path: String) -> some View {
         switch session.placement(for: path) {
@@ -248,7 +245,7 @@ struct DirectoryPicker: View {
     ///
     /// An error and a dead end would therefore be the first thing most people
     /// see. Two things still work without the call: the folders this machine
-    /// already has conversations in, which come from `session.list` and need
+    /// already has conversations in, which come from `session/list` and need
     /// nothing, and typing. Both are offered before the fix is mentioned,
     /// because most of the time the folder someone wants is one they have
     /// already used.

@@ -15,11 +15,9 @@ import SwiftUI
 import UIKit
 @testable import Rowel
 
-private actor SilentTransport: HarnessTransport {
+private actor SilentTransport: CallOnlyTransport {
     @discardableResult
     func call(_ method: String, _ payload: JSONValue) async throws -> JSONValue { .emptyObject }
-    @discardableResult
-    func respond(rpcId: String, value: JSONValue) async throws -> JSONValue { .emptyObject }
 }
 
 @MainActor
@@ -220,7 +218,7 @@ final class OpenAtBottomTests: XCTestCase {
                 "seq": .number(Double(seq)),
                 "time": .number(1_700_000_000_000 + Double(seq)),
                 "data": data,
-            ]), view: nil)
+            ]))
             seq += 1
         }
         apply("user/message", .object([

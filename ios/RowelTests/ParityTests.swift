@@ -57,9 +57,9 @@ final class ParityTests: XCTestCase {
     /// no offer to redeem" and would otherwise try to redeem a null one.
     func testHandshakeRequestOmitsAbsentToken() throws {
         let without = try HandshakeRequest(name: "a", client: "b", token: nil).encoded()
-        XCTAssertEqual(String(data: without, encoding: .utf8), #"{"versions":[1],"name":"a","client":"b"}"#)
+        XCTAssertEqual(String(data: without, encoding: .utf8), #"{"versions":[2],"name":"a","client":"b"}"#)
         let with = try HandshakeRequest(name: "a", client: "b", token: "t").encoded()
-        XCTAssertEqual(String(data: with, encoding: .utf8), #"{"versions":[1],"name":"a","client":"b","token":"t"}"#)
+        XCTAssertEqual(String(data: with, encoding: .utf8), #"{"versions":[2],"name":"a","client":"b","token":"t"}"#)
     }
 
     /// The prologue must carry no version.
@@ -226,14 +226,26 @@ final class ParityTests: XCTestCase {
             }
             let encoded: Data
             switch frame["t"]?.stringValue {
-            case "req":
-                encoded = try RequestFrame(
+            case "call":
+                encoded = try CallFrame(
                     id: frame["id"]?.stringValue ?? "",
-                    method: frame["method"]?.stringValue ?? "",
-                    payload: frame["payload"] ?? .emptyObject
+                    endpoint: frame["endpoint"]?.stringValue ?? "",
+                    args: frame["args"] ?? .emptyObject
                 ).encoded()
-            case "resume":
-                encoded = try ResumeFrame(since: frame["since"]?.intValue ?? 0).encoded()
+            case "abort":
+                encoded = try AbortFrame(id: frame["id"]?.stringValue ?? "").encoded()
+            case "open":
+                encoded = try OpenFrame(
+                    sid: frame["sid"]?.stringValue ?? "",
+                    endpoint: frame["endpoint"]?.stringValue ?? "",
+                    args: frame["args"] ?? .emptyObject
+                ).encoded()
+            case "item":
+                encoded = try UplinkItemFrame(sid: frame["sid"]?.stringValue ?? "", value: frame["value"] ?? .null).encoded()
+            case "end":
+                encoded = try UplinkEndFrame(sid: frame["sid"]?.stringValue ?? "").encoded()
+            case "cancel":
+                encoded = try CancelFrame(sid: frame["sid"]?.stringValue ?? "").encoded()
             case "wake":
                 encoded = try WakeFrame(token: frame["token"]?.stringValue).encoded()
             default:

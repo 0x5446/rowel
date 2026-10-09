@@ -163,8 +163,8 @@ struct SessionListView: View {
                     // structure the person just chose to ignore.
                     //
                     // Flat, too, when there is nothing to divide by: one
-                    // workspace, none at all, or a dsh too old to have
-                    // `workspace.list`. That is the same list this screen drew
+                    // workspace, none at all, or a machine whose workspace
+                    // stream has not spoken yet. That is the same list this screen drew
                     // before grouping existed, which is what makes the failure
                     // path unremarkable rather than a special case.
                     if query.isEmpty, arrangement.grouped {

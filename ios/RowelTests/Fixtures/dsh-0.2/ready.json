@@ -1,0 +1,20 @@
+{
+  "ready": {
+    "t": "ready",
+    "version": 2,
+    "bridle": "0.1.0-test",
+    "machine": "Fixture Mac",
+    "dshReachable": true,
+    "dsh": "0.2.0-rc.2",
+    "harness": {
+      "url": "http://127.0.0.1:55481",
+      "home": "/tmp/elsewhere"
+    },
+    "host": {
+      "home": "/Users/someone"
+    },
+    "direct": [
+      "ws://192.0.2.1:55488"
+    ]
+  }
+}

@@ -36,9 +36,8 @@ import UIKit
 import QuartzCore
 @testable import Rowel
 
-private actor QuietTransport: HarnessTransport {
+private actor QuietTransport: CallOnlyTransport {
     func call(_ method: String, _ payload: JSONValue) async throws -> JSONValue { .emptyObject }
-    func respond(rpcId: String, value: JSONValue) async throws -> JSONValue { .emptyObject }
 }
 
 @MainActor
@@ -358,7 +357,7 @@ final class LayoutCostTests: XCTestCase {
                 "seq": .number(Double(seq)),
                 "time": .number(1_700_000_000_000 + Double(seq)),
                 "data": data,
-            ]), view: nil)
+            ]))
             seq += 1
         }
         for block in 0..<blocks {
@@ -384,14 +383,10 @@ final class LayoutCostTests: XCTestCase {
             ]))
             apply("tool/result", .object([
                 "message": .object([
-                    "source": .object(["callId": .string(callId)]),
+                    "source": .object(["kind": .string("tool"), "callId": .string(callId)]),
+                    "toolCallId": .string(callId),
                     "content": .array([
-                        .object([
-                            "toolCallId": .string(callId),
-                            "content": .array([
-                                .object(["type": .string("text"), "text": .string("step \(block) ok\n" + Self.prose(20, seed: block + 500))]),
-                            ]),
-                        ]),
+                .object(["type": .string("text"), "text": .string("step \(block) ok\n" + Self.prose(20, seed: block + 500))]),
                     ]),
                 ]),
             ]))

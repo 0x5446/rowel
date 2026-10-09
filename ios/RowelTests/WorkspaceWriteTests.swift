@@ -8,14 +8,15 @@
 /// goes back where it was, and the person is told in words.
 ///
 /// The transport is stubbed rather than the harness, so the payloads asserted
-/// here are the ones a real Bridle would receive. Their shapes come from dsh's
-/// own request schemas, which is why the assertions name exact keys.
+/// here are the ones a real Bridle would receive. Their shapes are the ones a
+/// real dsh 0.2 accepted (`Fixtures/dsh-0.2`), which is why the assertions name
+/// exact keys.
 
 import XCTest
 @testable import Rowel
 
 /// A transport that answers from a script and refuses on command.
-private actor StubTransport: HarnessTransport {
+private actor StubTransport: CallOnlyTransport {
     private struct Refusal {
         var error: CallError
         /// How many calls to let through before refusing the rest.
@@ -49,10 +50,6 @@ private actor StubTransport: HarnessTransport {
         if let refusal = refusals[method], already >= refusal.after { throw refusal.error }
         return answers[method] ?? .emptyObject
     }
-
-    func respond(rpcId: String, value: JSONValue) async throws -> JSONValue {
-        .emptyObject
-    }
 }
 
 // MARK: - Fixtures
@@ -66,6 +63,23 @@ private func workspaceRow(_ id: String, path: String, title: String, sessions: [
         "createdAt": .string("2026-07-25T09:41:07.000Z"),
         "updatedAt": .string("2026-07-25T09:41:07.000Z"),
     ])
+}
+
+/// A `workspace/follow` baseline.
+private func baseline(_ items: [JSONValue], archived: [String] = []) -> JSONValue {
+    .object([
+        "type": .string("baseline"),
+        "value": .object([
+            "items": .array(items),
+            "archivedSessionIds": .array(archived.map(JSONValue.string)),
+            "pinnedSessionIds": .array([]),
+        ]),
+    ])
+}
+
+/// What a request-wrapped call carries.
+private func request(_ fields: [String: JSONValue]) -> JSONValue {
+    .object(["request": .object(fields)])
 }
 
 private func sessionRow(_ id: String, cwd: String?, updatedAt: Double = 1_700_000_000_000) -> JSONValue {
@@ -121,24 +135,21 @@ final class WorkspaceWriteTests: XCTestCase {
     /// One workspace holding one conversation, plus a stray in a folder no
     /// workspace claims. The smallest shape with something to lose.
     private func loaded() async -> MachineSession {
-        await stub.answer("workspace.list", .object([
-            "items": .array([workspaceRow("w1", path: "/code/one", title: "One", sessions: ["s1"])]),
-            "archivedSessionIds": .array([]),
-        ]))
-        await stub.answer("session.list", .object([
+        await stub.answer("session/list", .object([
             "items": .array([
                 sessionRow("s1", cwd: "/code/one"),
                 sessionRow("stray", cwd: "/code/two", updatedAt: 1_699_999_000_000),
             ]),
         ]))
         let session = machine()
+        session.receiveForTesting(workspaces: baseline([workspaceRow("w1", path: "/code/one", title: "One", sessions: ["s1"])]))
         await session.refreshSessions()
         return session
     }
 
     // MARK: - Reading
 
-    func testListingWorkspacesIsWhatMakesTheMachineCountAsGrouping() async {
+    func testTheWorkspaceBaselineIsWhatMakesTheMachineCountAsGrouping() async {
         let session = await loaded()
         XCTAssertTrue(session.canGroup)
         XCTAssertEqual(session.workspaces.map(\.id), ["w1"])
@@ -146,21 +157,15 @@ final class WorkspaceWriteTests: XCTestCase {
     }
 
     func testTheArchiveSetArrivesWithTheWorkspaces() async {
-        await stub.answer("workspace.list", .object([
-            "items": .array([]),
-            "archivedSessionIds": .array([.string("gone")]),
-        ]))
         let session = machine()
-        await session.refreshWorkspaces()
+        session.receiveForTesting(workspaces: baseline([], archived: ["gone"]))
         XCTAssertEqual(session.archivedSessionIds, ["gone"])
     }
 
-    /// The degradation that has to work. A dsh with no `workspace.list` answers
-    /// HTTP 404, which the Bridle reports as `internal` — indistinguishable from
-    /// a real fault, which is exactly why nothing may be concluded from it.
-    func testAMachineWithoutWorkspacesStillListsItsConversationsAndSaysNothing() async {
-        await stub.fail("workspace.list", message: "dsh answered HTTP 404: not found")
-        await stub.answer("session.list", .object([
+    /// Until the workspace stream has spoken, nothing is known about grouping,
+    /// and the list has to work the same regardless.
+    func testAMachineThatHasNotDescribedItsWorkspacesStillListsItsConversationsAndSaysNothing() async {
+        await stub.answer("session/list", .object([
             "items": .array([sessionRow("s1", cwd: "/code/one")]),
         ]))
         let session = machine()
@@ -174,31 +179,50 @@ final class WorkspaceWriteTests: XCTestCase {
         XCTAssertEqual(session.filing(for: session.sessions[0]), .settled)
     }
 
-    /// A dropped call must not flatten a machine that does group. The last known
-    /// list stands.
-    func testALaterFailureKeepsWhatWasAlreadyKnown() async {
+    /// After the baseline, the stream sends changes; each one applies without
+    /// a refetch.
+    func testTheStreamsChangesApply() async {
         let session = await loaded()
-        await stub.fail("workspace.list", code: "disconnected", message: "The connection dropped.")
-        await session.refreshWorkspaces()
+        session.receiveForTesting(workspaces: .object([
+            "type": .string("upsert"),
+            "workspace": workspaceRow("w2", path: "/code/two", title: "Two", sessions: ["stray"]),
+        ]))
+        session.receiveForTesting(workspaces: .object(["type": .string("remove"), "workspaceId": .string("w1")]))
+        session.receiveForTesting(workspaces: .object(["type": .string("archived"), "archivedSessionIds": .array([.string("s1")])]))
 
-        XCTAssertEqual(session.workspaces.map(\.id), ["w1"])
+        XCTAssertEqual(session.workspaces.map(\.id), ["w2"])
+        XCTAssertEqual(session.archivedSessionIds, ["s1"])
         XCTAssertTrue(session.canGroup)
+    }
+
+    /// The baseline a real dsh 0.2 sent, and the archive and unarchive after it.
+    func testARecordedWorkspaceStreamApplies() async throws {
+        let session = machine()
+        let recording = try fixture("workspace-follow")
+        let items = recording["items"]?.arrayValue ?? []
+        session.receiveForTesting(workspaces: items[0])
+        XCTAssertEqual(session.workspaces.map(\.displayTitle), ["Fixture workspace"])
+        XCTAssertEqual(session.workspaces.first?.sessionIds.count, 2)
+        session.receiveForTesting(workspaces: items[1])
+        XCTAssertEqual(session.archivedSessionIds.count, 1)
+        session.receiveForTesting(workspaces: items[2])
+        XCTAssertTrue(session.archivedSessionIds.isEmpty)
     }
 
     // MARK: - Making one
 
     func testClaimingAFolderSendsThePathAndAddsTheWorkspace() async {
         let session = await loaded()
-        await stub.answer("workspace.create", .object([
+        await stub.answer("workspace/create", .object([
             "workspace": workspaceRow("w2", path: "/code/two", title: "two"),
             "created": .bool(true),
         ]))
 
         let failure = await session.createWorkspace(path: "/code/two")
-        let sent = await stub.payloads("workspace.create")
+        let sent = await stub.payloads("workspace/create")
 
         XCTAssertNil(failure)
-        XCTAssertEqual(sent, [.object(["path": .string("/code/two")])])
+        XCTAssertEqual(sent, [request(["path": .string("/code/two")])])
         XCTAssertEqual(session.workspaces.map(\.id), ["w2", "w1"])
         XCTAssertEqual(session.placement(for: "/code/two"), .joins(workspaceId: "w2", title: "two"))
     }
@@ -207,7 +231,7 @@ final class WorkspaceWriteTests: XCTestCase {
     /// the second answer must not put a duplicate section on screen.
     func testClaimingAFolderThatIsAlreadyAWorkspaceChangesNothing() async {
         let session = await loaded()
-        await stub.answer("workspace.create", .object([
+        await stub.answer("workspace/create", .object([
             "workspace": workspaceRow("w1", path: "/code/one", title: "One", sessions: ["s1"]),
             "created": .bool(false),
         ]))
@@ -223,7 +247,7 @@ final class WorkspaceWriteTests: XCTestCase {
     func testAFolderTheMachineRefusesAddsNoSection() async {
         let session = await loaded()
         await stub.fail(
-            "workspace.create",
+            "workspace/create",
             code: "workspace-invalid-path",
             message: "cannot create a workspace at \"/code/nope\": path is not a directory"
         )
@@ -240,17 +264,17 @@ final class WorkspaceWriteTests: XCTestCase {
 
     func testRenamingSendsTheIdAndTheTitle() async {
         let session = await loaded()
-        await stub.answer("workspace.rename", .object([
+        await stub.answer("workspace/rename", .object([
             "workspace": workspaceRow("w1", path: "/code/one", title: "Renamed", sessions: ["s1"]),
         ]))
 
         let renamed = await session.renameWorkspace("w1", title: "  Renamed  ")
-        let sent = await stub.payloads("workspace.rename")
+        let sent = await stub.payloads("workspace/rename")
 
         XCTAssertTrue(renamed)
         // Trimmed here as well as on the machine, so what is drawn locally and
         // what is stored cannot disagree by a space.
-        XCTAssertEqual(sent, [.object([
+        XCTAssertEqual(sent, [request([
             "workspaceId": .string("w1"),
             "title": .string("Renamed"),
         ])])
@@ -260,7 +284,7 @@ final class WorkspaceWriteTests: XCTestCase {
     func testARefusedRenamePutsTheOldNameBackAndSaysWhy() async {
         let session = await loaded()
         await stub.fail(
-            "workspace.rename",
+            "workspace/rename",
             code: "workspace-name-conflict",
             message: "workspace name 'Two' is already in use"
         )
@@ -276,7 +300,7 @@ final class WorkspaceWriteTests: XCTestCase {
     func testABlankNameIsRefusedWithoutAskingTheMachine() async {
         let session = await loaded()
         let renamed = await session.renameWorkspace("w1", title: "   ")
-        let attempts = await stub.count("workspace.rename")
+        let attempts = await stub.count("workspace/rename")
 
         XCTAssertFalse(renamed)
         XCTAssertEqual(attempts, 0)
@@ -289,10 +313,10 @@ final class WorkspaceWriteTests: XCTestCase {
     func testRemovingAWorkspaceSendsItsIdAndDropsTheSection() async {
         let session = await loaded()
         let removed = await session.deleteWorkspace("w1")
-        let sent = await stub.payloads("workspace.delete")
+        let sent = await stub.payloads("workspace/delete")
 
         XCTAssertTrue(removed)
-        XCTAssertEqual(sent, [.object(["workspaceId": .string("w1")])])
+        XCTAssertEqual(sent, [request(["workspaceId": .string("w1")])])
         XCTAssertTrue(session.workspaces.isEmpty)
     }
 
@@ -310,7 +334,7 @@ final class WorkspaceWriteTests: XCTestCase {
 
     func testARefusedRemovalPutsTheSectionBack() async {
         let session = await loaded()
-        await stub.fail("workspace.delete", code: "workspace-not-found", message: "workspace \"w1\" not found")
+        await stub.fail("workspace/delete", code: "workspace-not-found", message: "workspace \"w1\" not found")
 
         let removed = await session.deleteWorkspace("w1")
         XCTAssertFalse(removed)
@@ -322,21 +346,19 @@ final class WorkspaceWriteTests: XCTestCase {
     // MARK: - Starting a conversation in a workspace
 
     /// The folder goes out as `cwd`, never as `workspaceId`, and the grouping is
-    /// a second call. A dsh new enough for `workspace.list` but not for
-    /// `session.create {workspaceId}` would drop the unknown key and start the
-    /// conversation in its own default directory — the wrong folder is a worse
-    /// failure than the wrong section.
+    /// a second call: the wrong folder is a worse failure than the wrong
+    /// section, and the folder is what the person chose.
     func testStartingInAWorkspaceFolderSendsTheFolderThenJoins() async {
         let session = await loaded()
-        await stub.answer("session.create", .object(["sessionId": .string("fresh")]))
+        await stub.answer("session/create", .object(["sessionId": .string("fresh")]))
 
         let id = await session.createSession(cwd: "/code/one")
-        let sent = await stub.payloads("session.create")
+        let sent = await stub.payloads("session/create")
 
         XCTAssertEqual(id, "fresh")
         XCTAssertEqual(sent.count, 2)
-        XCTAssertEqual(sent.first, .object(["cwd": .string("/code/one")]))
-        XCTAssertEqual(sent.last, .object([
+        XCTAssertEqual(sent.first, request(["cwd": .string("/code/one")]))
+        XCTAssertEqual(sent.last, request([
             "sessionId": .string("fresh"),
             "workspaceId": .string("w1"),
         ]))
@@ -350,33 +372,24 @@ final class WorkspaceWriteTests: XCTestCase {
     /// it ungrouped for the rest of its life.
     func testStartingInAnUnclaimedFolderClaimsItThenJoins() async {
         let session = await loaded()
-        await stub.answer("session.create", .object(["sessionId": .string("fresh")]))
-        await stub.answer("workspace.create", .object([
+        await stub.answer("session/create", .object(["sessionId": .string("fresh")]))
+        await stub.answer("workspace/create", .object([
             "created": .bool(true),
             "workspace": workspaceRow("w2", path: "/code/two", title: "two"),
-        ]))
-        // What the machine holds by the time the filing lands: it has the new
-        // workspace now, and names the conversation in it.
-        await stub.answer("workspace.list", .object([
-            "items": .array([
-                workspaceRow("w1", path: "/code/one", title: "One", sessions: ["s1"]),
-                workspaceRow("w2", path: "/code/two", title: "two", sessions: ["fresh"]),
-            ]),
-            "archivedSessionIds": .array([]),
         ]))
 
         let id = await session.createSession(cwd: "/code/two")
 
-        let claims = await stub.payloads("workspace.create")
-        XCTAssertEqual(claims, [.object(["path": .string("/code/two")])],
+        let claims = await stub.payloads("workspace/create")
+        XCTAssertEqual(claims, [request(["path": .string("/code/two")])],
                        "the folder the person chose, and nothing else")
 
-        let sent = await stub.payloads("session.create")
+        let sent = await stub.payloads("session/create")
         XCTAssertEqual(id, "fresh")
         XCTAssertEqual(sent.count, 2)
-        XCTAssertEqual(sent.first, .object(["cwd": .string("/code/two")]),
+        XCTAssertEqual(sent.first, request(["cwd": .string("/code/two")]),
                        "the folder still goes out as cwd, never as workspaceId")
-        XCTAssertEqual(sent.last, .object([
+        XCTAssertEqual(sent.last, request([
             "sessionId": .string("fresh"),
             "workspaceId": .string("w2"),
         ]), "and the conversation is filed into the workspace just made for it")
@@ -394,13 +407,13 @@ final class WorkspaceWriteTests: XCTestCase {
     /// gets, for the same reason.
     func testAFolderTheMachineWontClaimStillStartsTheConversation() async {
         let session = await loaded()
-        await stub.answer("session.create", .object(["sessionId": .string("fresh")]))
-        await stub.fail("workspace.create", code: "workspace-invalid-path",
+        await stub.answer("session/create", .object(["sessionId": .string("fresh")]))
+        await stub.fail("workspace/create", code: "workspace-invalid-path",
                         message: "cannot create a workspace at \"/code/two\": not a directory")
 
         let id = await session.createSession(cwd: "/code/two")
 
-        let attempts = await stub.count("session.create")
+        let attempts = await stub.count("session/create")
         XCTAssertEqual(id, "fresh")
         XCTAssertEqual(attempts, 1, "nothing to file into, so nothing is filed")
         XCTAssertEqual(session.workspaces.map(\.id), ["w1"],
@@ -408,19 +421,17 @@ final class WorkspaceWriteTests: XCTestCase {
         XCTAssertNil(session.problem)
     }
 
-    /// The other half of the same guard: a machine that has never answered
-    /// `workspace.list` is never asked to make one. It may be too old to have
-    /// the call at all, and nothing here can tell a machine that cannot group
-    /// from one that simply has not answered yet.
+    /// The other half of the same guard: a machine whose workspace stream has
+    /// not spoken is never asked to make one — there is no telling yet whether
+    /// the folder is already a workspace.
     func testAMachineThatHasNotSaidItGroupsIsNeverAskedToMakeOne() async {
-        await stub.fail("workspace.list", message: "dsh answered HTTP 404: not found")
-        await stub.answer("session.create", .object(["sessionId": .string("fresh")]))
+        await stub.answer("session/create", .object(["sessionId": .string("fresh")]))
         let session = machine()
 
         let id = await session.createSession(cwd: "/code/two")
 
-        let claims = await stub.count("workspace.create")
-        let attempts = await stub.count("session.create")
+        let claims = await stub.count("workspace/create")
+        let attempts = await stub.count("session/create")
         XCTAssertEqual(id, "fresh")
         XCTAssertEqual(claims, 0)
         XCTAssertEqual(attempts, 1)
@@ -434,8 +445,8 @@ final class WorkspaceWriteTests: XCTestCase {
     /// board assertion pins.
     func testAConversationThatStartsButCannotJoinStaysSeatedAndSaysNothing() async {
         let session = await loaded()
-        await stub.answer("session.create", .object(["sessionId": .string("fresh")]))
-        await stub.fail("session.create", code: "workspace-attach-failed", message: "could not attach", after: 1)
+        await stub.answer("session/create", .object(["sessionId": .string("fresh")]))
+        await stub.fail("session/create", code: "workspace-attach-failed", message: "could not attach", after: 1)
 
         let id = await session.createSession(cwd: "/code/one")
         XCTAssertEqual(id, "fresh", "the conversation exists and is in the right folder")
@@ -447,23 +458,20 @@ final class WorkspaceWriteTests: XCTestCase {
 
     // MARK: - Archiving
 
-    /// `session.list` keeps answering with archived conversations, so marking
+    /// `session/list` keeps answering with archived conversations, so marking
     /// rather than removing is what makes the archive survive a refresh. It did
     /// not, before: the row came back the next time the list was pulled.
     func testArchivingHidesTheConversationAndSurvivesARefresh() async {
         let session = await loaded()
         await session.archive(sessionId: "s1")
-        let sent = await stub.payloads("workspace.archiveSession")
+        let sent = await stub.payloads("workspace/archiveSession")
 
         XCTAssertEqual(session.archivedSessionIds, ["s1"])
-        XCTAssertEqual(sent, [.object(["sessionId": .string("s1")])])
+        XCTAssertEqual(sent, [request(["sessionId": .string("s1")])])
 
-        // What the machine answers from here on. `session.list` keeps the row —
+        // What the machine says from here on. `session/list` keeps the row —
         // that is the point — and only the archive set says it should be gone.
-        await stub.answer("workspace.list", .object([
-            "items": .array([workspaceRow("w1", path: "/code/one", title: "One", sessions: ["s1"])]),
-            "archivedSessionIds": .array([.string("s1")]),
-        ]))
+        session.receiveForTesting(workspaces: .object(["type": .string("archived"), "archivedSessionIds": .array([.string("s1")])]))
         await session.refreshSessions()
         XCTAssertTrue(session.sessions.contains { $0.id == "s1" }, "the machine still reports it")
         let board = SessionBoard(
@@ -476,7 +484,7 @@ final class WorkspaceWriteTests: XCTestCase {
 
     func testARefusedArchiveBringsTheConversationBack() async {
         let session = await loaded()
-        await stub.fail("workspace.archiveSession", code: "session-not-found", message: "session \"s1\" not found")
+        await stub.fail("workspace/archiveSession", code: "session-not-found", message: "session \"s1\" not found")
 
         await session.archive(sessionId: "s1")
         XCTAssertTrue(session.archivedSessionIds.isEmpty)
@@ -545,9 +553,9 @@ final class ModelSelectionTests: XCTestCase {
         let machine = session()
         _ = await machine.selectModel(sessionId: "s1", option: flash, effort: "max")
 
-        let sent = await stub.payloads("session.selectModel").last
-        XCTAssertEqual(sent?["model"]?.stringValue, "deepseek-v4-flash")
-        XCTAssertEqual(sent?["reasoningEffort"]?.stringValue, "max")
+        let sent = await stub.payloads("session/selectModel").last
+        XCTAssertEqual(sent?.path("request", "model")?.stringValue, "deepseek-v4-flash")
+        XCTAssertEqual(sent?.path("request", "reasoningEffort")?.stringValue, "max")
     }
 
     func testARefusedChoiceLeavesTheHeaderAlone() async {
@@ -557,7 +565,7 @@ final class ModelSelectionTests: XCTestCase {
         let machine = session()
         let conversation = machine.conversation("s1")
         conversation.setModel("DeepSeek V4 Pro (latest)")
-        await stub.fail("session.selectModel", code: "model-unavailable", message: "No key for that provider.")
+        await stub.fail("session/selectModel", code: "model-unavailable", message: "No key for that provider.")
 
         let failure = await machine.selectModel(sessionId: "s1", option: flash, effort: nil)
 
@@ -569,7 +577,7 @@ final class ModelSelectionTests: XCTestCase {
 /// The machine's default access mode: what a conversation that does not exist
 /// yet will start as.
 ///
-/// This is the settings path (`settings.update {ns: permission, patch:
+/// This is the settings path (`settings/update {ns: permission, patch:
 /// {defaultPreset}}`) and it is deliberately the *only* thing those writes
 /// touch. It was drawn as a three-way picker inside the session panel and
 /// reported as a dead control, because an existing session's `permissions`
@@ -606,6 +614,14 @@ final class AccessDefaultTests: XCTestCase {
         ])])
     }
 
+    /// `permissionPresets/catalog`, as a real dsh 0.2 answers it.
+    private func catalogAnswer(_ preset: String) -> JSONValue {
+        let options = JSONValue.array(["read-only", "workspace-write", "danger-full-access"].map {
+            .object(["value": .string($0), "name": .string($0)])
+        })
+        return .object(["options": options, "defaultOptions": options, "defaultPreset": .string(preset)])
+    }
+
     private func session() -> MachineSession {
         let bundle = PairingBundle(
             relay: "https://relay.invalid", device: "device-1", key: "", token: "", name: "Test Mac"
@@ -623,7 +639,7 @@ final class AccessDefaultTests: XCTestCase {
     }
 
     func testTheDefaultComesFromTheSettingNotASession() async {
-        await stub.answer("settings.describe", settingsAnswer("read-only"))
+        await stub.answer("permissionPresets/catalog", catalogAnswer("read-only"))
         let machine = session()
 
         await machine.refreshAccessDefault()
@@ -633,13 +649,14 @@ final class AccessDefaultTests: XCTestCase {
     }
 
     func testChangingItSendsTheRevisionItRead() async {
-        await stub.answer("settings.describe", settingsAnswer("workspace-write", revision: 7))
+        await stub.answer("permissionPresets/catalog", catalogAnswer("workspace-write"))
+        await stub.answer("settings/describe", settingsAnswer("workspace-write", revision: 7))
         let machine = session()
         await machine.refreshAccessDefault()
 
         _ = await machine.setPermission("danger-full-access")
 
-        let sent = await stub.payloads("settings.update").last
+        let sent = await stub.payloads("settings/update").last
         XCTAssertEqual(sent?.path("patch", "defaultPreset")?.stringValue, "danger-full-access")
         // Optimistic concurrency: a stale revision means somebody at the
         // keyboard changed it in between, and losing their change silently is
@@ -651,7 +668,8 @@ final class AccessDefaultTests: XCTestCase {
         // The whole bug in one assertion. Nothing else updates this: the
         // per-session projection does not move for a settings change, so a UI
         // that waited for one would sit there looking broken.
-        await stub.answer("settings.describe", settingsAnswer("workspace-write"))
+        await stub.answer("permissionPresets/catalog", catalogAnswer("workspace-write"))
+        await stub.answer("settings/describe", settingsAnswer("workspace-write"))
         let machine = session()
         await machine.refreshAccessDefault()
 
@@ -661,10 +679,11 @@ final class AccessDefaultTests: XCTestCase {
     }
 
     func testARefusalLeavesTheOldValueShowing() async {
-        await stub.answer("settings.describe", settingsAnswer("workspace-write"))
+        await stub.answer("permissionPresets/catalog", catalogAnswer("workspace-write"))
+        await stub.answer("settings/describe", settingsAnswer("workspace-write"))
         let machine = session()
         await machine.refreshAccessDefault()
-        await stub.fail("settings.update", message: "Someone changed it first.")
+        await stub.fail("settings/update", message: "Someone changed it first.")
 
         let failure = await machine.setPermission("danger-full-access")
 
@@ -742,12 +761,11 @@ final class SessionAccessTests: XCTestCase {
 
         XCTAssertNil(failure)
         let sent = await stub.payloads("commands/execute").last
-        XCTAssertEqual(sent?.path("args", "agentId")?.stringValue, "s1")
-        XCTAssertEqual(sent?.path("args", "line")?.stringValue, "/permission read-only")
-        // A typert remote wants its arguments under exactly one `args` object,
-        // and it wants the image list present even when empty — an absent key is
-        // a strict-schema failure, not a default.
-        XCTAssertEqual(sent?.path("args", "images")?.arrayValue?.isEmpty, true)
+        XCTAssertEqual(sent?["agentId"]?.stringValue, "s1")
+        XCTAssertEqual(sent?["line"]?.stringValue, "/permission read-only")
+        // dsh checks argument names exactly, and wants the attachment list
+        // present even when empty — an absent key is `arguments-invalid`.
+        XCTAssertEqual(sent?["submittedAttachments"]?.arrayValue?.isEmpty, true)
     }
 
     func testTheModeComesFromTheProjectionNotFromTheWrite() async {
@@ -877,12 +895,12 @@ final class CommandSendTests: XCTestCase {
         await machine.send(sessionId: "s1", text: "/permission read-only")
 
         let ran = await stub.count("commands/execute")
-        let prompted = await stub.count("session.prompt")
+        let prompted = await stub.count("session/prompt")
         XCTAssertEqual(ran, 1)
         XCTAssertEqual(prompted, 0, "a command sent as a prompt is words the model has to guess at")
         let sent = await stub.payloads("commands/execute").last
-        XCTAssertEqual(sent?.path("args", "line")?.stringValue, "/permission read-only")
-        XCTAssertEqual(sent?.path("args", "agentId")?.stringValue, "s1")
+        XCTAssertEqual(sent?["line"]?.stringValue, "/permission read-only")
+        XCTAssertEqual(sent?["agentId"]?.stringValue, "s1")
         // No bubble goes up: the machine logs the command itself and the
         // transcript draws the outcome from those events, so an optimistic copy
         // would be a second and worse account of the same act.
@@ -897,7 +915,7 @@ final class CommandSendTests: XCTestCase {
         await machine.send(sessionId: "s1", text: "/tmp is full")
 
         let ran = await stub.count("commands/execute")
-        let prompted = await stub.count("session.prompt")
+        let prompted = await stub.count("session/prompt")
         XCTAssertEqual(prompted, 1, "a message that merely starts with a slash is still a message")
         XCTAssertEqual(ran, 0)
     }
@@ -914,7 +932,7 @@ final class CommandSendTests: XCTestCase {
 
         await machine.send(sessionId: "s1", text: "/bro")
 
-        let prompted = await stub.count("session.prompt")
+        let prompted = await stub.count("session/prompt")
         let ran = await stub.count("commands/execute")
         XCTAssertEqual(prompted, 1)
         XCTAssertEqual(ran, 0)
@@ -936,7 +954,7 @@ final class CommandSendTests: XCTestCase {
         // model as a consolation.
         XCTAssertEqual(notices(conversation).map(\.text), [said])
         XCTAssertEqual(notices(conversation).first?.kind, .failure)
-        let prompted = await stub.count("session.prompt")
+        let prompted = await stub.count("session/prompt")
         XCTAssertEqual(prompted, 0)
     }
 
@@ -951,7 +969,7 @@ final class CommandSendTests: XCTestCase {
         await machine.send(sessionId: "s1", text: "/permission read-only")
 
         XCTAssertEqual(notices(conversation).map(\.text), ["This Mac no longer has a /permission command."])
-        let prompted = await stub.count("session.prompt")
+        let prompted = await stub.count("session/prompt")
         XCTAssertEqual(prompted, 0)
     }
 
@@ -968,7 +986,7 @@ final class CommandSendTests: XCTestCase {
 
         await machine.send(sessionId: "s1", text: "/permission read-only", steer: true)
 
-        let prompted = await stub.count("session.prompt")
+        let prompted = await stub.count("session/prompt")
         let ran = await stub.count("commands/execute")
         XCTAssertEqual(ran, 1)
         XCTAssertEqual(prompted, 0)
@@ -989,13 +1007,13 @@ final class ArchiveTests: XCTestCase {
 
         let hidden = await MainActor.run { session.archivedSessionIds.contains("s1") }
         XCTAssertTrue(hidden, "a row that lingers for a round trip reads as a tap that missed")
-        let sent = await stub.payloads("workspace.archiveSession").first
-        XCTAssertEqual(sent?["sessionId"]?.stringValue, "s1")
+        let sent = await stub.payloads("workspace/archiveSession").first
+        XCTAssertEqual(sent?.path("request", "sessionId")?.stringValue, "s1")
     }
 
     func testARefusalPutsTheRowBackAndSaysSo() async {
         let stub = StubTransport()
-        await stub.fail("workspace.archiveSession", message: "the Mac said no")
+        await stub.fail("workspace/archiveSession", message: "the Mac said no")
         let session = await make(stub)
         await session.archive(sessionId: "s1")
 

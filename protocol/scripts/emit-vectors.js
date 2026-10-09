@@ -20,6 +20,7 @@ import {
   NoiseInitiator,
   NoiseResponder,
   TUNNEL_PROLOGUE,
+  TUNNEL_VERSIONS,
   confirmationNumber,
   decodePairingLink,
   deviceIdFor,
@@ -58,7 +59,7 @@ const initiatorEphemeral = pair(FIXTURES.initiatorEphemeral)
 const responderEphemeral = pair(FIXTURES.responderEphemeral)
 const signing = { privateKey: Buffer.from(FIXTURES.bridleSigning, 'hex'), publicKey: signingPublicKeyOf(Buffer.from(FIXTURES.bridleSigning, 'hex')) }
 
-const helloPayload = Buffer.from(JSON.stringify({ versions: [1], name: 'Test iPhone', client: 'rowel-vectors/1' }), 'utf8')
+const helloPayload = Buffer.from(JSON.stringify({ versions: TUNNEL_VERSIONS, name: 'Test iPhone', client: 'rowel-vectors/1' }), 'utf8')
 const replyPayload = Buffer.from(JSON.stringify({ ok: true, machine: 'Vector Mac', bridle: '0.1.0' }), 'utf8')
 
 const initiator = new NoiseInitiator(app, bridle.publicKey, TUNNEL_PROLOGUE, initiatorEphemeral)
@@ -138,8 +139,15 @@ const vectors = {
     pairOfferSignature: signPairOffer(signing.privateKey, 'KTPQ-3WRM'),
   },
   frames: [
-    { frame: { t: 'req', id: 'p1', method: 'session.list', payload: {} }, encoded: encodeFrame({ t: 'req', id: 'p1', method: 'session.list', payload: {} }).toString('base64') },
-    { frame: { t: 'resume', since: 12 }, encoded: encodeFrame({ t: 'resume', since: 12 }).toString('base64') },
+    ...[
+      { t: 'call', id: 'c1', endpoint: 'session/list', args: { _request: {} } },
+      { t: 'abort', id: 'c1' },
+      { t: 'open', sid: 's1', endpoint: 'session/follow', args: { request: { address: { kind: 'session', sessionId: 'session-1' }, assistantStream: true, maxMessages: 25 } } },
+      // One key: the value is the caller's own JSON, and key order is not part of it.
+      { t: 'item', sid: 's1', value: { text: 'hi' } },
+      { t: 'end', sid: 's1' },
+      { t: 'cancel', sid: 's1' },
+    ].map((frame) => ({ frame, encoded: encodeFrame(frame).toString('base64') })),
     // Both shapes of `wake`, because the withdrawal is the one an
     // implementation is most likely to get wrong: a `null` that JSON.stringify
     // keeps and a Swift optional that would silently drop the key are not the

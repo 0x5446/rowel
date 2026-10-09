@@ -1,0 +1,45 @@
+{
+  "endpoint": "settings/update",
+  "args": {
+    "ns": "permission",
+    "patch": {
+      "defaultPreset": "read-only"
+    },
+    "expectedRevision": 0
+  },
+  "result": {
+    "ok": true,
+    "value": {
+      "ns": "permission",
+      "autoGenerate": false,
+      "schema": {
+        "uid": 6274,
+        "refs": {
+          "6273": {
+            "type": "string",
+            "meta": {}
+          },
+          "6274": {
+            "type": "object",
+            "meta": {
+              "default": {}
+            },
+            "dict": {
+              "defaultPreset": 6273
+            }
+          }
+        }
+      },
+      "value": {
+        "defaultPreset": "read-only"
+      },
+      "base": {},
+      "user": {
+        "defaultPreset": "read-only"
+      },
+      "applies": "live",
+      "secrets": [],
+      "revision": 1
+    }
+  }
+}

@@ -37,9 +37,8 @@ import UIKit
 /// Answers every harness call with an empty object, so the reads the view fires
 /// on open come back immediately and the transcript under test is the only
 /// content that matters.
-private actor QuietTransport: HarnessTransport {
+private actor QuietTransport: CallOnlyTransport {
     func call(_ method: String, _ payload: JSONValue) async throws -> JSONValue { .emptyObject }
-    func respond(rpcId: String, value: JSONValue) async throws -> JSONValue { .emptyObject }
 }
 
 // MARK: - Pixels
@@ -180,12 +179,13 @@ final class InterruptLayoutTests: XCTestCase {
         let session = makeSession()
         let conversation = session.conversation(sessionId)
         seed(conversation)
-        session.receiveForTesting(.event(EventFrame(seq: 1, stream: .mux, frame: .object([
-            "rpcId": .string("rpc-1"),
-            "type": .string("question/requested"),
-            "sessionId": .string(sessionId),
-            "questions": questions,
-        ]))))
+        session.receiveForTesting(events: .object([
+            "type": .string("waterfall"),
+            "event": .string("user-questions/request"),
+            "eventId": .string("event-1"),
+            "agentId": .string(sessionId),
+            "request": .object(["questions": questions]),
+        ]))
         XCTAssertNotNil(session.questions[sessionId], "the card under test must be on screen")
 
         let window = mount(session: session)
@@ -253,7 +253,7 @@ final class InterruptLayoutTests: XCTestCase {
                 "seq": .number(Double(seq)),
                 "time": .number(1_700_000_000_000 + Double(seq)),
                 "data": data,
-            ]), view: nil)
+            ]))
             seq += 1
         }
         for turn in 0..<3 {

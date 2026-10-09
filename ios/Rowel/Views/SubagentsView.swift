@@ -3,11 +3,11 @@
 /// A subagent is where the time goes and the one place the transcript stops
 /// explaining itself: the parent shows a tool call, the tool call sits there
 /// for four minutes, and everything the child did happens somewhere the app
-/// could not see. `session.list` hides subagents on purpose, so without this
-/// screen they do not exist as far as the phone is concerned.
+/// could not see. The conversation list leaves subagents out on purpose, so
+/// without this screen they do not exist as far as the phone is concerned.
 ///
-/// Read-only, deliberately. `subagent.prompt` and `subagent.interrupt` exist
-/// and are not here: talking to a child behind the parent's back is a way to
+/// Read-only, deliberately. A child can be messaged and interrupted, and that
+/// is not here: talking to a child behind the parent's back is a way to
 /// confuse the parent's own accounting of it, and "what is it doing" is the
 /// question a phone actually has.
 

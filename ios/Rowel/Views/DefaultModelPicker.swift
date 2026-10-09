@@ -2,7 +2,7 @@
 ///
 /// Separate from `ModelPicker`, which changes one live session, because the two
 /// answer different questions and read from different places: this one asks the
-/// machine for everything it can route to (`llm.models`), since the session it
+/// machine for everything it can route to (`session/modelCatalog`), since the session it
 /// is choosing for does not exist yet.
 ///
 /// "Let the machine decide" is a real option and the default one. Someone with

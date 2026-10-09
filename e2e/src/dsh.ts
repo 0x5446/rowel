@@ -17,10 +17,15 @@
  * that inherited a developer's shell would quietly spend their account on
  * every contract test. It gets a bare environment instead; a test that needs a
  * real turn passes `{ model: true }`, and only runs when `ROWEL_E2E_MODEL=1`.
+ *
+ * Nor the developer's home. dsh reads skills and instruction files from under
+ * `HOME` (`~/.agents/skills`, global agent instructions) and puts them in every
+ * system prompt; a throwaway dsh with the real `HOME` would carry someone's
+ * private setup into test output and into the fixtures committed from it.
  */
 
 import { spawn, type ChildProcess } from 'node:child_process'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -64,8 +69,10 @@ export async function startDsh(options: { model?: boolean; timeoutMs?: number } 
   if (bin === undefined) throw new Error('ROWEL_E2E_DSH_BIN is not set')
   const home = mkdtempSync(join(tmpdir(), 'rowel-e2e-dsh-'))
   const port = await freePort()
-  const bare: Record<string, string> = { DSH_HOME: home, DSH_TELEMETRY_DISABLED: '1' }
-  for (const name of ['PATH', 'HOME', 'TMPDIR', 'LANG']) {
+  const userHome = join(home, 'user')
+  mkdirSync(userHome, { recursive: true })
+  const bare: Record<string, string> = { DSH_HOME: home, HOME: userHome, DSH_TELEMETRY_DISABLED: '1' }
+  for (const name of ['PATH', 'TMPDIR', 'LANG']) {
     const value = process.env[name]
     if (value !== undefined) bare[name] = value
   }
