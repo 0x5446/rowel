@@ -5,15 +5,18 @@
  * `POST /api/respond`, and the two downlinks as WebSockets that only ever
  * receive.
  *
- * dsh has no authentication; its fence is the Host header plus a loopback
- * bind. Bridle is same-machine, so every method including the loopback-pinned
- * privileged ones is reachable. Nothing in this file may ever be pointed at a
- * non-loopback dsh — {@link assertLoopback} enforces that at construction.
+ * dsh 0.1.1 has no authentication; its fence is the Host header plus a
+ * loopback bind. dsh 0.2 adds a signed cookie on every request, loopback
+ * included; whatever cookie is known for this address (`credentials.ts`) rides
+ * along on every call and socket, and one that is refused is dropped. Nothing
+ * in this file may ever be pointed at a non-loopback dsh — {@link assertLoopback}
+ * enforces that at construction.
  */
 
 import { isIP } from 'node:net'
 import WebSocket from 'ws'
 import type { AgentClient } from '../agents/types.ts'
+import { cookieFor, forgetCookie } from './credentials.ts'
 
 /** The dsh unary response body. */
 export type DshResult =
@@ -86,6 +89,20 @@ export class DshClient implements AgentClient {
   }
 
   /**
+   * The cookie header for this address, when one is known. Asked per request,
+   * not held: the dsh plugin learns its cookie after the client exists.
+   */
+  private credentials(): Record<string, string> {
+    const cookie = cookieFor(this.base.origin)
+    return cookie === undefined ? {} : { cookie }
+  }
+
+  /** A refusal of the cookie that was sent means it is no good any more. */
+  private refused(status: number, sent: Record<string, string>): void {
+    if (status === 401 && sent['cookie'] !== undefined) forgetCookie(this.base.origin)
+  }
+
+  /**
    * Invoke one dsh method.
    * @param method - path segment, e.g. `session.list` or `goals/create`.
    * @param payload - the method's request payload.
@@ -96,11 +113,12 @@ export class DshClient implements AgentClient {
     const timeout = AbortSignal.timeout(this.requestTimeoutMs)
     const composite = signal === undefined ? timeout : AbortSignal.any([signal, timeout])
     const rpcId = nextRpcId()
+    const sent = this.credentials()
     let response: Response
     try {
       response = await fetch(new URL(`/api/${method}`, this.base), {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', ...sent },
         body: JSON.stringify({ type: 'client-request', rpcId, method, payload }),
         signal: composite,
       })
@@ -108,6 +126,7 @@ export class DshClient implements AgentClient {
       return carrierFailure(signal?.aborted === true ? 'cancelled' : 'internal', method, error)
     }
     if (!response.ok) {
+      this.refused(response.status, sent)
       const text = await response.text().catch(() => '')
       return {
         ok: false,
@@ -139,7 +158,7 @@ export class DshClient implements AgentClient {
   async respond(message: unknown): Promise<unknown> {
     const response = await fetch(new URL('/api/respond', this.base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...this.credentials() },
       body: JSON.stringify(message),
       signal: AbortSignal.timeout(this.requestTimeoutMs),
     })
@@ -193,7 +212,7 @@ export class DshClient implements AgentClient {
     signal: AbortSignal,
   ): Promise<string | undefined> {
     return new Promise((resolve) => {
-      const socket = new WebSocket(address, { headers: { host: this.base.host } })
+      const socket = new WebSocket(address, { headers: { host: this.base.host, ...this.credentials() } })
       let settled = false
       const settle = (detail?: string): void => {
         if (settled) return
@@ -230,7 +249,7 @@ export class DshClient implements AgentClient {
     const url = new URL('/api/session.export', this.base)
     url.searchParams.set('sessionId', sessionId)
     if (includeDescendants) url.searchParams.set('includeDescendants', 'true')
-    return fetch(url)
+    return fetch(url, { headers: this.credentials() })
   }
 }
 

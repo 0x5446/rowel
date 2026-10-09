@@ -26,6 +26,9 @@ import {
   RelayClient,
   clearRuntime,
   competingDaemon,
+  exchangeToken,
+  rememberCookie,
+  tokenFrom,
   VERSION,
   loadState,
   overrideState,
@@ -36,6 +39,19 @@ import {
 
 /** How often to refresh the snapshot `bridle status` reads. */
 const HEARTBEAT_MS = 5_000
+
+/**
+ * How long to wait for dsh to hand over its address and token before starting
+ * without them. dsh 0.2 hands them over as soon as its web server is up; dsh
+ * 0.1 has neither service and never will, and still has to get a Bridle.
+ */
+const SIGN_IN_WAIT_MS = 3_000
+
+/** The two dsh 0.2 services that say where dsh answers and how to sign in. */
+interface SignInServices {
+  webServer: { port: number }
+  connection: { authenticatedUrl: (base: string) => string }
+}
 
 /** Shown in dsh's plugin list and in diagnostics. */
 export const name = 'rowel-bridle'
@@ -68,6 +84,7 @@ export function apply(
   ctx: {
     on: (event: 'dispose', handler: () => void) => void
     logger?: { error?: (message: string) => void }
+    inject?: (deps: string[], callback: (inner: SignInServices) => void) => unknown
   },
   config: BridlePluginConfig = {},
 ): void {
@@ -95,10 +112,45 @@ export function apply(
     ...(config.dsh !== undefined && config.dsh.length > 0 ? { dshUrl: config.dsh } : {}),
   })
 
-  const core = new BridleCore(state)
+  // Built in `start`, once dsh has said where it answers: the client inside
+  // takes its address at construction.
+  let core: BridleCore | undefined
+  let disposed = false
   const startedAt = Date.now()
   let direct: DirectServer | undefined
   let relay: RelayClient | undefined
+
+  // dsh 0.2 lets nothing into its API without a cookie, and the official way
+  // for a plugin to get one is the pair of services it injects: the port its
+  // web server really bound, and the launch token. Asked for with
+  // `ctx.inject` rather than a static `inject` list, because a static list is
+  // a hard requirement — on dsh 0.1, which has neither service, the plugin
+  // would wait for them forever and no Bridle would start.
+  //
+  // Only the token is taken from the URL dsh hands over, and the exchange goes
+  // to loopback on the port it reports (see `auth.ts`).
+  let signedIn: () => void = () => {}
+  const signIn = new Promise<void>((resolve) => { signedIn = resolve })
+  ctx.inject?.(['connection', 'webServer'], (inner) => {
+    const base = `http://127.0.0.1:${String(inner.webServer.port)}`
+    const token = tokenFrom(inner.connection.authenticatedUrl(base))
+    if (token === undefined) {
+      ctx.logger?.error?.('rowel-bridle: dsh handed over no sign-in token')
+      signedIn()
+      return
+    }
+    exchangeToken(base, token)
+      .then((cookie) => {
+        rememberCookie(base, cookie)
+        // Where this dsh answers, for this process — unless the plugin's own
+        // config names an address, which is the later word.
+        if (config.dsh === undefined || config.dsh.length === 0) overrideState(state, { dshUrl: base })
+      })
+      .catch((error: unknown) => {
+        ctx.logger?.error?.(`rowel-bridle could not sign in to dsh: ${error instanceof Error ? error.message : String(error)}`)
+      })
+      .finally(() => { signedIn() })
+  })
 
   // The same snapshot the standalone daemon publishes, for the same reason.
   //
@@ -127,7 +179,7 @@ export function apply(
         relayUrl: state.relayUrl,
         relayState,
         dshUrl: state.dshUrl,
-        dshReachable: core.dshStatus.reachable,
+        dshReachable: core?.dshStatus.reachable ?? false,
         direct: direct?.addresses ?? [],
         attached: relay?.attachedCircuits ?? 0,
       })
@@ -166,18 +218,23 @@ export function apply(
   })()
 
   async function start(): Promise<void> {
-    await core.start()
+    await Promise.race([signIn, new Promise<void>((resolve) => { setTimeout(resolve, SIGN_IN_WAIT_MS).unref() })])
+    // Unloaded while waiting: starting now would leave a Bridle nobody stops.
+    if (disposed) return
+    const running = new BridleCore(state)
+    core = running
+    await running.start()
 
     if (config.noDirect !== true) {
-      direct = new DirectServer(core, { version: VERSION, port: config.directPort ?? 0, log: () => {} })
+      direct = new DirectServer(running, { version: VERSION, port: config.directPort ?? 0, log: () => {} })
       await direct.listen()
     }
     // Asked fresh on every ready frame, so a laptop that changes network stops
     // advertising the one it booted on.
-    core.directAddresses = () => [...(config.advertise ?? []), ...(direct?.addresses ?? [])]
+    running.directAddresses = () => [...(config.advertise ?? []), ...(direct?.addresses ?? [])]
 
     if (state.relayUrl.length > 0) {
-      relay = new RelayClient(core, { version: VERSION, log: () => {}, onState: (next) => { publish(next) } })
+      relay = new RelayClient(running, { version: VERSION, log: () => {}, onState: (next) => { publish(next) } })
       relay.start()
     }
     publish()
@@ -186,10 +243,11 @@ export function apply(
   ctx.on('dispose', () => {
     // Reverse order, and every step tolerant: a plugin that throws on unload
     // takes the reload with it.
+    disposed = true
     clearInterval(heartbeat)
     try { relay?.stop() } catch { /* already down */ }
     try { direct?.close() } catch { /* already down */ }
-    try { core.stop() } catch { /* already down */ }
+    try { core?.stop() } catch { /* already down */ }
     // Removed on unload, so a `bridle status` after `dsh plugin remove` says
     // nothing is running rather than pointing at a live dsh that no longer
     // has a Bridle in it.

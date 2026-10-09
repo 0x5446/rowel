@@ -8,10 +8,13 @@
  */
 
 import { spawn } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { closeSync, mkdirSync, openSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { createConnection } from 'node:net'
-import { DshClient } from './client.ts'
+import { rowelHome } from '../identity.ts'
+import { exchangeToken, tokenFrom } from './auth.ts'
+import { cookieFor, rememberCookie } from './credentials.ts'
+import { identifyDsh, type DshIdentity } from './identify.ts'
 
 /** Ports probed in order: the web profile default, then the range it falls back through. */
 const CANDIDATE_PORTS = [3080, 3081, 3082, 3083, 8080, 8791]
@@ -19,7 +22,7 @@ const CANDIDATE_PORTS = [3080, 3081, 3082, 3083, 8080, 8791]
 /** How long a single TCP probe may take. */
 const PROBE_TIMEOUT_MS = 300
 
-/** How long to wait for a freshly spawned dsh to answer `host.describe`. */
+/** How long to wait for a freshly spawned dsh to be ready and print its token. */
 const LAUNCH_TIMEOUT_MS = 45_000
 
 /** A dsh instance Bridle can talk to. */
@@ -28,6 +31,8 @@ export interface DiscoveredDsh {
   url: string
   /** Whether Bridle started this process itself. */
   launched: boolean
+  /** What answered there, signed in with whatever cookie is known. */
+  identity: DshIdentity
 }
 
 /**
@@ -83,16 +88,17 @@ export async function probeDsh(preferred?: string, pinned = false): Promise<stri
       continue
     }
     if (!await portOpen(port)) continue
-    // Something is listening, but it might be any other local service; only a
-    // successful harness method proves it is dsh.
-    let client: DshClient
+    // Something is listening, but it might be any other local service. A dsh
+    // either answers or asks to sign in, and asking counts: dsh 0.2 refuses
+    // every request without a cookie, and reading that refusal as "not dsh"
+    // is what used to send Bridle off to start a second one on a taken port.
+    let identity: DshIdentity
     try {
-      client = new DshClient({ baseUrl: url })
+      identity = await identifyDsh(url, cookieFor(url))
     } catch {
       continue
     }
-    const health = await client.health()
-    if (health.reachable) return url
+    if (identity.kind !== 'unknown') return url
   }
   return undefined
 }
@@ -158,7 +164,7 @@ export interface EnsureOptions {
 export async function ensureDsh(options: EnsureOptions): Promise<DiscoveredDsh> {
   const log = options.log ?? ((): void => {})
   const found = await probeDsh(options.preferred, options.pinned ?? false)
-  if (found !== undefined) return { url: found, launched: false }
+  if (found !== undefined) return { url: found, launched: false, identity: await identifyDsh(found, cookieFor(found)) }
   if (!options.autoStart) {
     // Naming the flag they already passed, not an `--auto-start` that does not
     // exist: launching is the default, `--no-auto-start` is the only switch,
@@ -175,25 +181,69 @@ export async function ensureDsh(options: EnsureOptions): Promise<DiscoveredDsh> 
     : undefined
   const port = options.port ?? pinnedPort ?? 3080
   const command = options.command ?? 'dsh'
+  // Never `--public-url`: the token line would then show that address, and
+  // nothing here needs anything from the line but the token.
   const args = options.args ?? ['web', '--host', '127.0.0.1', '--port', String(port), '--no-open']
   log(`starting dsh on 127.0.0.1:${String(port)}`)
-  const child = spawn(command, args, { stdio: 'ignore', detached: true })
+  // dsh prints its token once, on stdout, and outlives this process. A pipe
+  // would break the moment Bridle exits and fail dsh's next write, so stdout
+  // goes to a private file instead — read for the token line, then deleted;
+  // dsh keeps writing to its open descriptor, and nobody can read the token
+  // back off the disk.
+  const directory = join(rowelHome(), 'secrets')
+  mkdirSync(directory, { recursive: true, mode: 0o700 })
+  const output = join(directory, `dsh-launch-${String(process.pid)}.log`)
+  const descriptor = openSync(output, 'w', 0o600)
+  let child: ReturnType<typeof spawn>
+  try {
+    child = spawn(command, args, { stdio: ['ignore', descriptor, 'ignore'], detached: true })
+  } finally {
+    closeSync(descriptor)
+  }
   child.unref()
   const url = `http://127.0.0.1:${String(port)}`
-  const client = new DshClient({ baseUrl: url })
-  const deadline = Date.now() + LAUNCH_TIMEOUT_MS
   let spawnFailed: string | undefined
   child.once('error', (error: Error) => { spawnFailed = error.message })
-  while (Date.now() < deadline) {
-    if (spawnFailed !== undefined) {
-      throw new Error(`could not start dsh with ${JSON.stringify(command)}: ${spawnFailed}`)
+  const deadline = Date.now() + LAUNCH_TIMEOUT_MS
+  try {
+    while (Date.now() < deadline) {
+      if (spawnFailed !== undefined) {
+        throw new Error(`could not start dsh with ${JSON.stringify(command)}: ${spawnFailed}`)
+      }
+      const identity = await identifyDsh(url, cookieFor(url))
+      if (identity.kind === 'legacy' || identity.kind === 'signed-in') {
+        log(`dsh is up at ${url}`)
+        return { url, launched: true, identity }
+      }
+      if (identity.kind === 'locked') {
+        const token = tokenLine(output)
+        if (token !== undefined) {
+          rememberCookie(url, await exchangeToken(url, token))
+          const signedIn = await identifyDsh(url, cookieFor(url))
+          log(`dsh is up at ${url}`)
+          return { url, launched: true, identity: signedIn }
+        }
+      }
+      await new Promise<void>((resolve) => { setTimeout(resolve, 500) })
     }
-    const health = await client.health()
-    if (health.reachable) {
-      log(`dsh is up at ${url}`)
-      return { url, launched: true }
-    }
-    await new Promise<void>((resolve) => { setTimeout(resolve, 500) })
+  } finally {
+    rmSync(output, { force: true })
   }
   throw new Error(`dsh did not answer at ${url} within ${String(LAUNCH_TIMEOUT_MS / 1000)}s`)
+}
+
+/**
+ * The token from the `dsh web:` line in a launched dsh's output, once printed.
+ * @param path - the file its stdout goes to.
+ * @returns the token, or undefined until the line appears.
+ */
+function tokenLine(path: string): string | undefined {
+  let text: string
+  try {
+    text = readFileSync(path, 'utf8')
+  } catch {
+    return undefined
+  }
+  const line = text.split('\n').find(entry => entry.startsWith('dsh web: '))
+  return line === undefined ? undefined : tokenFrom(line)
 }
