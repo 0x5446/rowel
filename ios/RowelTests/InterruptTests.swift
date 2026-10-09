@@ -14,6 +14,9 @@ private actor AnswerTransport: CallOnlyTransport {
     private(set) var sent: [(endpoint: String, args: JSONValue)] = []
     var refuse = false
 
+    /// The answers alone: a new `$events` client also reads the session list.
+    var answers: [JSONValue] { sent.filter { $0.endpoint == "$events/result" }.map(\.args) }
+
     func refuseAll() { refuse = true }
 
     func call(_ endpoint: String, _ args: JSONValue) async throws -> JSONValue {
@@ -133,9 +136,9 @@ final class InterruptTests: XCTestCase {
 
         await session.answer(approval: asked, allow: true)
 
-        let sent = await transport.sent
-        XCTAssertEqual(sent.map(\.endpoint), ["$events/result"])
-        XCTAssertEqual(sent.first?.args, .object([
+        let sent = await transport.answers
+        XCTAssertEqual(sent.count, 1)
+        XCTAssertEqual(sent.first, .object([
             "clientId": .string("test-client"),
             "eventId": .string("3824b6e1-71ca-4462-bc64-ab7aa98e8b9c"),
             "outcome": .object(["kind": .string("result"), "value": .string("allowed-once")]),
@@ -151,7 +154,7 @@ final class InterruptTests: XCTestCase {
 
         await session.answer(question: asked, answers: ["hitl-confirm": QuestionAnswer(selected: ["保持 Exa（推荐）"])])
 
-        let sent = await transport.sent.first?.args
+        let sent = await transport.answers.first
         XCTAssertEqual(sent?["eventId"]?.stringValue, "cf6f20c2-a77a-4d75-bf3b-9b872198460b")
         XCTAssertEqual(sent?.path("outcome", "value"), .object(["answers": .array([
             .object(["id": .string("hitl-confirm"), "selected": .array([.string("保持 Exa（推荐）")])]),
