@@ -40,8 +40,8 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 root="$(cd .. && pwd)"
-home="${ROWEL_SHOTS_HOME:-$HOME/rowel-shots}"
-port="${ROWEL_SHOTS_PORT:-3082}"
+home="${ROWEL_SHOTS_HOME:-$HOME/rowel-shots-0.2}"
+port="${ROWEL_SHOTS_PORT:-3086}"
 device="${ROWEL_SHOTS_DEVICE:-iPhone 17 Pro Max}"
 # Under /Users/Shared, not under anybody's home. The path is *visible in the
 # product*: the session list, the conversation header and the transcript all
@@ -73,12 +73,6 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-rpc() {
-  printf '{"type":"client-request","rpcId":"d%s","method":"%s","payload":%s}' \
-    "$RANDOM" "$1" "$2" \
-    | curl -s -m 90 -X POST "http://127.0.0.1:$port/api/$1" \
-        -H 'content-type: application/json' --data-binary @-
-}
 
 zone() {
   local link
@@ -106,58 +100,51 @@ arm() {
   # no card. The approval has to be provoked by real work, so the work has to
   # be real.
   rm -f "$sample/CHANGELOG.md"
-  python3 - "$port" "$(zone)" "$sample" <<'PY'
-import json, sys, time, urllib.request
+  python3 - "$port" "$(zone)" "$sample" "$home/dsh.log" <<'PY'
+import json, subprocess, sys, time, uuid
 
-port, zone, sample = sys.argv[1], sys.argv[2], sys.argv[3]
+port, zone, sample, log = sys.argv[1:5]
 
-def call(method, payload):
-    body = json.dumps({"type": "client-request", "rpcId": "arm",
-                       "method": method, "payload": payload}).encode()
-    request = urllib.request.Request(
-        f"http://127.0.0.1:{port}/api/{method}", data=body,
-        headers={"content-type": "application/json"})
-    with urllib.request.urlopen(request, timeout=90) as answer:
-        return json.load(answer)
-
-def preset(value):
-    described = call("settings.describe", {})
-    namespaces = described["result"]["value"]["namespaces"]
-    revision = next((n.get("revision") for n in namespaces if n.get("ns") == "permission"), None)
-    call("settings.update", {"ns": "permission", "patch": {"defaultPreset": value},
-                             "expectedRevision": revision})
+def call(endpoint, args):
+    # Signed in and enveloped by Tools/dsh.mjs; arguments on stdin.
+    out = subprocess.run(["node", "Tools/dsh.mjs", port, log, endpoint],
+                         input=json.dumps(args), capture_output=True, text=True, check=True)
+    return json.loads(out.stdout)
 
 # Retire any earlier take, so the list shows one of these and not four.
-for session in call("session.list", {})["result"]["value"]["items"]:
+for session in call("session/list", {"_request": {}})["result"]["value"]["items"]:
     if session.get("projections", {}).get("values", {}).get("title") == "Ship the currency fix":
-        call("workspace.archiveSession", {"sessionId": session["sessionId"]})
+        call("workspace/archiveSession", {"request": {"sessionId": session["sessionId"]}})
 
-# The preset is read when the session is created, so it has to be set first and
-# put back afterwards — it is machine-wide, and leaving a harness read-only
-# would be a confusing thing to find later.
-preset("read-only")
-try:
-    session = call("session.create", {"cwd": sample})["result"]["value"]["sessionId"]
-    answer = call("session.prompt", {
-        "sessionId": session, "mode": "queue", "clientTimeZone": zone,
-        "content": [{"type": "text", "text":
-            'Add a CHANGELOG.md to this repository with one entry: '
-            '"Add CAD and AUD support". Write the file.'}],
-    })
-    if not answer["result"].get("value", {}).get("accepted"):
-        raise SystemExit(f"the harness refused the prompt: {json.dumps(answer)[:300]}")
-    time.sleep(1.5)
-    call("session.rename", {"sessionId": session, "title": "Ship the currency fix"})
-finally:
-    preset("workspace-write")
+# Read-only for this conversation alone — `/permission`, which leaves the
+# machine's default where it was.
+session = call("session/create", {"request": {"cwd": sample}})["result"]["value"]["sessionId"]
+call("commands/execute", {"agentId": session, "line": "/permission read-only", "submittedAttachments": []})
+answer = call("session/prompt", {"request": {
+    "requestId": str(uuid.uuid4()), "sessionId": session, "mode": "queue", "clientTimeZone": zone,
+    "content": [{"type": "text", "text":
+        'Add a CHANGELOG.md to this repository with one entry: '
+        '"Add CAD and AUD support". Write the file.'}],
+}})
+if not answer["result"].get("value", {}).get("accepted"):
+    raise SystemExit(f"the harness refused the prompt: {json.dumps(answer)[:300]}")
+time.sleep(1.5)
+call("session/rename", {"request": {"sessionId": session, "title": "Ship the currency fix"}})
 
 # Wait for the agent to actually reach the question. Recording before it does
-# would capture a spinner and call it a demo.
+# would capture a spinner and call it a demo. The page is read up to the
+# position the list says the log has reached.
 for _ in range(60):
     time.sleep(2)
-    page = call("session.history", {"sessionId": session, "maxMessages": 8})
-    events = page["result"]["value"]["events"]
-    if any(e.get("event", {}).get("type") == "approval/asked" for e in events):
+    rows = call("session/list", {"_request": {}})["result"]["value"]["items"]
+    row = next((r for r in rows if r["sessionId"] == session), {})
+    through = row.get("projections", {}).get("asOfSeq")
+    if through is None:
+        continue
+    page = call("session/page", {"request": {
+        "address": {"kind": "session", "sessionId": session}, "throughSeq": through, "maxMessages": 8}})
+    records = page["result"].get("value", {}).get("records", [])
+    if any(r.get("event", {}).get("type") == "approval/asked" for r in records):
         print("approval pending")
         break
 else:

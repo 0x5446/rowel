@@ -16,17 +16,25 @@
 #   ios/screenshots.sh            set up if needed, then take them
 #   ios/screenshots.sh --seed     set up and seed conversations, then stop
 #   ios/screenshots.sh --shots    take them against an environment already up
+#   ios/screenshots.sh --up       start the harness and the Bridle, nothing else
+#                                 (ios/demo.sh borrows them)
 #
-# Requirements: xcodegen, a booted-able iPhone simulator, and dsh on the PATH.
-# The sample harness borrows ~/.dsh/settings.yaml for model credentials — it
-# needs a model to answer, and copying the file is the only way it gets one.
+# Requirements: xcodegen, a booted-able iPhone simulator, and dsh 0.2 — on the
+# PATH, or named by ROWEL_SHOTS_DSH. The harness needs a model to answer, and
+# takes the model routes (not the keys: those are named by environment
+# variable) from ~/.dsh/settings.yaml, or from ROWEL_SHOTS_SETTINGS.
+#
+# Its home is ~/rowel-shots-0.2, not the ~/rowel-shots dsh 0.1 used: dsh 0.2
+# rewrites a home it starts in, and that one stays as it was.
 
 set -euo pipefail
 
 cd "$(dirname "$0")"
 root="$(cd .. && pwd)"
-home="${ROWEL_SHOTS_HOME:-$HOME/rowel-shots}"
-port="${ROWEL_SHOTS_PORT:-3082}"
+home="${ROWEL_SHOTS_HOME:-$HOME/rowel-shots-0.2}"
+port="${ROWEL_SHOTS_PORT:-3086}"
+dsh="${ROWEL_SHOTS_DSH:-dsh}"
+settings="${ROWEL_SHOTS_SETTINGS:-$HOME/.dsh/settings.yaml}"
 device="${ROWEL_SHOTS_DEVICE:-iPhone 17 Pro Max}"
 # Under /Users/Shared, not under anybody's home. The path is *visible in the
 # product*: the session list, the conversation header and the transcript all
@@ -39,19 +47,18 @@ if [ -t 1 ]; then bold=$(printf '\033[1m'); off=$(printf '\033[0m'); else bold='
 say() { printf '%s==>%s %s\n' "$bold" "$off" "$*"; }
 fail() { printf '%s\n' "$*" >&2; exit 1; }
 
-command -v dsh >/dev/null 2>&1 || fail "dsh is not on the PATH."
+command -v "$dsh" >/dev/null 2>&1 || fail "no dsh at '$dsh' — put dsh 0.2 on the PATH or name it with ROWEL_SHOTS_DSH."
+case "$("$dsh" --version 2>/dev/null)" in
+  0.0.*|0.1.*|"") fail "$dsh is not dsh 0.2 ($("$dsh" --version 2>/dev/null || echo unknown))." ;;
+esac
 command -v xcodegen >/dev/null 2>&1 || fail "xcodegen is not installed. brew install xcodegen"
 [ -f "$root/bridle/lib/cli.js" ] || fail "The Bridle is not built. Run: npm run build"
 
-# One dsh call. The body goes in on stdin, not as an argument: one of these
-# payloads carries a base64 PNG, and an image is comfortably larger than the
-# command line will hold — `Argument list too long` from curl, which reads like
-# a broken script rather than a large picture.
+# One dsh call: an endpoint and its arguments, signed in (Tools/dsh.mjs). The
+# arguments go in on stdin, not as an argument: one of them carries a base64
+# PNG, and an image is comfortably larger than the command line will hold.
 rpc() {
-  printf '{"type":"client-request","rpcId":"s%s","method":"%s","payload":%s}' \
-    "$RANDOM" "$1" "$2" \
-    | curl -s -m 90 -X POST "http://127.0.0.1:$port/api/$1" \
-        -H 'content-type: application/json' --data-binary @-
+  printf '%s' "$2" | node Tools/dsh.mjs "$port" "$home/dsh.log" "$1"
 }
 
 # The zone name dsh will accept.
@@ -78,11 +85,11 @@ start_harness() {
     return
   fi
   mkdir -p "$home/dsh-home/profiles/web"
-  [ -f "$home/dsh-home/settings.yaml" ] || {
-    [ -f "$HOME/.dsh/settings.yaml" ] || fail "no ~/.dsh/settings.yaml to borrow model credentials from."
-    cp "$HOME/.dsh/settings.yaml" "$home/dsh-home/settings.yaml"
-    chmod 600 "$home/dsh-home/settings.yaml"
-  }
+  [ -f "$settings" ] || fail "no $settings to take model routes from."
+  local routes
+  routes=$(node -e 'import(process.argv[1]).then(m => process.stdout.write(m.modelRows(require("node:fs").readFileSync(process.argv[2], "utf8"))))' \
+    "$root/e2e/lib/index.js" "$settings")
+  [ -n "$routes" ] || fail "$settings names no llm-pi-ai routes for the harness to use."
   # The port lives in the home's own config, which is what makes the home the
   # instance: a second dsh started here loses the port and stops, rather than
   # quietly becoming a second answer to the same question.
@@ -95,6 +102,8 @@ start_harness() {
 - insert:
     - id: directory-picker-browse
       name: '@deepseek-ai/dsh-host-directory-picker-browse'
+    - id: ui-directory-picker-browse
+      name: '@deepseek-ai/dsh-client-ui-directory-picker-browse'
 
 - id: llm-deepseek
   disabled: true
@@ -103,7 +112,13 @@ start_harness() {
   config:
     host: 127.0.0.1
     port: $port
+
+$routes
 YAML
+  # The Bridle runs inside this dsh, as a plugin: dsh 0.2 hands its port and
+  # sign-in token to plugins and to nothing else. ROWEL_HOME on the dsh below
+  # is the identity the simulator pairs with.
+  node "$root/bridle/lib/cli.js" plugin install --dsh-home "$home/dsh-home" >/dev/null
   # An empty agents home, because `DSH_HOME` does not isolate skills: they are
   # read from a shared `~/.agents`, so this harness inherited every skill on
   # the machine and dsh injected the whole catalogue — names and descriptions —
@@ -118,26 +133,22 @@ YAML
   # on the PATH the answers all begin /Users/<operator>, which is the same
   # leak the fixture move fixed, arriving through the toolchain instead. With
   # only system directories there is nothing user-specific for a probe to find.
+  local bin
+  bin=$(command -v "$dsh")
   DSH_TELEMETRY_DISABLED=1 DSH_HOME="$home/dsh-home" DSH_AGENTS_HOME="$home/agents-home" \
-    PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
-    nohup dsh web >> "$home/dsh.log" 2>&1 &
+    ROWEL_HOME="$home/rowel-home" PATH="$(dirname "$(command -v node)"):/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+    nohup "$bin" web --no-open >> "$home/dsh.log" 2>&1 &
   printf 'harness starting on :%s ' "$port"
   until curl -s -o /dev/null -m 2 "http://127.0.0.1:$port/"; do printf '.'; sleep 1; done
   echo ' up'
 }
 
 start_bridle() {
-  if [ -f "$home/rowel-home/runtime.json" ]; then
-    pid="$(python3 -c "import json;print(json.load(open('$home/rowel-home/runtime.json'))['pid'])" 2>/dev/null || echo 0)"
-    if [ "$pid" -gt 0 ] && kill -0 "$pid" 2>/dev/null; then
-      say "bridle already running (pid $pid)"
-      return
-    fi
-  fi
-  ROWEL_HOME="$home/rowel-home" nohup node "$root/bridle/lib/cli.js" start \
-    --dsh-home "$home/dsh-home" >> "$home/bridle.log" 2>&1 &
-  sleep 6
-  say "bridle up"
+  # Started by dsh, as its plugin (see start_harness); wait until it is up.
+  local waited=0
+  until [ -f "$home/rowel-home/runtime.json" ] || [ "$waited" -ge 30 ]; do sleep 1; waited=$((waited + 1)); done
+  [ -f "$home/rowel-home/runtime.json" ] || fail "the Bridle plugin did not start; see $home/dsh.log"
+  say "bridle up (inside dsh)"
 }
 
 # --- A repository worth photographing ---------------------------------------
@@ -239,8 +250,8 @@ EOF
 prompt_now() {
   local attempt reply
   for attempt in 1 2 3 4 5 6 7 8; do
-    reply=$(rpc session.prompt \
-      "{\"sessionId\":\"$1\",\"mode\":\"queue\",\"content\":$2,\"clientTimeZone\":\"$(zone)\"}")
+    reply=$(rpc session/prompt \
+      "{\"request\":{\"requestId\":\"$(uuidgen)\",\"sessionId\":\"$1\",\"mode\":\"queue\",\"content\":$2,\"clientTimeZone\":\"$(zone)\"}}")
     case "$reply" in *'"accepted":true'*) return 0 ;; esac
     sleep 5
   done
@@ -250,11 +261,11 @@ prompt_now() {
 # $1 title, $2 prompt text
 converse() {
   local sid
-  sid=$(rpc session.create "{\"cwd\":\"$sample\"}" | value '["sessionId"]')
-  [ -n "$sid" ] || fail "session.create returned no sessionId"
+  sid=$(rpc session/create "{\"request\":{\"workspaceId\":\"$workspace\"}}" | value '["sessionId"]')
+  [ -n "$sid" ] || fail "session/create returned no sessionId"
   prompt_now "$sid" "[{\"type\":\"text\",\"text\":\"$2\"}]"
   sleep 1
-  rpc session.rename "{\"sessionId\":\"$sid\",\"title\":\"$1\"}" >/dev/null
+  rpc session/rename "{\"request\":{\"sessionId\":\"$sid\",\"title\":\"$1\"}}" >/dev/null
   say "  $1"
 }
 
@@ -267,19 +278,19 @@ converse() {
 converse_with_sketch() {
   local sid content vision
   [ -f /tmp/rowel-sketch.png ] || swift Tools/Sketch.swift /tmp/rowel-sketch.png
-  sid=$(rpc session.create "{\"cwd\":\"$sample\"}" | value '["sessionId"]')
-  [ -n "$sid" ] || fail "session.create returned no sessionId"
+  sid=$(rpc session/create "{\"request\":{\"workspaceId\":\"$workspace\"}}" | value '["sessionId"]')
+  [ -n "$sid" ] || fail "session/create returned no sessionId"
   # The default model refuses an image outright — "does not support image
   # input" — so ask the harness which of its models can take one rather than
   # naming a model here that a different machine may not have.
-  vision=$(rpc session.models "{\"sessionId\":\"$sid\"}" | python3 -c '
+  vision=$(rpc session/modelCatalog '{}' | python3 -c '
 import json, re, sys
-ids = [m["id"] for g in json.load(sys.stdin)["result"]["value"].get("groups", [])
-       for m in g.get("models", []) if re.search("vision", m["id"], re.I)]
-print(ids[0] if ids else "")
+pairs = [(g["id"], m["id"]) for g in json.load(sys.stdin)["result"]["value"].get("groups", [])
+         for m in g.get("models", []) if re.search("vision", m["id"], re.I)]
+print(json.dumps({"provider": pairs[0][0], "model": pairs[0][1]}) if pairs else "")
 ')
   [ -n "$vision" ] || fail "this harness has no model that accepts an image; the sketch shot needs one"
-  rpc session.selectModel "{\"sessionId\":\"$sid\",\"provider\":\"commandcode\",\"model\":\"$vision\"}" >/dev/null
+  rpc session/selectModel "$(python3 -c 'import json,sys; v=json.loads(sys.argv[2]); print(json.dumps({"request": {"sessionId": sys.argv[1], **v}}))' "$sid" "$vision")" >/dev/null
   content=$(python3 - "$2" <<'PY'
 import base64, json, sys
 data = base64.b64encode(open('/tmp/rowel-sketch.png', 'rb').read()).decode()
@@ -291,14 +302,16 @@ PY
 )
   prompt_now "$sid" "$content"
   sleep 1
-  rpc session.rename "{\"sessionId\":\"$sid\",\"title\":\"$1\"}" >/dev/null
+  rpc session/rename "{\"request\":{\"sessionId\":\"$sid\",\"title\":\"$1\"}}" >/dev/null
   say "  $1"
 }
 
 seed_conversations() {
-  local wid
-  wid=$(rpc workspace.create "{\"path\":\"$sample\"}" | value '["workspace"]["workspaceId"]' 2>/dev/null || true)
-  [ -n "$wid" ] && rpc workspace.rename "{\"workspaceId\":\"$wid\",\"title\":\"checkout-api\"}" >/dev/null
+  # Every conversation starts in the workspace, which is what puts it in the
+  # Mac's sidebar and under its header in the app.
+  workspace=$(rpc workspace/create "{\"request\":{\"path\":\"$sample\"}}" | value '["workspace"]["workspaceId"]')
+  [ -n "$workspace" ] || fail "workspace/create returned no workspace"
+  rpc workspace/rename "{\"request\":{\"workspaceId\":\"$workspace\",\"title\":\"checkout-api\"}}" >/dev/null
   say "starting conversations"
   converse "Add CAD and AUD to the currency table" \
     "Read rates.py and test_rates.py, then add CAD and AUD with correct rates and a check for each. Run python3 test_rates.py when you are done. Work only inside this directory — do not inspect anything else on this machine."
@@ -335,7 +348,7 @@ settle() {
   local waited=0 busy
   printf 'waiting for the conversations to finish '
   while [ "$waited" -lt 900 ]; do
-    busy=$(rpc session.list '{}' | python3 -c '
+    busy=$(rpc session/list '{"_request":{}}' | python3 -c '
 import json, sys
 items = json.load(sys.stdin)["result"]["value"]["items"]
 # The approval one is meant to sit there waiting; it is not unfinished work.
@@ -446,5 +459,6 @@ case "${1:-}" in
   # conversation rather than the reason. Re-running the shots alone is the
   # common case, and it was the one path that skipped the wait.
   --shots) settle; take ;;
+  --up) start_harness; start_bridle ;;
   *) start_harness; start_bridle; seed_repo; seed_conversations; settle; take ;;
 esac

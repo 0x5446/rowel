@@ -3,4 +3,4 @@
 export { HandshakeRefused, RowelPhone, type CallResult, type PhoneOptions, type PhoneStream, type StreamOutcome } from './phone.ts'
 export { startStack, waitFor, type Stack, type StackOptions } from './stack.ts'
 export { FakeAgent, type RecordedCall, type RecordedStream } from './fake-agent.ts'
-export { dshBinary, modelAllowed, startDsh, type ThrowawayDsh } from './dsh.ts'
+export { dshBinary, modelAllowed, modelRows, startDsh, type ThrowawayDsh } from './dsh.ts'
