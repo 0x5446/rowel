@@ -8,7 +8,7 @@
  */
 
 import { spawn } from 'node:child_process'
-import { closeSync, mkdirSync, openSync, readFileSync, rmSync } from 'node:fs'
+import { closeSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { createConnection } from 'node:net'
 import { rowelHome } from '../identity.ts'
@@ -192,6 +192,11 @@ export async function ensureDsh(options: EnsureOptions): Promise<DiscoveredDsh> 
   // back off the disk.
   const directory = join(rowelHome(), 'secrets')
   mkdirSync(directory, { recursive: true, mode: 0o700 })
+  // Left behind by a Bridle killed between launch and cleanup. Each holds a
+  // token that may still be live; none is any use to anyone now.
+  for (const name of readdirSync(directory)) {
+    if (/^dsh-launch-\d+\.log$/u.test(name)) rmSync(join(directory, name), { force: true })
+  }
   const output = join(directory, `dsh-launch-${String(process.pid)}.log`)
   const descriptor = openSync(output, 'w', 0o600)
   let child: ReturnType<typeof spawn>
@@ -205,6 +210,10 @@ export async function ensureDsh(options: EnsureOptions): Promise<DiscoveredDsh> 
   let spawnFailed: string | undefined
   child.once('error', (error: Error) => { spawnFailed = error.message })
   const deadline = Date.now() + LAUNCH_TIMEOUT_MS
+  // The last failed exchange, if any. Retried until the deadline: once the file
+  // is gone the token is gone with it, and a dsh left running without it can
+  // only be signed in to by restarting it.
+  let exchangeFailed: string | undefined
   try {
     while (Date.now() < deadline) {
       if (spawnFailed !== undefined) {
@@ -218,16 +227,23 @@ export async function ensureDsh(options: EnsureOptions): Promise<DiscoveredDsh> 
       if (identity.kind === 'locked') {
         const token = tokenLine(output)
         if (token !== undefined) {
-          rememberCookie(url, await exchangeToken(url, token))
-          const signedIn = await identifyDsh(url, cookieFor(url))
-          log(`dsh is up at ${url}`)
-          return { url, launched: true, identity: signedIn }
+          try {
+            rememberCookie(url, await exchangeToken(url, token))
+            const signedIn = await identifyDsh(url, cookieFor(url))
+            log(`dsh is up at ${url}`)
+            return { url, launched: true, identity: signedIn }
+          } catch (error) {
+            exchangeFailed = error instanceof Error ? error.message : String(error)
+          }
         }
       }
       await new Promise<void>((resolve) => { setTimeout(resolve, 500) })
     }
   } finally {
     rmSync(output, { force: true })
+  }
+  if (exchangeFailed !== undefined) {
+    throw new Error(`dsh started at ${url}, but bridle could not sign in to it (${exchangeFailed}); stop that dsh and start bridle again`)
   }
   throw new Error(`dsh did not answer at ${url} within ${String(LAUNCH_TIMEOUT_MS / 1000)}s`)
 }

@@ -12,6 +12,7 @@
  */
 
 import { assertLoopback } from './client.ts'
+import { forgetCookie } from './credentials.ts'
 
 /** What a dsh address turned out to be. */
 export type DshIdentity =
@@ -49,6 +50,10 @@ export async function identifyDsh(base: string, cookie?: string): Promise<DshIde
       : { kind: 'unknown', detail: 'answered, but not the way dsh does' }
   }
   if (open.status !== 401) return { kind: 'unknown', detail: `HTTP ${String(open.status)} where dsh would answer or ask to sign in` }
+  // Plenty of local services answer 401. Taking every one for a dsh would bind
+  // Bridle to the wrong port — and send that service the cookie. dsh says who
+  // it is when its page refuses: "dsh web authentication required; …".
+  if (!await asksForDshSignIn(origin)) return { kind: 'unknown', detail: 'asks to sign in, but not the way dsh does' }
   if (cookie === undefined) return { kind: 'locked' }
 
   let bundles: Response
@@ -57,7 +62,10 @@ export async function identifyDsh(base: string, cookie?: string): Promise<DshIde
   } catch (error) {
     return { kind: 'unknown', detail: describe(error) }
   }
-  if (bundles.status === 401) return { kind: 'locked' }
+  if (bundles.status === 401) {
+    forgetCookie(origin.origin, cookie)
+    return { kind: 'locked' }
+  }
   const body = await bundles.json().catch(() => undefined) as
     { result?: { ok?: boolean; value?: unknown } } | undefined
   const list = body?.result?.ok === true && Array.isArray(body.result.value) ? body.result.value as unknown[] : []
@@ -95,9 +103,22 @@ export function describeIdentity(identity: DshIdentity): string {
     case 'locked':
       return 'dsh 0.1.2 or newer, not signed in — run "bridle plugin install" and restart dsh, or let bridle start dsh itself'
     case 'signed-in':
-      return `dsh ${identity.version}${speaksCurrentApi(identity.version) ? '' : ' (a pre-0.2 transition release; update dsh)'}`
+      // Until M1 of docs/dsh-0.2-migration.md: signed in, but the rest of
+      // this Bridle still speaks the 0.1 API. Delete the note with the switch.
+      return `dsh ${identity.version}${speaksCurrentApi(identity.version)
+        ? ' (signed in; this Bridle cannot serve dsh 0.2 yet — keep dsh 0.1.1 for now)'
+        : ' (a pre-0.2 transition release; update dsh)'}`
     case 'unknown':
       return `not identified (${identity.detail})`
+  }
+}
+
+async function asksForDshSignIn(origin: URL): Promise<boolean> {
+  try {
+    const page = await fetch(new URL('/', origin), { redirect: 'manual', signal: AbortSignal.timeout(3_000) })
+    return page.status === 401 && (await page.text()).includes('dsh web')
+  } catch {
+    return false
   }
 }
 

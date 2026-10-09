@@ -20,6 +20,8 @@
  * handshake.
  */
 
+import { readFileSync, realpathSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import {
   BridleCore,
   DirectServer,
@@ -28,6 +30,7 @@ import {
   competingDaemon,
   exchangeToken,
   rememberCookie,
+  speaksCurrentApi,
   tokenFrom,
   VERSION,
   loadState,
@@ -42,10 +45,40 @@ const HEARTBEAT_MS = 5_000
 
 /**
  * How long to wait for dsh to hand over its address and token before starting
- * without them. dsh 0.2 hands them over as soon as its web server is up; dsh
- * 0.1 has neither service and never will, and still has to get a Bridle.
+ * without them. A dsh known to be 0.2 hands them over as soon as its web
+ * server is up, and a Bridle started before that would be bound to the wrong
+ * address for good — so it is waited for, with a ceiling only so that a dsh
+ * that never does still gets a Bridle that says why it cannot sign in. A dsh
+ * known to be 0.1 has neither service and starts its Bridle at once; one whose
+ * version cannot be read gets a short wait.
  */
-const SIGN_IN_WAIT_MS = 3_000
+const SIGN_IN_WAIT_MS = { current: 60_000, unknown: 3_000 }
+
+/**
+ * The version of the dsh this plugin is running inside, read from its own
+ * package — dsh's CLI is the process's entry script.
+ * @returns the version, or undefined when it cannot be found.
+ */
+function hostDshVersion(): string | undefined {
+  // Through the link: `dsh` on the PATH, and `node_modules/.bin/dsh`, are
+  // symlinks to the package's `lib/bin.js`.
+  let directory: string
+  try {
+    directory = dirname(realpathSync(process.argv[1] ?? ''))
+  } catch {
+    return undefined
+  }
+  for (let depth = 0; depth < 6 && directory !== dirname(directory); depth += 1) {
+    try {
+      const manifest = JSON.parse(readFileSync(join(directory, 'package.json'), 'utf8')) as { name?: unknown; version?: unknown }
+      if (manifest.name === '@deepseek-ai/dsh' && typeof manifest.version === 'string') return manifest.version
+    } catch {
+      // No manifest here; keep climbing.
+    }
+    directory = dirname(directory)
+  }
+  return undefined
+}
 
 /** The two dsh 0.2 services that say where dsh answers and how to sign in. */
 interface SignInServices {
@@ -131,13 +164,28 @@ export function apply(
   // to loopback on the port it reports (see `auth.ts`).
   let signedIn: () => void = () => {}
   const signIn = new Promise<void>((resolve) => { signedIn = resolve })
+  const hostVersion = hostDshVersion()
   ctx.inject?.(['connection', 'webServer'], (inner) => {
-    const base = `http://127.0.0.1:${String(inner.webServer.port)}`
-    const token = tokenFrom(inner.connection.authenticatedUrl(base))
+    // Inside dsh's own loader: a throw here is dsh's problem, not ours.
+    let base: string
+    let token: string | undefined
+    try {
+      base = `http://127.0.0.1:${String(inner.webServer.port)}`
+      token = tokenFrom(inner.connection.authenticatedUrl(base))
+    } catch (error) {
+      ctx.logger?.error?.(`rowel-bridle: dsh's sign-in services misbehaved: ${error instanceof Error ? error.message : String(error)}`)
+      signedIn()
+      return
+    }
     if (token === undefined) {
       ctx.logger?.error?.('rowel-bridle: dsh handed over no sign-in token')
       signedIn()
       return
+    }
+    // Run again by the loader when the services change. A Bridle already
+    // running keeps its address; a dsh that moved port needs a restart.
+    if (core !== undefined && state.dshUrl !== base && (config.dsh === undefined || config.dsh.length === 0)) {
+      ctx.logger?.error?.(`rowel-bridle: dsh now answers at ${base}, not ${state.dshUrl}; restart dsh`)
     }
     exchangeToken(base, token)
       .then((cookie) => {
@@ -218,7 +266,17 @@ export function apply(
   })()
 
   async function start(): Promise<void> {
-    await Promise.race([signIn, new Promise<void>((resolve) => { setTimeout(resolve, SIGN_IN_WAIT_MS).unref() })])
+    const wait = hostVersion === undefined
+      ? SIGN_IN_WAIT_MS.unknown
+      : speaksCurrentApi(hostVersion) ? SIGN_IN_WAIT_MS.current : 0
+    let waited = false
+    await Promise.race([
+      signIn,
+      new Promise<void>((resolve) => { setTimeout(() => { waited = true; resolve() }, wait).unref() }),
+    ])
+    if (waited && wait === SIGN_IN_WAIT_MS.current) {
+      ctx.logger?.error?.(`rowel-bridle: dsh ${hostVersion ?? ''} never handed over its address and sign-in token; starting without them`)
+    }
     // Unloaded while waiting: starting now would leave a Bridle nobody stops.
     if (disposed) return
     const running = new BridleCore(state)

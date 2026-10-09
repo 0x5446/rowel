@@ -97,9 +97,14 @@ export class DshClient implements AgentClient {
     return cookie === undefined ? {} : { cookie }
   }
 
-  /** A refusal of the cookie that was sent means it is no good any more. */
+  /**
+   * A refusal of the cookie that was sent means it is no good any more. Every
+   * path that sends one comes through here, so a stale cookie is dropped
+   * wherever it is refused first.
+   */
   private refused(status: number, sent: Record<string, string>): void {
-    if (status === 401 && sent['cookie'] !== undefined) forgetCookie(this.base.origin)
+    const cookie = sent['cookie']
+    if (status === 401 && cookie !== undefined) forgetCookie(this.base.origin, cookie)
   }
 
   /**
@@ -156,12 +161,14 @@ export class DshClient implements AgentClient {
    * @returns the carrier receipt dsh reports.
    */
   async respond(message: unknown): Promise<unknown> {
+    const sent = this.credentials()
     const response = await fetch(new URL('/api/respond', this.base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json', ...this.credentials() },
+      headers: { 'content-type': 'application/json', ...sent },
       body: JSON.stringify(message),
       signal: AbortSignal.timeout(this.requestTimeoutMs),
     })
+    this.refused(response.status, sent)
     if (!response.ok) throw new Error(`dsh /api/respond answered HTTP ${String(response.status)}`)
     return response.json()
   }
@@ -212,7 +219,8 @@ export class DshClient implements AgentClient {
     signal: AbortSignal,
   ): Promise<string | undefined> {
     return new Promise((resolve) => {
-      const socket = new WebSocket(address, { headers: { host: this.base.host, ...this.credentials() } })
+      const sent = this.credentials()
+      const socket = new WebSocket(address, { headers: { host: this.base.host, ...sent } })
       let settled = false
       const settle = (detail?: string): void => {
         if (settled) return
@@ -234,6 +242,11 @@ export class DshClient implements AgentClient {
           // is strictly better than tearing down a live conversation.
         }
       })
+      socket.on('unexpected-response', (_request, response) => {
+        this.refused(response.statusCode ?? 0, sent)
+        socket.terminate()
+        settle(`dsh refused the downlink (HTTP ${String(response.statusCode)})`)
+      })
       socket.on('error', (error: Error) => { settle(error.message) })
       socket.on('close', () => { settle('dsh closed the downlink') })
     })
@@ -249,7 +262,11 @@ export class DshClient implements AgentClient {
     const url = new URL('/api/session.export', this.base)
     url.searchParams.set('sessionId', sessionId)
     if (includeDescendants) url.searchParams.set('includeDescendants', 'true')
-    return fetch(url, { headers: this.credentials() })
+    const sent = this.credentials()
+    return fetch(url, { headers: sent }).then((response) => {
+      this.refused(response.status, sent)
+      return response
+    })
   }
 }
 

@@ -110,6 +110,37 @@ test('something that is not dsh is not identified as one', async (t) => {
   assert.equal(identity.kind, 'unknown')
 })
 
+test('another service that asks to sign in is not taken for dsh, and gets no cookie', async (t) => {
+  // Bound to a usual dsh port, it would otherwise win the probe — and be sent
+  // whatever cookie Bridle holds for that address.
+  const cookies = []
+  const other = await listen((request, response) => {
+    cookies.push(request.headers.cookie)
+    reply(response, 401, 'text/plain', 'Unauthorized')
+  })
+  t.after(() => other.close())
+  rememberCookie(other.url, COOKIE)
+  t.after(() => forgetCookie(other.url, COOKIE))
+  assert.equal((await identifyDsh(other.url, cookieFor(other.url))).kind, 'unknown')
+  assert.equal(await probeDsh(other.url, true), undefined)
+  assert.ok(cookies.every(cookie => cookie === undefined), 'the cookie went to a service that is not dsh')
+})
+
+test('a cookie dsh refuses is forgotten — that cookie, and not a newer one', async (t) => {
+  const dsh = await currentDsh()
+  t.after(() => dsh.close())
+  rememberCookie(dsh.url, 'dsh-auth-abc=expired')
+  assert.deepEqual(await identifyDsh(dsh.url, cookieFor(dsh.url)), { kind: 'locked' })
+  assert.equal(cookieFor(dsh.url), undefined, 'a refused cookie would be sent again on every request')
+
+  // A request still in flight with an old cookie is refused after a fresh one
+  // was saved: the fresh one stays.
+  rememberCookie(dsh.url, COOKIE)
+  forgetCookie(dsh.url, 'dsh-auth-abc=expired')
+  assert.equal(cookieFor(dsh.url), COOKIE)
+  forgetCookie(dsh.url, COOKIE)
+})
+
 test('a locked dsh still counts as found, so bridle does not start a second one on its port', async (t) => {
   // The bug this guards: the old probe asked `host.describe`, read dsh 0.2's
   // 401 as "nothing here", and launched another dsh onto the same port.
@@ -134,6 +165,6 @@ test('cookies are kept per address, privately, and dropped when refused', () => 
   assert.equal(cookieFor('http://localhost:3092'), undefined, 'dsh binds the cookie to the exact Host')
   const file = join(rowelHome, 'secrets', 'dsh-cookies.json')
   assert.equal(statSync(file).mode & 0o777, 0o600, 'a cookie is a credential')
-  forgetCookie('http://127.0.0.1:3092')
+  forgetCookie('http://127.0.0.1:3092', COOKIE)
   assert.equal(cookieFor('http://127.0.0.1:3092'), undefined)
 })
