@@ -18,6 +18,9 @@ import { BridleCore } from './core.ts'
 import { DirectServer } from './direct-server.ts'
 import { DshClient } from './dsh/client.ts'
 import { dshHomeUrl, ensureDsh, probeDsh } from './dsh/discovery.ts'
+import { cookieFor } from './dsh/credentials.ts'
+import { describeIdentity, identifyDsh } from './dsh/identify.ts'
+import { dshHome, installPlugin, uninstallPlugin, PLUGIN_ID } from './dsh/plugin-entry.ts'
 import { approveClaimant, loadState, overrideState, reloadState, rowelHome, revokePeer, saveState, signingKeys, staticKeys, updateState, withdrawOffer } from './identity.ts'
 import { deviceIdFor } from '@rowel/protocol'
 import { BackupError, describeBackup, exportIdentity, importIdentity } from './backup.ts'
@@ -65,6 +68,9 @@ async function main(argv: string[]): Promise<void> {
       return
     case 'service':
       service(options)
+      return
+    case 'plugin':
+      plugin(options)
       return
     case 'backup':
       await backup(options)
@@ -248,7 +254,7 @@ async function launch(options: Options): Promise<Launched | undefined> {
   else if (discovered.url !== state.dshUrl) updateState(state, (disk) => { disk.dshUrl = discovered.url })
   const core = new BridleCore(state, { dsh: new DshClient({ baseUrl: discovered.url }) })
   await core.start()
-  say(`harness   ${discovered.url}${discovered.launched ? ' (started by bridle)' : ''}`)
+  say(`harness   ${discovered.url}${discovered.launched ? ' (started by bridle)' : ''} · ${describeIdentity(discovered.identity)}`)
 
   let direct: DirectServer | undefined
   let directAddresses: string[] = []
@@ -666,6 +672,7 @@ async function status(): Promise<void> {
   const dshUrl = runtime?.dshUrl ?? state.dshUrl
   const health = await new DshClient({ baseUrl: dshUrl }).health()
   say(`harness   ${health.reachable ? 'up' : 'down'} · ${dshUrl}${state.dshHome === undefined ? '' : ` · DSH_HOME ${state.dshHome}`}${health.reachable ? '' : ` (${health.detail ?? 'no answer'})`}`)
+  say(`          ${describeIdentity(await identifyDsh(dshUrl, cookieFor(dshUrl)))}`)
   say('')
   printDevices(state)
 }
@@ -719,6 +726,60 @@ function service(options: Options): void {
     return
   }
   say('Usage: bridle service install | bridle service uninstall')
+  process.exitCode = 1
+}
+
+/**
+ * Put the Bridle plugin into dsh's web profile, or take it out.
+ *
+ * The way a Bridle signs in to a dsh someone started themselves: dsh hands its
+ * port and token to plugins and to nothing else. Edits the profile of the home
+ * named by `--dsh-home`, else `DSH_HOME`, else `~/.dsh`; dsh reads it on its
+ * next start.
+ */
+function plugin(options: Options): void {
+  const action = flagString(options, '_')
+  const home = dshHome(flagString(options, 'dsh-home'))
+  // The plugin ships beside this file in the checkout install.sh makes:
+  // bridle/lib/cli.js → dsh-plugin/lib/index.js.
+  const modulePath = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'dsh-plugin', 'lib', 'index.js')
+  if (action === 'install') {
+    try {
+      statSync(modulePath)
+    } catch {
+      say(`the plugin is not built at ${modulePath} — run "npm run build" in the Rowel checkout`)
+      process.exitCode = 1
+      return
+    }
+    let outcome
+    try {
+      outcome = installPlugin(home, modulePath)
+    } catch {
+      say(`${home} has no web profile yet — run "dsh web" once, then try again`)
+      process.exitCode = 1
+      return
+    }
+    if (outcome.result === 'manual') {
+      say(`${outcome.file} is not in a shape bridle edits. Add this yourself:`)
+      say(outcome.lines)
+      process.exitCode = 1
+      return
+    }
+    say(outcome.result === 'unchanged' ? `${PLUGIN_ID} is already in ${outcome.file}` : `${PLUGIN_ID} ${outcome.result} in ${outcome.file}`)
+    say('Restart dsh to load it. If a bridle service is installed, run "bridle service uninstall" — the plugin replaces it.')
+    return
+  }
+  if (action === 'uninstall') {
+    const outcome = uninstallPlugin(home)
+    if (outcome.result === 'manual') {
+      say(`${outcome.file}: ${outcome.lines}`)
+      process.exitCode = 1
+      return
+    }
+    say(outcome.result === 'removed' ? `${PLUGIN_ID} removed from ${outcome.file}; restart dsh` : `${PLUGIN_ID} is not in ${outcome.file}`)
+    return
+  }
+  say('Usage: bridle plugin install | bridle plugin uninstall   [--dsh-home <path>]')
   process.exitCode = 1
 }
 
@@ -800,6 +861,10 @@ async function doctor(): Promise<void> {
   check(major >= 22, `node ${process.versions.node}`, 'Rowel needs Node 22 or newer')
   const found = await probeDsh(state.dshUrl)
   check(found !== undefined, `harness at ${found ?? state.dshUrl}`, 'no dsh web server answered; "bridle start" can launch one')
+  if (found !== undefined) {
+    const identity = await identifyDsh(found, cookieFor(found))
+    check(identity.kind === 'legacy' || identity.kind === 'signed-in', describeIdentity(identity), describeIdentity(identity))
+  }
   let relayReachable = false
   let relayDetail = ''
   try {
@@ -829,6 +894,8 @@ function usage(): void {
   bridle revoke <prefix>    remove a paired device
   bridle service install    keep the bridle running after login
   bridle service uninstall  remove the background service
+  bridle plugin install     run bridle inside dsh instead (signs in to dsh 0.2)
+  bridle plugin uninstall   take it out of dsh again
   bridle backup <file>      save this machine's identity, encrypted
   bridle restore <file>     put a saved identity back (replaces the current one)
   bridle doctor             check this machine's setup
