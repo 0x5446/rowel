@@ -43,6 +43,14 @@ device="${ROWEL_SHOTS_DEVICE:-iPhone 17 Pro Max}"
 # which it did, six times over, on the store listing.
 sample="/Users/Shared/code/checkout-api"
 
+# Owner-only, all of it: the log carries dsh's launch token, which signs in to
+# the harness for as long as it runs, and $home may be anywhere.
+umask 077
+mkdir -p "$home"
+chmod 700 "$home"
+# A home from before this rule may hold a log anyone could read.
+[ -f "$home/dsh.log" ] && chmod 600 "$home/dsh.log"
+
 if [ -t 1 ]; then bold=$(printf '\033[1m'); off=$(printf '\033[0m'); else bold=''; off=''; fi
 say() { printf '%s==>%s %s\n' "$bold" "$off" "$*"; }
 fail() { printf '%s\n' "$*" >&2; exit 1; }
@@ -133,11 +141,16 @@ YAML
   # on the PATH the answers all begin /Users/<operator>, which is the same
   # leak the fixture move fixed, arriving through the toolchain instead. With
   # only system directories there is nothing user-specific for a probe to find.
-  local bin
+  #
+  # dsh is a Node script, so Node is named here rather than found on that
+  # PATH: wherever it is installed — a version manager under the operator's
+  # home, say — its directory stays out of what the agent can see.
+  local bin node
   bin=$(command -v "$dsh")
+  node=$(command -v node)
   DSH_TELEMETRY_DISABLED=1 DSH_HOME="$home/dsh-home" DSH_AGENTS_HOME="$home/agents-home" \
-    ROWEL_HOME="$home/rowel-home" PATH="$(dirname "$(command -v node)"):/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
-    nohup "$bin" web --no-open >> "$home/dsh.log" 2>&1 &
+    ROWEL_HOME="$home/rowel-home" PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+    nohup "$node" "$bin" web --no-open >> "$home/dsh.log" 2>&1 &
   printf 'harness starting on :%s ' "$port"
   until curl -s -o /dev/null -m 2 "http://127.0.0.1:$port/"; do printf '.'; sleep 1; done
   echo ' up'
@@ -250,8 +263,9 @@ EOF
 prompt_now() {
   local attempt reply
   for attempt in 1 2 3 4 5 6 7 8; do
+    # Retried, so a refusal is read rather than allowed to end the script.
     reply=$(rpc session/prompt \
-      "{\"request\":{\"requestId\":\"$(uuidgen)\",\"sessionId\":\"$1\",\"mode\":\"queue\",\"content\":$2,\"clientTimeZone\":\"$(zone)\"}}")
+      "{\"request\":{\"requestId\":\"$(uuidgen)\",\"sessionId\":\"$1\",\"mode\":\"queue\",\"content\":$2,\"clientTimeZone\":\"$(zone)\"}}" || true)
     case "$reply" in *'"accepted":true'*) return 0 ;; esac
     sleep 5
   done

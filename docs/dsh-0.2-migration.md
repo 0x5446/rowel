@@ -143,7 +143,7 @@ Bridle 开一条自己的 `$events` 流：收到 `approval/request` 或 `user-qu
 | 工作区 | `workspace.list` 等 | `workspace/follow` 流（先全量后增量）+ `workspace/create\|rename\|delete\|archiveSession`；新增 `unarchiveSession` |
 | 打开会话 | `session.history`（Bridle 瘦身） | `session/follow`（尾页快照 + 增量，`assistantStream: true` 取流式文字）+ `session/page` 向上翻。尾页大小沿用现在的 25 条消息：app 的会话列表已改为非懒加载的 `VStack`（懒加载在真机上会卡死，见 `ConversationView`），布局代价随已加载的行数线性增长，快照取得越大，打开越慢 |
 | 流式文字/思考 | `assistant/chunk` 事件 | follow 的 `assistant-stream` 帧（start/chunk/end） |
-| 工具卡片 | 服务端 `view` | 0.2 不再给 `view`，app 从 `tool/call`、`tool/result` 记录自己渲染（现有的本地渲染路径补全）。`ask_user_question` 的问题卡片（app 1.0 起有）读调用参数里的 `questions` 和结果里的 `{answers:[{id, selected, custom?}]}`，与 0.2 的 `AskUserQuestionAnswer` 形状一致，不用改；但 timed 模式下答案以 `user-question-reply` 消息 steer 进会话、不进工具结果（协议参考 §5.3），卡片会显示"未回答"——timed 默认关闭，M3 补测时一并处理（把该消息关联回对应卡片） |
+| 工具卡片 | 服务端 `view` | 0.2 不再给 `view`，app 从 `tool/call`、`tool/result` 记录自己渲染（现有的本地渲染路径补全）。`ask_user_question` 的问题卡片（app 1.0 起有）读调用参数里的 `questions` 和结果里的 `{answers:[{id, selected, custom?}]}`，与 0.2 的 `AskUserQuestionAnswer` 形状一致，不用改；但 timed 模式下答案以 `user-question-reply` 消息 steer 进会话、不进工具结果（协议参考 §5.3），卡片会显示"未回答"——timed 默认关闭，延后到 dsh 打开该模式时再接（把该消息关联回对应卡片） |
 | 发送 | `session.prompt` | `session/prompt`，新增必填 `requestId`（客户端生成 UUID，重试复用同一个） |
 | 发送图片 | 内嵌在 `session.prompt` 的内容里 | 照旧内嵌在 `session/prompt` 的内容里（`{type:'image', mediaType, data}`），服务端转成持久引用；限制取投影 `imageLimits`（单张 20 MiB 等），同时受隧道 32 MiB 帧上限约束，超限在 app 侧压缩或拒绝。`fileUploads/*` 只用于非图片文件（非目标） |
 | 读历史图片 | `session.attachment` | `session/attachment {sessionId, attachmentId}`，返回 base64 |
@@ -167,8 +167,8 @@ Bridle 开一条自己的 `$events` 流：收到 `approval/request` 或 `user-qu
 | M0 | Bridle：版本识别、认证两条路径（插件 ctx / 自起抓 token）、`bridle plugin install`；本地路径插件回归检查 | 对隔离的 dsh 0.2 `web` profile 两条认证路径都拿到 cookie、`session/list` 200；配了 `publicUrl` 时 (b) 仍用 loopback 换到 cookie；用户自起 dsh 且没装插件时给出"运行 `bridle plugin install`"的明确提示；读到真实版本号，0.1.1 与 0.1.7 都给出明确提示 |
 | M1 | Bridle：隧道 v2（call / open / item / end / cancel、流映射、32 MiB 边界）、隧道版本 2（握手协商，只支持 `[2]`）；删除 event-log / history / resume；自己的 `$events` 推送 | e2e（JS 测试手机）对真 dsh 0.2：列表（含重连合并）、开会话快照、翻页、审批经 waterfall 作答、无手机时振铃且网络抖动不重复振铃、手机断线时其名下流被取消；D8 的 CI 契约任务（读、写、断线）上线 |
 | M2 | app：Harness v2、列表与工作区、打开会话（follow + page）、新记录折叠、流式帧、重连重订阅 | 单测覆盖折叠；模拟器对真 dsh 0.2 打开历史会话、看完整流式回答；接近与超过帧上限的大会话能打开（减半重开）；反复断网重连后列表、排队、未决审批都正确 |
-| M3 | app：发送（requestId、图片、排队/steer/取消）、审批与提问、命令/技能、模型、权限预设、子代理、搜索/重命名/分叉/归档 | 现有 UI 测试全部改到 0.2 并通过；真机走一遍审批；内嵌图片发送与历史图片读取；权限切换；默认 `web` profile 上搜索的启用与真实调用 |
-| M4 | 文档（inventory 换成 0.2、architecture、SECURITY、protocol）、CHANGELOG、TestFlight 1.1、按 D7 发布 | D7 每一步执行完毕；官网与 README 写明需要 dsh ≥ 0.2 |
+| M3 | app：发送（requestId、图片、排队/steer/取消）、审批与提问、命令/技能、模型、权限预设、子代理、搜索/重命名/分叉/归档 | 现有 UI 测试全部改到 0.2 并通过；模拟器对真模型走一遍审批；内嵌图片发送与历史图片读取；权限切换；默认 `web` profile 上搜索的启用与真实调用（2026-10-09 完成，实测见协议参考 §12） |
+| M4 | 文档（inventory 换成 0.2、architecture、SECURITY、protocol）、CHANGELOG、TestFlight 1.1、按 D7 发布 | D7 每一步执行完毕；官网与 README 写明需要 dsh ≥ 0.2；TestFlight 1.1 在真机上走一遍审批 |
 
 粗估：M0 半天，M1 1.5 天，M2 3 天，M3 2–3 天，M4 1 天，共约 **1.5 周**（2026-10-09 砍掉贴 URL 认证、旧 app 识别、桌面端后）。每个里程碑单独 PR、CI 通过再进下一个。
 
@@ -176,7 +176,7 @@ Bridle 开一条自己的 `$events` 流：收到 `approval/request` 或 `user-qu
 
 1. ~~桌面端没实测~~：已移出本次（见非目标）。
 2. ~~本地路径插件条目在 0.2 是否仍可用~~：rc.2 与 0.2.1-alpha.1 均已实测可用（D2），保留回归检查。
-3. **dsh 仍是 rc**，0.2 正式版前接口可能再变。D8 的每周任务就是为此。0.2.1-alpha.1 已于 2026-10-08 复核：我们用到的端点与 rc.2 一致，只多了 `--public-url`（已并入 D2）；需要模型的路径（流式帧、审批重发与先答先得、提问、`requestId` 去重）依据相关包代码逐字节相同，未在 alpha.1 上重测，M1/M3 的真机验收会覆盖。
+3. **dsh 仍是 rc**，0.2 正式版前接口可能再变。D8 的每周任务就是为此。0.2.1-alpha.1 已于 2026-10-08 复核：我们用到的端点与 rc.2 一致，只多了 `--public-url`（已并入 D2）；需要模型的路径（流式帧、审批重发与先答先得、提问、`requestId` 去重）依据相关包代码逐字节相同，未在 alpha.1 上重测；M3 已在 rc.2 上用真模型验过（协议参考 §12），alpha.1 由 D8 的每周任务与 M4 的真机走查覆盖。
 4. **实测发现的 dsh 缺陷**：`session/prompt` 的 `requestId` 去重有竞态（出队与落盘之间重发会重复）；编辑排队消息会丢附件。app 侧规避：重试只在确认未送达时进行；编辑带附件的排队消息时提示。两条都报给上游。
 5. **子代理会话里的审批**：M3 已实测（协议参考 §12）——默认配置下子代理以委托策略 `never` 运行，不弹审批；app 仍把子代理的请求挂到父会话上，供将来放开时使用。**带倒计时的异步提问**默认关闭，仍未实测，留待 dsh 打开该模式后再接。
 6. **升级 dsh 会改写 `~/.dsh`**（`settings.yaml` → `.imported`，合并进 profile 配置）。这是 dsh 的行为，不归我们管，但"需要 dsh ≥ 0.2"的提示里要说清楚升级是单向的。**更要紧的是 pi-ai provider 会丢**（协议参考 §12）：0.2 默认 profile 不装 `dsh-llm-pi-ai`，导入时 `llm-pi-ai` 一节被丢弃，用 commandcode 等 provider 的人（包括 owner 本机）升级后模型全部不可用，要在 profile 里 `insert` 该插件并带上原 `providers`。M4 的发布说明与升级步骤必须写这一条，最好给出可复制的片段。

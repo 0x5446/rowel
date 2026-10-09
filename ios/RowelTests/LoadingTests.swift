@@ -322,6 +322,42 @@ final class LoadingTests: XCTestCase {
         ]))
         try await until("the card") { session.approvals["s1"] != nil }
         XCTAssertEqual(session.approvals["s1"]?.id, "e1")
+
+        // Its older pages come through the parent as well.
+        let conversation = session.conversation("3c0e4ed8")
+        transport.desk.send("session/follow", session: nil, snapshot([event("step/end", seq: 9, data: .emptyObject)], hasMore: true))
+        try await until("the snapshot") { conversation.loaded }
+        await transport.answer("session/page", .object(["records": .array([]), "hasMore": .bool(false)]))
+        await session.loadOlder(conversation)
+        let paged = await transport.payloads("session/page").first
+        XCTAssertEqual(paged?.path("request", "address", "parentSessionId")?.stringValue, "s1")
+        XCTAssertEqual(paged?.path("request", "address", "kind")?.stringValue, "subagent")
+    }
+
+    /// On a reconnect dsh re-sends what is waiting right behind `ready`, ahead
+    /// of the list that says whose child a subagent is. The card moves to the
+    /// parent once the list has said.
+    func testASubagentsCardArrivingBeforeTheListMovesToItsParent() async throws {
+        let transport = ScriptedTransport()
+        await transport.hold("session/list")
+        let session = machine(transport)
+        try await connect(session, transport, list: nil)
+        try await until("the read") { await transport.count("session/list") == 1 }
+        transport.desk.send("$events", .object([
+            "type": .string("waterfall"), "event": .string("approval/request"), "eventId": .string("e1"),
+            "agentId": .string("3c0e4ed8"), "request": .object(["toolName": .string("bash")]),
+        ]))
+        try await until("the card") { !session.approvals.isEmpty }
+        XCTAssertNotNil(session.approvals["3c0e4ed8"], "nobody has said whose child it is yet")
+
+        let child: JSONValue = .object([
+            "sessionId": .string("3c0e4ed8"), "updatedAt": .number(1_700_000_000_000), "running": .bool(true),
+            "blank": .bool(false), "origin": .string("subagent"), "parentSessionId": .string("s1"),
+        ])
+        await transport.release("session/list", .object(["items": .array([row("s1"), child])]))
+        try await until("the card to move") { session.approvals["s1"] != nil }
+        XCTAssertNil(session.approvals["3c0e4ed8"])
+        XCTAssertEqual(session.approvals["s1"]?.sessionId, "s1")
     }
 
     // MARK: - Failures

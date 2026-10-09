@@ -738,6 +738,14 @@ public struct DirectoryListing: Equatable {
     public var crumbs: [DirectoryEntry]
     public var entries: [DirectoryEntry]
     public var truncated: Bool
+
+    /// Whether a failed listing means this Mac's dsh will not browse for a
+    /// phone at all — its picker is the native one — rather than that one
+    /// folder could not be read. The folder sheet answers the first with
+    /// instructions, the second with the error.
+    public static func cannotBrowse(_ error: CallError) -> Bool {
+        error.code == "directory-picker/unavailable"
+    }
 }
 
 /// One model the session can switch to.

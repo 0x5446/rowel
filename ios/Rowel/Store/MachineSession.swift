@@ -827,7 +827,32 @@ public final class MachineSession {
     /// The rows the list shows — subagents left out, their parents noted.
     private func listed(_ items: [SessionSummary]) -> [SessionSummary] {
         for item in items where item.isSubagent { learnParent(of: item) }
+        reseatCards()
         return items.filter { !$0.isSubagent }.sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    /// Move a card that arrived before its subagent's parent was known to the
+    /// conversation that spawned it. On a reconnect dsh re-sends what is
+    /// waiting right behind `ready`, ahead of the list that names parents.
+    private func reseatCards() {
+        for (sessionId, approval) in approvals where owner(of: sessionId) != sessionId {
+            approvals[sessionId] = nil
+            let parent = owner(of: sessionId)
+            if approvals[parent] == nil {
+                var moved = approval
+                moved.sessionId = parent
+                approvals[parent] = moved
+            }
+        }
+        for (sessionId, question) in questions where owner(of: sessionId) != sessionId {
+            questions[sessionId] = nil
+            let parent = owner(of: sessionId)
+            if questions[parent] == nil {
+                var moved = question
+                moved.sessionId = parent
+                questions[parent] = moved
+            }
+        }
     }
 
     /// Note a subagent's parent from its list row, keeping a mode the parent's

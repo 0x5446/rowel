@@ -5,7 +5,9 @@
  *
  *   node Tools/dsh.mjs <port> <dsh.log> <endpoint> < args.json
  *
- * Prints dsh's answer, `{"type":"server-response","rpcId":…,"result":{…}}`.
+ * Prints dsh's answer, `{"type":"server-response","rpcId":…,"result":{…}}`,
+ * and exits 1 — with dsh's code and message on stderr — when it is a failure,
+ * so a refused step stops the script instead of passing for one that worked.
  * The arguments arrive on stdin rather than as an argument: one of them is a
  * base64 PNG, larger than a command line holds.
  *
@@ -51,4 +53,12 @@ let cookie
 try { cookie = readFileSync(jar, 'utf8') } catch { cookie = await signIn() }
 let answer = await call(cookie)
 if (answer.status === 401 || answer.status === 403) answer = await call(await signIn())
-process.stdout.write(`${await answer.text()}\n`)
+const text = await answer.text()
+process.stdout.write(`${text}\n`)
+let result
+try { result = JSON.parse(text).result } catch { result = undefined }
+if (result?.ok !== true) {
+  const error = result?.error ?? { code: `http-${answer.status}`, message: text.slice(0, 200) }
+  process.stderr.write(`${endpoint}: ${error.code}: ${error.message}\n`)
+  process.exit(1)
+}
