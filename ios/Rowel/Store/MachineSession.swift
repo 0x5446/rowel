@@ -117,6 +117,13 @@ public final class MachineSession {
     /// Who this app is to `$events` on this connection. An answer to an
     /// approval or a question has to name it (docs/dsh-0.2-protocol.md §5.4).
     @ObservationIgnored private var eventsClientId: String?
+    /// The list read under way for the current `$events` client, and whether
+    /// a list change arrived during it. See `syncList`.
+    @ObservationIgnored private var listSync: (generation: Int, dirty: Bool)?
+    /// Counts `$events` clients, so a read for an older one cannot land.
+    @ObservationIgnored private var listGeneration = 0
+    /// Session list reads in flight; `listing` is whether there are any.
+    @ObservationIgnored private var reads = 0
 
     /// What a new conversation starts on, when the person has stated one.
     ///
@@ -272,6 +279,11 @@ public final class MachineSession {
             // is back, they are opened again.
             if !reachable {
                 attached = false
+                // The `$events` client that delivered them is gone with dsh;
+                // the next one is re-sent whatever is still waiting.
+                approvals = [:]
+                questions = [:]
+                eventsClientId = nil
             } else if !attached {
                 attach()
             }
@@ -309,16 +321,19 @@ public final class MachineSession {
     /// Every stream starts with the whole state — a `ready` and the waiting
     /// requests, a workspace baseline, a projection baseline, a snapshot — so
     /// there is nothing to replay and nothing to reconcile: what arrives
-    /// replaces what was held.
+    /// replaces what was held. The session list is read once `$events` is
+    /// ready (`syncList`); should `$events` itself fail, it is read anyway.
     private func attach() {
         attached = true
         for task in machineStreams { task.cancel() }
         machineStreams = [
-            Task { await self.consume({ await $0.events() }, self.handleEvent) },
+            Task {
+                await self.consume({ await $0.events() }, self.handleEvent)
+                if self.listSync == nil, !self.everListed { await self.refreshSessions() }
+            },
             Task { await self.consume({ await $0.followWorkspaces() }, self.handleWorkspaces) },
             Task { await self.consume({ await $0.followControl() }, self.handleControl) },
         ]
-        Task { await self.refreshSessions() }
         Task { await self.refreshAccessDefault() }
         for conversation in conversations.values {
             follow(conversation)
@@ -330,33 +345,56 @@ public final class MachineSession {
 
     /// Read one machine-wide stream until it ends.
     ///
-    /// A stream the Bridle cut for a reason that clears by itself (`busy`,
-    /// `slow-consumer`) is opened again after a pause. A lost connection is
-    /// not: the next handshake, or dsh coming back, opens everything at once.
+    /// A stream cut for a reason that clears by itself (`reopenable`) is
+    /// opened again after a pause that doubles while it keeps failing. A lost
+    /// connection is not: the next handshake, or dsh coming back, opens
+    /// everything at once.
     private func consume(_ open: @escaping (Harness) async -> TunnelStream, _ handle: @escaping (JSONValue) -> Void) async {
+        var pause = MachineSession.firstPause
         while !Task.isCancelled {
             let stream = await open(harness)
             do {
-                for try await item in stream.items { handle(item) }
+                for try await item in stream.items {
+                    pause = MachineSession.firstPause
+                    handle(item)
+                }
                 return
             } catch let error as CallError where MachineSession.reopenable(error) {
-                try? await Task.sleep(for: .seconds(1))
+                try? await Task.sleep(for: pause)
+                pause = min(pause * 2, MachineSession.longestPause)
             } catch {
                 return
             }
         }
     }
 
+    /// The transient failures of docs/protocol.md §8 that arrive with the
+    /// tunnel still up, so no handshake will reopen the stream. dsh spells
+    /// its own as `gateway/internal` — among them a follow that skipped a
+    /// sequence number, which its own client also answers by reopening.
     private static func reopenable(_ error: CallError) -> Bool {
-        error.code == "busy" || error.code == "slow-consumer"
+        ["busy", "slow-consumer", "timeout", "internal", "gateway/internal"].contains(error.code)
     }
+
+    /// The pause before reopening a stream that failed, and its ceiling.
+    static var firstPause = Duration.seconds(1)
+    private static let longestPause = Duration.seconds(30)
 
     /// One item from `$events`: approvals and questions, and the session list's
     /// changes (docs/dsh-0.2-protocol.md §5, §6.3).
     private func handleEvent(_ item: JSONValue) {
         switch item["type"]?.stringValue {
         case "ready":
+            // A new `$events` client: dsh re-sends it every request still
+            // waiting, so cards from the one before are dropped rather than
+            // left standing for requests that may have ended meanwhile.
             eventsClientId = item["clientId"]?.stringValue
+            approvals = [:]
+            questions = [:]
+            listGeneration += 1
+            listSync = (generation: listGeneration, dirty: false)
+            let generation = listGeneration
+            Task { await self.syncList(generation) }
         case "waterfall":
             handleRequest(item)
         case "cancel":
@@ -402,8 +440,13 @@ public final class MachineSession {
 
     private func handleEmit(_ event: String, _ args: [JSONValue]) {
         let sessionId = args.first?.stringValue ?? ""
+        // While the list is being read, its changes are not applied: the read
+        // may have started before them, and would then put back what they took
+        // away. That they happened is enough — the list is read once more.
+        let holding = listSync != nil && event.hasPrefix("api-session/") && event != "api-session/error"
+        if holding { listSync?.dirty = true }
         switch event {
-        case "api-session/added":
+        case "api-session/added" where !holding:
             // Upsert: dsh sends this when a session appears and again when its
             // agent comes or goes, often twice in a row.
             guard let summary = args.first.flatMap(SessionSummary.init), !summary.isSubagent else { return }
@@ -413,19 +456,21 @@ public final class MachineSession {
                 sessions.insert(summary, at: 0)
             }
         case "api-session/removed":
-            sessions.removeAll { $0.id == sessionId }
+            if !holding { sessions.removeAll { $0.id == sessionId } }
             drop(sessionId)
             approvals[sessionId] = nil
             questions[sessionId] = nil
+        case "api-session/added":
+            break
         case "api-session/status":
             let running = args.dropFirst().first?.boolValue ?? false
-            update(sessionId) {
+            if !holding { update(sessionId) {
                 $0.running = running
                 if running { $0.blank = false }
-            }
+            } }
             existing(sessionId)?.setRunning(running)
             if !running { notifier.finished(machine: machine.name, title: title(of: sessionId)) }
-        case "api-session/activity":
+        case "api-session/activity" where !holding:
             // A message moved the session up the list.
             update(sessionId) {
                 $0.updatedAt = Conversation.date(args.dropFirst().first)
@@ -502,10 +547,12 @@ public final class MachineSession {
 
     private func run(follow conversation: Conversation) async {
         var maxMessages = followMessages
+        var pause = MachineSession.firstPause
         while !Task.isCancelled, conversations[conversation.sessionId] === conversation {
             let stream = await harness.follow(sessionId: conversation.sessionId, maxMessages: maxMessages)
             do {
                 for try await item in stream.items {
+                    pause = MachineSession.firstPause
                     receive(follow: item, into: conversation)
                 }
                 return
@@ -514,7 +561,8 @@ public final class MachineSession {
                 // tool results. Fewer messages, until it fits.
                 maxMessages /= 2
             } catch let error as CallError where MachineSession.reopenable(error) {
-                try? await Task.sleep(for: .seconds(1))
+                try? await Task.sleep(for: pause)
+                pause = min(pause * 2, MachineSession.longestPause)
             } catch let error as CallError where error.isConnectionLoss || error.code == "upstream-lost" {
                 // Opened again with everything else when the connection is back.
                 return
@@ -719,20 +767,52 @@ public final class MachineSession {
     /// Once per connection; `$events` keeps it current from there. The
     /// workspaces come down their own stream.
     public func refreshSessions() async {
-        guard !listing else { return }
+        guard listSync == nil, let items = await readList() else { return }
+        sessions = MachineSession.listed(items)
+    }
+
+    /// Read the list for one `$events` client, the way docs/dsh-0.2-migration.md
+    /// D4 lays out: `$events` replays nothing and shares no cut with the list,
+    /// so its list changes are held back (`handleEmit`) while the list is read.
+    /// If any arrived, the read may predate them, and it is made once more;
+    /// whatever the second read says stands, and the next change converges it.
+    private func syncList(_ generation: Int) async {
+        for attempt in 0..<2 {
+            listSync?.dirty = false
+            let items = await readList()
+            // A newer `$events` client has started its own read.
+            guard listGeneration == generation else { return }
+            guard let items else {
+                listSync = nil
+                return
+            }
+            if listSync?.dirty == true, attempt == 0 { continue }
+            sessions = MachineSession.listed(items)
+            listSync = nil
+            return
+        }
+    }
+
+    private func readList() async -> [SessionSummary]? {
+        reads += 1
         listing = true
         defer {
-            listing = false
+            reads -= 1
+            listing = reads > 0
             everListed = true
         }
         do {
-            let items = try await harness.listSessions()
-            sessions = items.filter { !$0.isSubagent }.sorted { $0.updatedAt > $1.updatedAt }
+            return try await harness.listSessions()
         } catch let error as CallError where error.isConnectionLoss || error.code == "upstream-lost" {
-            // The reconnect will refresh again. Saying so would be noise.
+            // The reconnect will read it again. Saying so would be noise.
         } catch {
             problem = (error as? LocalizedError)?.errorDescription ?? "Could not read the conversation list."
         }
+        return nil
+    }
+
+    private static func listed(_ items: [SessionSummary]) -> [SessionSummary] {
+        items.filter { !$0.isSubagent }.sorted { $0.updatedAt > $1.updatedAt }
     }
 
     /// Switch a conversation's model, and show it straight away.
@@ -774,20 +854,32 @@ public final class MachineSession {
         let generation = conversation.generation
         conversation.loading = true
         defer { if conversation.generation == generation { conversation.loading = false } }
-        do {
-            let page = try await harness.page(
-                sessionId: conversation.sessionId,
-                throughSeq: through,
-                beforeSeq: before,
-                maxMessages: followMessages
-            )
-            // A snapshot that landed meanwhile replaced the window this page
-            // was meant to extend.
-            guard conversation.generation == generation else { return }
-            conversation.absorb(page: page)
-        } catch {
-            // Scrolling back is optional. A failure leaves what is on screen
-            // intact and the person can pull again.
+        var maxMessages = followMessages
+        while true {
+            do {
+                let page = try await harness.page(
+                    sessionId: conversation.sessionId,
+                    throughSeq: through,
+                    beforeSeq: before,
+                    maxMessages: maxMessages
+                )
+                // A snapshot that landed meanwhile replaced the window this
+                // page was meant to extend.
+                guard conversation.generation == generation else { return }
+                conversation.absorb(page: page)
+                return
+            } catch let error as CallError where error.code == "too-large" && maxMessages > 1 {
+                // As for the snapshot: fewer messages, until the page fits.
+                maxMessages /= 2
+            } catch let error as CallError where error.isConnectionLoss || error.code == "upstream-lost" {
+                // Scrolling back is optional; the person can pull again once
+                // the connection is back.
+                return
+            } catch {
+                guard conversation.generation == generation else { return }
+                conversation.note((error as? LocalizedError)?.errorDescription ?? "Could not load earlier messages.", kind: .failure)
+                return
+            }
         }
     }
 
@@ -1268,7 +1360,11 @@ public final class MachineSession {
         do {
             try await harness.answerApproval(approval, allow: allow)
         } catch {
-            approvals[approval.sessionId] = approval
+            // Back only if it is still this client's to answer and nothing
+            // newer has taken its place.
+            if approval.clientId == eventsClientId, approvals[approval.sessionId] == nil {
+                approvals[approval.sessionId] = approval
+            }
             problem = (error as? LocalizedError)?.errorDescription ?? "That answer didn’t reach the Mac."
         }
     }
@@ -1278,7 +1374,9 @@ public final class MachineSession {
         do {
             try await harness.answerQuestion(question, answers: answers)
         } catch {
-            questions[question.sessionId] = question
+            if question.clientId == eventsClientId, questions[question.sessionId] == nil {
+                questions[question.sessionId] = question
+            }
             problem = (error as? LocalizedError)?.errorDescription ?? "That answer didn’t reach the Mac."
         }
     }

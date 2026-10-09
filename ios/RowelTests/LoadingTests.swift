@@ -15,6 +15,20 @@ private actor ScriptedTransport: HarnessTransport {
     nonisolated let desk = StreamDesk()
     private var answers: [String: [Result<JSONValue, CallError>]] = [:]
     private(set) var sent: [(endpoint: String, args: JSONValue)] = []
+    private var held: Set<String> = []
+    private var waiting: [String: [CheckedContinuation<JSONValue, Error>]] = [:]
+
+    /// Make calls to `endpoint` with nothing queued wait for `release`.
+    func hold(_ endpoint: String) {
+        held.insert(endpoint)
+    }
+
+    /// Answer the oldest call to `endpoint` that is waiting.
+    func release(_ endpoint: String, _ value: JSONValue) {
+        guard var queue = waiting[endpoint], !queue.isEmpty else { return }
+        queue.removeFirst().resume(returning: value)
+        waiting[endpoint] = queue
+    }
 
     /// Queue an answer.
     func answer(_ endpoint: String, _ value: JSONValue) {
@@ -32,6 +46,9 @@ private actor ScriptedTransport: HarnessTransport {
     func call(_ endpoint: String, _ args: JSONValue) async throws -> JSONValue {
         sent.append((endpoint, args))
         guard var queue = answers[endpoint], !queue.isEmpty else {
+            if held.contains(endpoint) {
+                return try await withCheckedThrowingContinuation { waiting[endpoint, default: []].append($0) }
+            }
             throw CallError(code: "not-found", message: "unscripted \(endpoint)")
         }
         let next = queue.removeFirst()
@@ -51,11 +68,13 @@ final class LoadingTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
+        MachineSession.firstPause = .milliseconds(10)
         suite = UserDefaults(suiteName: suiteName)
         suite.removePersistentDomain(forName: suiteName)
     }
 
     override func tearDown() {
+        MachineSession.firstPause = .seconds(1)
         suite.removePersistentDomain(forName: suiteName)
         super.tearDown()
     }
@@ -73,11 +92,22 @@ final class LoadingTests: XCTestCase {
         )
     }
 
-    /// A handshake from a Bridle whose dsh is up, with the session list it
-    /// will be asked for.
-    private func connect(_ session: MachineSession, _ transport: ScriptedTransport) async {
-        await transport.answer("session/list", .object(["items": .array([])]))
+    /// A handshake from a Bridle whose dsh is up, the `ready` its `$events`
+    /// opens with, and the session list that `ready` has read.
+    private func connect(_ session: MachineSession, _ transport: ScriptedTransport, list: [JSONValue]? = []) async throws {
+        if let list { await transport.answer("session/list", .object(["items": .array(list)])) }
+        let before = transport.desk.count("$events")
         session.receiveForTesting(.handshake(.test()))
+        try await until("$events to open") { transport.desk.count("$events") > before }
+        transport.desk.send("$events", ready())
+    }
+
+    private func ready() -> JSONValue {
+        .object(["type": .string("ready"), "clientId": .string(UUID().uuidString), "host": .object(["home": .string("/Users/someone")])])
+    }
+
+    private func row(_ id: String) -> JSONValue {
+        .object(["sessionId": .string(id), "updatedAt": .number(1_700_000_000_000), "running": .bool(false), "blank": .bool(false)])
     }
 
     private func event(_ type: String, seq: Int, data: JSONValue) -> JSONValue {
@@ -135,7 +165,7 @@ final class LoadingTests: XCTestCase {
     func testAHandshakeOpensTheMachineStreamsAndListsTheSessions() async throws {
         let transport = ScriptedTransport()
         let session = machine(transport)
-        await connect(session, transport)
+        try await connect(session, transport)
 
         try await until("the three machine streams") {
             transport.desk.count("$events") == 1
@@ -149,7 +179,7 @@ final class LoadingTests: XCTestCase {
     func testOpeningAConversationFollowsIt() async throws {
         let transport = ScriptedTransport()
         let session = machine(transport)
-        await connect(session, transport)
+        try await connect(session, transport)
         let conversation = session.conversation("s1")
         XCTAssertTrue(conversation.loading, "until the snapshot lands this is loading, not empty")
 
@@ -176,7 +206,7 @@ final class LoadingTests: XCTestCase {
         XCTAssertEqual(transport.desk.count("session/follow"), 0, "there is no connection to follow it on")
         XCTAssertTrue(conversation.loading)
 
-        await connect(session, transport)
+        try await connect(session, transport)
         try await until("the follow") { transport.desk.count("session/follow") == 1 }
     }
 
@@ -186,14 +216,14 @@ final class LoadingTests: XCTestCase {
     func testAReconnectReplacesTheWindowWithAFreshSnapshot() async throws {
         let transport = ScriptedTransport()
         let session = machine(transport)
-        await connect(session, transport)
+        try await connect(session, transport)
         let conversation = session.conversation("s1")
         try await until("the follow") { transport.desk.count("session/follow") == 1 }
         transport.desk.send("session/follow", session: "s1", snapshot([said("first", seq: 3)]))
         try await until("the snapshot") { conversation.loaded }
 
         transport.desk.disconnectAll()
-        await connect(session, transport)
+        try await connect(session, transport)
         try await until("the follow again") { transport.desk.count("session/follow") == 2 }
         XCTAssertEqual(conversation.items.map(\.id), ["m3"], "what was held stays up until the new snapshot")
 
@@ -208,7 +238,7 @@ final class LoadingTests: XCTestCase {
     func testDshComingBackReopensEverything() async throws {
         let transport = ScriptedTransport()
         let session = machine(transport)
-        await connect(session, transport)
+        try await connect(session, transport)
         _ = session.conversation("s1")
         try await until("the streams") { transport.desk.count("$events") == 1 && transport.desk.count("session/follow") == 1 }
 
@@ -218,19 +248,74 @@ final class LoadingTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(30))
         XCTAssertEqual(transport.desk.count("session/follow"), 1, "a lost upstream is not retried on its own")
 
-        await transport.answer("session/list", .object(["items": .array([])]))
         session.receiveForTesting(.harness(reachable: true, detail: nil))
         try await until("everything again") { transport.desk.count("$events") == 2 && transport.desk.count("session/follow") == 2 }
     }
 
+    // MARK: - The session list
+
+    /// docs/dsh-0.2-migration.md D4: a list change that arrives while the list
+    /// is being read is not applied — the read may predate it and put back
+    /// what it took away — and the list is read once more instead.
+    func testAListChangeDuringTheReadIsReadAgainNotOverwritten() async throws {
+        let transport = ScriptedTransport()
+        await transport.hold("session/list")
+        let session = machine(transport)
+        try await connect(session, transport, list: nil)
+        try await until("the first read") { await transport.count("session/list") == 1 }
+
+        transport.desk.send("$events", .object([
+            "type": .string("emit"), "event": .string("api-session/added"), "args": .array([row("s-new")]),
+        ]))
+        try await Task.sleep(for: .milliseconds(30))
+        XCTAssertTrue(session.sessions.isEmpty, "a change during the read is held back, not applied")
+
+        await transport.release("session/list", .object(["items": .array([])]))
+        try await until("the second read") { await transport.count("session/list") == 2 }
+        XCTAssertTrue(session.sessions.isEmpty, "the first read predates the change and is not used")
+        await transport.release("session/list", .object(["items": .array([row("s-new")])]))
+        try await until("the list") { session.sessions.map(\.id) == ["s-new"] }
+
+        transport.desk.send("$events", .object([
+            "type": .string("emit"), "event": .string("api-session/removed"), "args": .array([.string("s-new")]),
+        ]))
+        try await until("a change after the read to apply") { session.sessions.isEmpty }
+        let reads = await transport.count("session/list")
+        XCTAssertEqual(reads, 2)
+    }
+
+    func testAQuietReadIsReadOnce() async throws {
+        let transport = ScriptedTransport()
+        let session = machine(transport)
+        try await connect(session, transport, list: [row("s1")])
+        try await until("the list") { session.sessions.map(\.id) == ["s1"] }
+        try await Task.sleep(for: .milliseconds(30))
+        let reads = await transport.count("session/list")
+        XCTAssertEqual(reads, 1)
+    }
+
     // MARK: - Failures
+
+    /// `gateway/internal` is how dsh fails a follow that skipped a sequence
+    /// number; with the tunnel up, no handshake will come to reopen it.
+    func testAStreamThatFailsTransientlyIsOpenedAgain() async throws {
+        let transport = ScriptedTransport()
+        let session = machine(transport)
+        try await connect(session, transport)
+        _ = session.conversation("s1")
+        try await until("the follow") { transport.desk.count("session/follow") == 1 }
+
+        transport.desk.fail("$events", code: "gateway/internal")
+        transport.desk.fail("session/follow", session: "s1", code: "gateway/internal")
+        try await until("both again") { transport.desk.count("$events") == 2 && transport.desk.count("session/follow") == 2 }
+    }
 
     /// A conversation whose tail is over the frame ceiling is asked for again
     /// with half the messages, until it fits.
     func testASnapshotTooLargeForTheTunnelIsAskedForSmaller() async throws {
         let transport = ScriptedTransport()
         let session = machine(transport)
-        await connect(session, transport)
+        try await connect(session, transport)
         _ = session.conversation("s1")
         try await until("the follow") { transport.desk.count("session/follow") == 1 }
 
@@ -242,7 +327,7 @@ final class LoadingTests: XCTestCase {
     func testAFollowTheMachineRefusesStopsLoadingAndSaysWhy() async throws {
         let transport = ScriptedTransport()
         let session = machine(transport)
-        await connect(session, transport)
+        try await connect(session, transport)
         let conversation = session.conversation("s1")
         try await until("the follow") { transport.desk.count("session/follow") == 1 }
 
@@ -259,7 +344,7 @@ final class LoadingTests: XCTestCase {
     func testALetGoConversationStopsBeingFollowed() async throws {
         let transport = ScriptedTransport()
         let session = machine(transport)
-        await connect(session, transport)
+        try await connect(session, transport)
         _ = session.conversation("s0")
         try await until("the follow") { transport.desk.count("session/follow") == 1 }
         for index in 1...8 { _ = session.conversation("s\(index)") }
@@ -274,7 +359,7 @@ final class LoadingTests: XCTestCase {
     func testOlderHistoryIsReadFromTheSameLog() async throws {
         let transport = ScriptedTransport()
         let session = machine(transport)
-        await connect(session, transport)
+        try await connect(session, transport)
         let conversation = session.conversation("s1")
         try await until("the follow") { transport.desk.count("session/follow") == 1 }
         transport.desk.send("session/follow", session: "s1", snapshot([said("second", seq: 10), event("step/end", seq: 12, data: .emptyObject)], hasMore: true))
@@ -299,7 +384,7 @@ final class LoadingTests: XCTestCase {
     func testStreamedTextFoldsBeforeTheMessageThatEndsIt() async throws {
         let transport = ScriptedTransport()
         let session = machine(transport)
-        await connect(session, transport)
+        try await connect(session, transport)
         let conversation = session.conversation("s1")
         try await until("the follow") { transport.desk.count("session/follow") == 1 }
         transport.desk.send("session/follow", session: "s1", snapshot([event("turn/start", seq: 1, data: .object(["turn": 1]))]))
@@ -330,6 +415,25 @@ final class LoadingTests: XCTestCase {
         guard case .assistant(let bubble)? = conversation.items.first else { return XCTFail("no bubble") }
         XCTAssertEqual(bubble.text, "Let me think about it.")
         XCTAssertEqual(conversation.items.count, 1)
+    }
+
+    /// An older page over the frame ceiling is asked for again with half the
+    /// messages, like the snapshot.
+    func testAnOlderPageTooLargeIsAskedForSmaller() async throws {
+        let transport = ScriptedTransport()
+        let session = machine(transport)
+        let conversation = session.conversation("s1")
+        session.receiveForTesting(follow: snapshot([said("second", seq: 10)], hasMore: true), sessionId: "s1")
+        await transport.fail("session/page", code: "too-large")
+        await transport.answer("session/page", .object([
+            "records": .array([.object(["type": .string("event"), "event": said("first", seq: 4)])]),
+            "hasMore": .bool(false),
+        ]))
+        await session.loadOlder(conversation)
+
+        let asked = await transport.payloads("session/page").map { $0.path("request", "maxMessages")?.intValue }
+        XCTAssertEqual(asked, [25, 12])
+        XCTAssertEqual(conversation.items.map(\.id), ["m4", "m10"])
     }
 
     // MARK: - Sends and titles
