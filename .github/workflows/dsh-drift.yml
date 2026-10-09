@@ -6,10 +6,15 @@
 # week, the same tests CI runs against the pinned dsh run against what npm
 # would install today (@latest) and what is coming next (@alpha).
 #
-# A failure opens an issue (one per tag, not one per week). @alpha failing is a
-# warning: start the app-side fix now, so it ships before the change reaches
-# @latest. @latest failing means new installs are broken: no release goes out
-# until it is fixed (D8).
+# A contract failure opens an issue (one per tag, not one per week). @alpha
+# failing is a warning: start the app-side fix now, so it ships before the
+# change reaches @latest. @latest failing means new installs are broken: no
+# release goes out until it is fixed (D8). A run that could not even install or
+# build fails red without opening one — that is not news about dsh.
+#
+# Two jobs, so that the one running code fresh from npm holds no token that can
+# write to this repository: the test job is read-only and hands the outcome on
+# as an artifact; the report job runs nothing but `gh`.
 
 name: dsh drift
 
@@ -20,7 +25,6 @@ on:
 
 permissions:
   contents: read
-  issues: write
 
 jobs:
   drift:
@@ -33,6 +37,8 @@ jobs:
         tag: [latest, alpha]
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:
@@ -47,7 +53,8 @@ jobs:
           npm install --prefix "$RUNNER_TEMP/dsh" --no-audit --no-fund "@deepseek-ai/dsh@${{ matrix.tag }}"
           echo "version=$(node -p "require('$RUNNER_TEMP/dsh/node_modules/@deepseek-ai/dsh/package.json').version")" >> "$GITHUB_OUTPUT"
 
-      - name: contract and end to end, against dsh@${{ matrix.tag }} (${{ steps.install.outputs.version }})
+      - id: contract
+        name: contract and end to end, against dsh@${{ matrix.tag }} (${{ steps.install.outputs.version }})
         env:
           ROWEL_E2E_DSH_BIN: ${{ runner.temp }}/dsh/node_modules/.bin/dsh
         run: >
@@ -58,14 +65,59 @@ jobs:
           e2e/tests/security.test.js
           e2e/tests/cli.test.js
 
-      - name: open an issue
-        if: failure()
+      # Only a failure of the contract step is a finding about dsh.
+      - name: record the outcome
+        if: always()
+        env:
+          OUTCOME: ${{ steps.contract.outcome }}
+          VERSION: ${{ steps.install.outputs.version }}
+        run: |
+          mkdir -p outcome
+          printf '%s\n%s\n' "$OUTCOME" "$VERSION" > outcome/result
+
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: drift-${{ matrix.tag }}
+          path: outcome/result
+          retention-days: 7
+
+  report:
+    name: report dsh@${{ matrix.tag }}
+    needs: drift
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    strategy:
+      fail-fast: false
+      matrix:
+        tag: [latest, alpha]
+    # One report per tag at a time, so two runs cannot both find no issue and
+    # both open one.
+    concurrency:
+      group: dsh-drift-report-${{ matrix.tag }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: drift-${{ matrix.tag }}
+          path: outcome
+        continue-on-error: true
+
+      - name: open an issue if the contract failed
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           TAG: ${{ matrix.tag }}
-          VERSION: ${{ steps.install.outputs.version }}
           RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
+          outcome=$(sed -n 1p outcome/result 2>/dev/null || true)
+          version=$(sed -n 2p outcome/result 2>/dev/null || true)
+          if [ "$outcome" != "failure" ]; then
+            echo "contract outcome: ${outcome:-unknown}; nothing to report"; exit 0
+          fi
           title="dsh@$TAG no longer passes the Rowel contract"
           if [ -n "$(gh issue list --state open --search "in:title \"$title\"" --json number --jq '.[0].number')" ]; then
             echo "an open issue already tracks this"; exit 0
@@ -75,7 +127,7 @@ jobs:
           else
             impact="A warning: this change has not reached @latest yet. Start the app-side fix now, so it can pass App Review before it does."
           fi
-          gh issue create --title "$title" --body "dsh@$TAG ($VERSION) fails the contract tests that pass against the pinned version.
+          gh issue create --title "$title" --body "dsh@$TAG ($version) fails the contract tests that pass against the pinned version.
 
           $impact
 

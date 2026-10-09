@@ -294,7 +294,7 @@ Bridle **必须**中止对应的上游请求。未知 id **必须**静默忽略�
 | `endpoint` | string | dsh 流端点，如 `session/follow`、`workspace/follow`，或内置的 `$events` |
 | `args` | any | 端点参数，同 `call` |
 
-对仍打开的 `sid` 再发 `open`，Bridle 以 `error`（`bad-request`）拒绝这一次，**禁止**关闭隧道（dsh 对同样的情况会关掉整个 socket，Bridle 不把这个代价转嫁给其他流）。
+对仍打开的 `sid` 再发 `open`，Bridle 回一个 `error`（`bad-request`），并**同时取消**这个 `sid` 下已在运行的流——对 App 来说，`sid` 收到 `error` 就是这条流结束了，原流不能在没人听的情况下继续跑。**禁止**关闭隧道（dsh 对同样的情况会关掉整个 socket，Bridle 不把这个代价转嫁给其他流）。
 
 **`item`** — 上行数据
 
@@ -403,8 +403,8 @@ Bridle **必须**限制单条隧道的在途 `call` 与同时打开的流。当�
 
 - **归属**：每条流属于打开它的那条隧道，只有这条隧道收得到它的帧。隧道关闭时，Bridle **必须**取消它名下的全部流，不在 dsh 上留下孤儿流。
 - **重连**：dsh 没有流级别的续传（dsh 协议参考 §3.6）。Bridle 与 dsh 之间的连接断开时，所有流以 `upstream-lost` 结束；App 重新 `open`，拿到新的基线（`session/follow` 的快照、`workspace/follow` 的 `baseline`、`$events` 的 `ready` 与重发的未决审批和提问）。隧道本身断开重连同理。Bridle **不**缓存、**不**重放任何事件。
-- **帧上限**：单帧超过 32 MiB 时，`result` 变成 `too-large` 失败；流的 `item` 使 Bridle 取消这条流并回 `error`（`too-large`）。只失败这一个调用或这一条流，**禁止**关闭隧道。
-- **背压**：dsh 下行不做流控。手机跟不上、承载的写缓冲超过 8 MiB 时，Bridle 取消正在写的那条流并回 `error`（`slow-consumer`），App 可以重新打开。
+- **帧上限**：上限针对线上消息（明文加上 Noise 的 16 字节标签和 Relay 的 5 字节 mux 头）。超过 32 MiB 时，`result` 变成 `too-large` 失败；流的 `item` 使 Bridle 取消这条流并回 `error`（`too-large`）；dsh 的流错误本身过大时，Bridle 改发一个简短的 `too-large` 错误，保证这条流在 App 上照样结束。只失败这一个调用或这一条流，**禁止**关闭隧道。
+- **背压**：dsh 下行不做流控。直连路径上每部手机独占一条 socket，一条流写完一项后，如果这部手机的写缓冲超过 8 MiB，Bridle 取消这条流并回 `error`（`slow-consumer`），App 可以重新打开。Relay 路径上一条 socket 承载所有手机，缓冲量说明不了是哪部手机慢，Bridle 不据此判定，由 Relay 自己的限额兜底。
 
 ### 4.6 版本策略
 

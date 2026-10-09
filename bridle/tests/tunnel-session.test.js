@@ -147,13 +147,22 @@ test('every stream a tunnel opened is cancelled when the tunnel goes', async (t)
   assert.ok(mine.every((stream) => stream.cancelled), 'a phone that left kept streams open on dsh')
 })
 
-test('the same stream id twice fails only the second open', async (t) => {
+test('the same stream id twice closes that stream, and only that stream', async (t) => {
   const phone = await paired(t)
   phone.say({ t: 'open', sid: 'a', endpoint: 'x/one', args: {} })
+  phone.say({ t: 'open', sid: 'b', endpoint: 'x/other', args: {} })
   phone.say({ t: 'open', sid: 'a', endpoint: 'x/two', args: {} })
-  const error = phone.frames().find((frame) => frame.t === 'error')
-  assert.equal(error.error.code, 'bad-request')
+  const one = phone.streams.find((stream) => stream.endpoint === 'x/one')
+  const other = phone.streams.find((stream) => stream.endpoint === 'x/other')
+  const errors = phone.frames().filter((frame) => frame.t === 'error')
+  assert.deepEqual(errors.map((frame) => [frame.sid, frame.error.code]), [['a', 'bad-request']])
   assert.equal(phone.streams.filter((stream) => stream.endpoint === 'x/two').length, 0)
+  // To the phone an error for `a` is the end of `a`; the stream already
+  // running under that id must not go on with nobody listening.
+  assert.equal(one.cancelled, true)
+  assert.equal(other.cancelled, false)
+  one.sink.item('late')
+  assert.equal(phone.frames().some((frame) => frame.sid === 'a' && frame.t === 'item'), false)
   assert.equal(phone.closedWhy(), undefined, 'dsh closes the socket for this; the Bridle must not close the tunnel')
 })
 
@@ -174,11 +183,12 @@ test('a phone that falls too far behind loses the stream, not the tunnel', async
   phone.say({ t: 'open', sid: 'f', endpoint: 'session/follow', args: {} })
   const stream = phone.streams.at(-1)
   stream.sink.item(1)
+  // The item that takes the phone over the line is written, and its stream cut.
   phone.setBuffered(9 * 1024 * 1024)
   stream.sink.item(2)
   const frames = phone.frames().filter((frame) => frame.sid === 'f')
-  assert.deepEqual(frames.map((frame) => frame.t), ['item', 'error'])
-  assert.equal(frames[1].error.code, 'slow-consumer')
+  assert.deepEqual(frames.map((frame) => frame.t), ['item', 'item', 'error'])
+  assert.equal(frames[2].error.code, 'slow-consumer')
   assert.equal(stream.cancelled, true)
 })
 
@@ -260,4 +270,47 @@ test('an item that arrives while the stream is still being opened is not lost', 
   phone.say({ t: 'open', sid: 'e', endpoint: '$events', args: {} })
   const items = phone.frames().filter((frame) => frame.sid === 'e' && frame.t === 'item')
   assert.deepEqual(items.map((frame) => frame.value), [{ type: 'ready', clientId: 'c1' }])
+})
+
+test('an archive download that breaks halfway fails the call, not the process', async (t) => {
+  const phone = await paired(t, {
+    agent: {
+      export: async () => new Response(new ReadableStream({
+        pull(controller) { controller.error(new Error('socket hang up')) },
+      })),
+    },
+  })
+  phone.say({ t: 'call', id: 'x1', endpoint: '$export', args: { sessionId: 's1' } })
+  await settle()
+  const answer = phone.frames().find((frame) => frame.t === 'result')
+  assert.equal(answer?.result.ok, false, 'an unhandled rejection here ends the process — inside dsh, with the plugin')
+  assert.equal(answer.result.error.code, 'internal')
+})
+
+test('abandoning an export stops the download', async (t) => {
+  let signal
+  const phone = await paired(t, { agent: { export: (sessionId, descendants, given) => { signal = given; return new Promise(() => {}) } } })
+  phone.say({ t: 'call', id: 'x1', endpoint: '$export', args: { sessionId: 's1' } })
+  await settle()
+  phone.say({ t: 'abort', id: 'x1' })
+  assert.equal(signal?.aborted, true, 'the download went on after the phone gave up')
+})
+
+test('a stream error too large to send still ends the stream on the phone', async (t) => {
+  const phone = await paired(t)
+  phone.say({ t: 'open', sid: 'f', endpoint: 'session/follow', args: {} })
+  phone.streams.at(-1).sink.error({ code: 'x', message: 'huge', details: { blob: 'y'.repeat(33 * 1024 * 1024) } })
+  const ended = phone.frames().filter((frame) => frame.sid === 'f')
+  assert.deepEqual(ended.map((frame) => [frame.t, frame.error?.code]), [['error', 'too-large']])
+})
+
+test('the ceiling counts what the wire adds to a frame', async (t) => {
+  // A plaintext a few bytes under 32 MiB is over it once Noise's tag and the
+  // Relay's header are added, and the Relay closes the whole connection for it.
+  const phone = await paired(t)
+  phone.say({ t: 'open', sid: 'f', endpoint: 'session/follow', args: {} })
+  const envelope = JSON.stringify({ t: 'item', sid: 'f', value: '' }).length
+  phone.streams.at(-1).sink.item('z'.repeat(32 * 1024 * 1024 - envelope - 10))
+  const frames = phone.frames().filter((frame) => frame.sid === 'f')
+  assert.deepEqual(frames.map((frame) => [frame.t, frame.error?.code]), [['error', 'too-large']])
 })

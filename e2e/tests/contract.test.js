@@ -138,7 +138,11 @@ test('writes: a prompt in the shape Rowel sends is accepted, and only fails for 
     'the photo was stored as an attachment the app can read back')
   const end = eventsOf(conversation).find(event => event.type === 'turn/end')
   assert.equal(end.data.reason.kind, 'error')
-  assert.doesNotMatch(JSON.stringify(end.data.reason), /arguments-invalid|bad-request/u, 'the request itself was rejected')
+  const why = JSON.stringify(end.data.reason)
+  assert.doesNotMatch(why, /arguments-invalid|bad-request/u, 'the request itself was rejected')
+  // And it failed for the reason it should: there is no model to call. Any
+  // other failure here is a change worth a person's attention.
+  assert.match(why, /api key|credential|sign[- ]in|authoriz/iu, `the turn failed for some other reason: ${why.slice(0, 300)}`)
   conversation.cancel()
 })
 
@@ -154,30 +158,34 @@ test('writes: $events/result takes the shape Rowel sends, and a late answer is h
   events.cancel()
 })
 
-test('a message sent as the connection drops is there once after reconnecting', { skip, timeout: 60_000 }, async () => {
+test('a message the phone sends again after reconnecting is there once', { skip, timeout: 60_000 }, async () => {
+  // D8's case: dsh took the message, the phone never saw the answer, and the
+  // phone — reconnected — sends it again under the same requestId. Made
+  // deterministic by confirming the first send landed before going away, and
+  // always sending again: what is under test is that the repeat is ignored.
   await connect()
   const sessionId = await newSession()
   const requestId = randomUUID()
-  const request = { requestId, sessionId, mode: 'queue', content: [{ type: 'text', text: 'sent while leaving' }] }
+  const request = { requestId, sessionId, mode: 'queue', content: [{ type: 'text', text: 'sent twice, kept once' }] }
+  const mine = (stream) => eventsOf(stream).filter(event => event.type === 'user/message' && event.data?.source?.rpcId === requestId)
 
-  // The phone sends and goes away before any answer can come back.
-  phone.callAbortable('session/prompt', { request })
+  const watching = follow(sessionId)
+  const first = await phone.call('session/prompt', { request })
+  assert.equal(first.ok, true, JSON.stringify(first))
+  // Wait for the turn to end: dsh's duplicate check has a window between a
+  // message leaving the inbox and being logged (docs/dsh-0.2-protocol.md §7.1),
+  // and the app's retry comes well after it; so does this one.
+  await waitFor(() => mine(watching).length === 1 && eventsOf(watching).some(event => event.type === 'turn/end'), 30_000, 'the first send to land')
+
   phone.close()
   phone = undefined
-
   await connect()
-  const conversation = follow(sessionId)
-  await waitFor(() => conversation.items.length > 0, 10_000, 'the snapshot')
-  const mine = () => eventsOf(conversation).filter(event => event.type === 'user/message' && event.data?.source?.rpcId === requestId)
-  // What the app does: if the snapshot does not show the message, send it
-  // again under the same requestId; dsh ignores a repeat it already has.
-  await new Promise((resolve) => { setTimeout(resolve, 1_000) })
-  if (mine().length === 0) {
-    const again = await phone.call('session/prompt', { request })
-    assert.equal(again.ok, true, JSON.stringify(again))
-  }
-  await waitFor(() => mine().length > 0, 20_000, 'the message to be in the conversation')
+  const again = await phone.call('session/prompt', { request })
+  assert.equal(again.ok, true, JSON.stringify(again))
+
+  const after = follow(sessionId)
+  await waitFor(() => after.items.length > 0, 10_000, 'the snapshot')
   await new Promise((resolve) => { setTimeout(resolve, 1_500) })
-  assert.equal(mine().length, 1, 'a message sent once appears once')
-  conversation.cancel()
+  assert.equal(mine(after).length, 1, 'a message sent twice under one requestId appears twice')
+  after.cancel()
 })

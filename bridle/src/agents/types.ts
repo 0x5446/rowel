@@ -72,7 +72,8 @@ export interface AgentClient {
    * Export a session as an archive.
    * @param sessionId - the session to export.
    * @param includeDescendants - whether to include subagent sessions.
+   * @param signal - abandons the download, body included.
    * @returns the raw HTTP response, so the caller can read headers and bytes.
    */
-  export: (sessionId: string, includeDescendants: boolean) => Promise<Response>
+  export: (sessionId: string, includeDescendants: boolean, signal?: AbortSignal) => Promise<Response>
 }

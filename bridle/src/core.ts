@@ -204,11 +204,29 @@ export class BridleCore {
       // A fresh socket: identify again (dsh may have been upgraded or swapped
       // underneath us) and follow `$events` on it.
       await this.identify()
-      this.followEvents()
+      // Dropped again while identifying: the next connection follows instead.
+      if (this.dsh.connection.connected) this.followEvents()
       return
     }
     this.events = undefined
+    this.forgetWaiting()
     this.publish({ reachable: false, ...(state.detail === undefined ? {} : { detail: state.detail }) })
+  }
+
+  /**
+   * Stop believing anything is waiting, when the stream that said so is gone.
+   *
+   * dsh may be restarting, and a request asked before is then gone with it; or
+   * someone may answer it in the browser while the Bridle cannot hear the
+   * `cancel`. Either way, holding on would ring a phone for a question nobody
+   * can see. What is still pending comes back when `$events` reopens — dsh
+   * re-sends it — and the rings already made are kept until then, so a request
+   * that does come back is not rung for twice.
+   */
+  private forgetWaiting(): void {
+    if (this.waiting.size === 0) return
+    this.waiting.clear()
+    this.waitingChanged()
   }
 
   private async identify(): Promise<void> {
@@ -253,6 +271,7 @@ export class BridleCore {
     this.resendTimer.unref()
     const reopen = (): void => {
       this.events = undefined
+      this.forgetWaiting()
       // dsh ended the stream on a live socket — not the usual way, which is
       // the socket dropping and `onConnection` reopening. Follow it again, or
       // nobody is ever rung until the socket happens to drop.
