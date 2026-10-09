@@ -13,15 +13,15 @@ import XCTest
 final class InterruptTests: XCTestCase {
     private let sessionId = "session-1f55260e-4ce5-45a5-8fff-78e508071670"
 
-    /// dsh's `question/requested`, verbatim apart from shortened prose.
+    /// dsh's `user-questions/request` on `$events`, as recorded live
+    /// (docs/dsh-0.2-protocol.md §5.3), apart from shortened prose.
     private func questionFrame() -> JSONValue {
         .object([
-            "type": .string("server-request"),
-            "rpcId": .string("cf6f20c2-a77a-4d75-bf3b-9b872198460b"),
-            "method": .string("question/requested"),
-            "payload": .object([
-                "type": .string("question/requested"),
-                "sessionId": .string(sessionId),
+            "type": .string("waterfall"),
+            "event": .string("user-questions/request"),
+            "eventId": .string("cf6f20c2-a77a-4d75-bf3b-9b872198460b"),
+            "agentId": .string(sessionId),
+            "request": .object([
                 "questions": .array([
                     .object([
                         "id": .string("hitl-confirm"),
@@ -38,33 +38,34 @@ final class InterruptTests: XCTestCase {
         ])
     }
 
+    /// dsh's `approval/request`, as recorded live (§5.2).
     private func approvalFrame() -> JSONValue {
         .object([
-            "type": .string("server-request"),
-            "rpcId": .string("a1b2c3"),
-            "method": .string("approval/requested"),
-            "payload": .object([
-                "type": .string("approval/requested"),
-                "sessionId": .string(sessionId),
-                "approvalId": .string("ap-1"),
-                "toolName": .string("Edit"),
-                "reason": .string("escalate sandbox to danger-full-access"),
+            "type": .string("waterfall"),
+            "event": .string("approval/request"),
+            "eventId": .string("3824b6e1-71ca-4462-bc64-ab7aa98e8b9c"),
+            "agentId": .string(sessionId),
+            "request": .object([
+                "toolName": .string("bash"),
+                "callId": .string("call_00_43jk9exuu76uznsuc7wvypqf"),
+                "reason": .string("escalate sandbox to danger-full-access: protocol test"),
+                "displayReason": .object([
+                    "en": .string("Allow this operation with danger-full-access permissions: protocol test"),
+                    "zh": .string("允许本次操作使用 danger-full-access 权限：protocol test"),
+                ]),
             ]),
         ])
     }
 
-    private func event(_ frame: JSONValue) -> TunnelSignal {
-        .event(EventFrame(seq: 1, stream: .mux, frame: frame))
-    }
-
     func testAQuestionFromTheMachineBecomesACardForThatSession() {
         let session = makeSession()
-        session.receiveForTesting(event(questionFrame()))
+        session.receiveForTesting(events: questionFrame())
 
         guard let asked = session.questions[sessionId] else {
             return XCTFail("no question card; the machine is waiting and the phone shows nothing")
         }
-        XCTAssertEqual(asked.id, "cf6f20c2-a77a-4d75-bf3b-9b872198460b", "the rpcId is what an answer echoes")
+        XCTAssertEqual(asked.id, "cf6f20c2-a77a-4d75-bf3b-9b872198460b", "the eventId is what an answer names")
+        XCTAssertEqual(asked.clientId, "test-client", "and the answer is sent as the client that was asked")
         XCTAssertEqual(asked.items.count, 1)
         XCTAssertEqual(asked.items[0].header, "HITL 确认")
         XCTAssertEqual(asked.items[0].options.map(\.label), ["保持 Exa（推荐）", "换回 DeepSeek official", "两个都留，临时切换"])
@@ -73,33 +74,37 @@ final class InterruptTests: XCTestCase {
 
     func testAnsweringElsewhereClearsTheCard() {
         let session = makeSession()
-        session.receiveForTesting(event(questionFrame()))
+        session.receiveForTesting(events: questionFrame())
+        session.receiveForTesting(events: approvalFrame())
         XCTAssertNotNil(session.questions[sessionId])
 
-        session.receiveForTesting(event(.object([
-            "rpcId": .string("x"),
-            "payload": .object(["type": .string("question/resolved"), "sessionId": .string(sessionId)]),
-        ])))
+        session.receiveForTesting(events: .object([
+            "type": .string("cancel"),
+            "eventId": .string("cf6f20c2-a77a-4d75-bf3b-9b872198460b"),
+        ]))
         XCTAssertNil(session.questions[sessionId], "the web UI answered it; the phone must stop offering to")
+        XCTAssertNotNil(session.approvals[sessionId], "a cancel names one request, not the session")
     }
 
     func testAnApprovalFromTheMachineBecomesACard() {
         let session = makeSession()
-        session.receiveForTesting(event(approvalFrame()))
+        session.receiveForTesting(events: approvalFrame())
 
         guard let asked = session.approvals[sessionId] else {
             return XCTFail("no approval card; the agent is blocked and the phone shows nothing")
         }
-        XCTAssertEqual(asked.toolName, "Edit")
-        XCTAssertEqual(asked.reason, "escalate sandbox to danger-full-access")
+        XCTAssertEqual(asked.toolName, "bash")
+        XCTAssertEqual(asked.approvalId, "call_00_43jk9exuu76uznsuc7wvypqf", "the call it is for, to match the tool card")
+        XCTAssertEqual(asked.reason, "Allow this operation with danger-full-access permissions: protocol test")
     }
 
-    /// The list has to say which conversation is waiting, since the person may
-    /// be in another one or have just opened the app.
-    func testTheWaitingConversationIsMarkedInTheList() {
+    /// A new connection is a new `$events` client, and dsh re-sends it every
+    /// request still waiting; cards from before must not outlive the old one.
+    func testAHandshakeClearsCardsTheMachineWillResend() {
         let session = makeSession()
-        session.receiveForTesting(event(questionFrame()))
-        XCTAssertNotNil(session.questions[sessionId])
+        session.receiveForTesting(events: approvalFrame())
+        session.receiveForTesting(.handshake(.test(dshReachable: false)))
+        XCTAssertNil(session.approvals[sessionId])
     }
 
     private func makeSession() -> MachineSession {

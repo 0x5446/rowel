@@ -1,0 +1,38 @@
+{
+  "endpoint": "permissionPresets/catalog",
+  "args": {},
+  "result": {
+    "ok": true,
+    "value": {
+      "options": [
+        {
+          "value": "read-only",
+          "name": "read-only"
+        },
+        {
+          "value": "workspace-write",
+          "name": "workspace-write"
+        },
+        {
+          "value": "danger-full-access",
+          "name": "danger-full-access"
+        }
+      ],
+      "defaultOptions": [
+        {
+          "value": "read-only",
+          "name": "read-only"
+        },
+        {
+          "value": "workspace-write",
+          "name": "workspace-write"
+        },
+        {
+          "value": "danger-full-access",
+          "name": "danger-full-access"
+        }
+      ],
+      "defaultPreset": "read-only"
+    }
+  }
+}

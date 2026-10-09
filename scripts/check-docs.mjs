@@ -143,11 +143,6 @@ expect(swiftPrologue === prologue,
 
 const FRAME_KINDS = ['hello', 'call', 'result', 'abort', 'open', 'item', 'end', 'cancel', 'error', 'wake', 'status', 'ping', 'pong', 'fault', 'ready']
 
-// Tunnel version 1's frames. The app still speaks them until it is ported to
-// version 2 (milestone M2 of docs/dsh-0.2-migration.md); until then the Swift
-// side may define them without the TypeScript side or the docs knowing them.
-// Delete this list, and the exemption below, with the port.
-const VERSION_1_ONLY = ['req', 'res', 'respond', 'resume', 'ev', 'resync']
 const documentedFrames = new Set(
   [...protocolDoc.matchAll(/\*\*`([a-z]+)`\*\*/g)].map(match => match[1]),
 )
@@ -164,7 +159,6 @@ for (const kind of tsKinds) {
   expect(FRAME_KINDS.includes(kind), `\`${kind}\` 帧存在于源码，但 check-docs 的清单里没有`)
 }
 for (const kind of swiftKinds) {
-  if (VERSION_1_ONLY.includes(kind)) continue
   expect(FRAME_KINDS.includes(kind), `\`${kind}\` 帧存在于 Swift，但 check-docs 的清单里没有`)
   expect(tsKinds.includes(kind), `Swift 定义了 \`${kind}\` 帧，TypeScript 没有 —— 两份协议已漂移`)
 }

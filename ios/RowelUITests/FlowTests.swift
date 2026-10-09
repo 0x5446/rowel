@@ -151,8 +151,11 @@ final class FlowTests: XCTestCase {
         app.navigationBars.buttons["Settings"].tap()
 
         XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 10))
+        // Below the machine's own settings, which can fill the first screen.
+        let identity = app.staticTexts["This iPhone"]
+        for _ in 0..<3 where !identity.exists { app.swipeUp() }
         XCTAssertTrue(
-            app.staticTexts["This iPhone"].exists || app.staticTexts["Paired Macs"].exists,
+            identity.exists || app.staticTexts["Paired Macs"].exists,
             "settings has to name the two ends of the pairing"
         )
     }

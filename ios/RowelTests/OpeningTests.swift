@@ -14,16 +14,12 @@ import XCTest
 @testable import Rowel
 
 /// A transport that never answers, so the window under test stays open.
-private actor SilentTransport: HarnessTransport {
+private actor SilentTransport: CallOnlyTransport {
     func call(_ method: String, _ payload: JSONValue) async throws -> JSONValue {
         // Long enough that the assertions run inside the gap a real network
         // would leave, rather than racing a stub that replies instantly.
         try await Task.sleep(for: .seconds(30))
         return .emptyObject
-    }
-
-    func respond(rpcId: String, value: JSONValue) async throws -> JSONValue {
-        .emptyObject
     }
 }
 

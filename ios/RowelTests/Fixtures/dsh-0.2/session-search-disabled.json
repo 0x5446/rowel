@@ -1,0 +1,16 @@
+{
+  "endpoint": "session/search",
+  "args": {
+    "request": {
+      "query": "fixture"
+    }
+  },
+  "result": {
+    "ok": false,
+    "error": {
+      "code": "gateway/internal",
+      "message": "session search failed: SessionQueryError: session search is disabled: this deployment configures the session-query index with openAt \"never\"",
+      "details": {}
+    }
+  }
+}

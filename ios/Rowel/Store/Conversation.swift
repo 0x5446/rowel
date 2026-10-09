@@ -2,18 +2,25 @@
 ///
 /// The harness never sends a rendered view. It sends the same append-only event
 /// log it persists, and every client folds it into whatever it wants to show.
-/// That is what lets this app render a conversation started in the web UI, and
-/// what lets it resume one mid-stream after a tunnel drop: the fold is a pure
-/// function of the events, so replaying the gap converges on the same state.
+/// That is what lets this app render a conversation started in the web UI: the
+/// fold is a pure function of the events.
 ///
-/// Two rules the fold depends on:
+/// dsh 0.2 delivers it through `session/follow` (docs/dsh-0.2-protocol.md §4):
+/// a snapshot of the tail, then every event after it, in order. A follow cannot
+/// resume from a position, so every reconnect brings a new snapshot, and the
+/// snapshot replaces what was held — `adopt(snapshot:)`.
 ///
-/// - **Events are numbered and ordered.** `seq` dedupes, so a history page that
-///   overlaps the live stream cannot double-render a message.
-/// - **Chunks precede their message.** `assistant/chunk` builds a bubble token by
-///   token; `assistant/message` replaces it with the assembled content. A tail
-///   history page carries the in-flight chunks of an unfinished message, so an
-///   app that opens mid-turn sees the same partial text the web UI does.
+/// Three rules the fold depends on:
+///
+/// - **Events are numbered and ordered.** `seq` dedupes, so an older page that
+///   overlaps what is held cannot double-render a message.
+/// - **The model's output streams outside the log.** `assistant-stream` frames
+///   build a bubble token by token and are never persisted; the
+///   `assistant/message` that follows replaces the bubble with the assembled
+///   content. An attempt dsh abandons leaves nothing in the log, so its bubble
+///   is taken down — `receiveStream(_:)`.
+/// - **Tool cards are drawn here.** dsh 0.2 attaches no rendering hints to a
+///   tool call; the card is chosen from the tool's name and arguments.
 
 import Foundation
 
@@ -44,7 +51,10 @@ public final class Conversation {
     public private(set) var contextBreakdown: ContextBreakdown?
     /// How much the agent may touch, and what else it could be set to.
     public private(set) var permissions: PermissionChoice?
-    /// Skills this session offers, from `skill.list`. Fetched once; skills do
+    /// The presets a conversation can be switched to, from the machine's
+    /// catalog: dsh 0.2's `permissions` projection names only the current one.
+    private var presetOptions: [PermissionChoice.Option] = []
+    /// Skills this session offers, from `skills/list`. Fetched once; skills do
     /// not appear mid-sentence, and a request per keystroke would.
     public var skills: [SlashCommand] = []
     /// Whether `skills` is the machine's answer rather than the empty default.
@@ -92,36 +102,25 @@ public final class Conversation {
     /// The model in use, for the header.
     public private(set) var modelName: String?
 
-    /// True while the first history page is loading.
+    /// True while the first snapshot, or an older page, is on its way.
     public var loading = false
     /// True when older pages exist.
     public private(set) var hasMore = false
     /// Lowest event sequence held, the cursor for loading older pages.
     public private(set) var oldestSeq: Int?
-    /// True once a history page has landed, so the view can tell empty from unloaded.
+    /// Highest event sequence held: the snapshot's cursor, then every event
+    /// folded after it. An older page is read through this, so it comes from
+    /// the same log the window does.
+    public private(set) var cursor: Int?
+    /// True once a snapshot has landed, so the view can tell empty from unloaded.
     public private(set) var loaded = false
-    /// Set while the rest of the opening page is still owed. The tail arrives
-    /// first and small; the remainder follows as a second request, and a
-    /// connection that drops between the two must not leave it owed forever.
-    public var topUpOwed = false
-    /// Live events that arrived before the tail page did, in arrival order.
-    ///
-    /// Folded as they came, they built the bubble being streamed *before* the
-    /// history it belongs after: the page then appended its older events behind
-    /// the live ones, and chunks with lower sequence numbers were concatenated
-    /// after higher ones. `seen` can drop a duplicate; it cannot put a fold back
-    /// in order. So they wait for the page and are replayed behind it.
-    private var early: [(event: JSONValue, view: JSONValue?)] = []
-    /// Whether live events are being held for a history page. Cleared by the
-    /// page, and by a failed fetch — after which live events fold as they come.
-    private var awaitingPage = true
-    /// Bumped by `reset()`. A history call started before a reset must not
-    /// land after it: its page describes the log as it was, and folding it
-    /// into the refetched conversation is exactly the disorder a reset is for.
+    /// Bumped whenever the window is replaced. An older page asked for before
+    /// that must not land after it: it was read against a window that is gone.
     public private(set) var generation = 0
-    /// Whether live events have been folded with no history under them — the
-    /// fetch failed and stopped holding them. The next load starts from a reset.
-    public var foldedWithoutHistory: Bool { !awaitingPage && !loaded }
+
+    /// The attempt the model is streaming now, from its `start` frame: which
+    /// bubble its chunks belong to.
+    private var streaming: (attemptId: String, turn: Int, step: Int)?
 
     /// Streaming bubbles by `turn.step`.
     private var assistantIndex: [String: Int] = [:]
@@ -134,12 +133,17 @@ public final class Conversation {
     private var runningCommands: [String: String] = [:]
     /// Projection watermarks, so an out-of-order projection frame cannot go backwards.
     private var projectionSeq: [String: Int] = [:]
-    /// Optimistic bubbles, by id, holding the text they were shown with.
+    /// Optimistic bubbles, by the `requestId` they were sent under, holding the
+    /// text they were shown with.
     ///
-    /// The harness mints its own id for a message, so the echoed `user/message`
-    /// can never be matched to the bubble by id. Without this the optimistic
-    /// copy stays on screen and every single message appears twice.
+    /// The harness mints its own id for a message, but logs the sender's
+    /// `requestId` on it as `source.rpcId` — that is the join. Without it the
+    /// optimistic copy stays on screen and every message appears twice.
     private var pending: [(id: String, text: String)] = []
+    /// Queue entries shown before the machine listed them, by `requestId`.
+    /// Kept across `inbox` updates until the machine's own entry, or the
+    /// message itself, says where it went.
+    private var provisional: [QueuedMessage] = []
 
     public init(sessionId: String, title: String? = nil, cwd: String? = nil) {
         self.sessionId = sessionId
@@ -149,60 +153,63 @@ public final class Conversation {
 
     // MARK: - History
 
-    /// Replace everything with a freshly loaded tail page.
-    public func reset() {
+    /// Replace everything with a snapshot from `session/follow`.
+    ///
+    /// Swapped in whole rather than merged, as dsh's own client does: the
+    /// snapshot is the tail of the log as of its `cursor`, and every event after
+    /// it follows on the same stream. Older pages loaded before are dropped, and
+    /// scrolling back fetches them again. What this device sent and the machine
+    /// has not logged yet survives the swap — that message is still on its way.
+    public func adopt(snapshot: JSONValue) {
         generation += 1
-        awaitingPage = true
-        early = []
-        topUpOwed = false
         items = []
         assistantIndex = [:]
         toolIndex = [:]
         seen = []
+        runningCommands = [:]
         projectionSeq = [:]
-        pending = []
+        streaming = nil
         oldestSeq = nil
-        loaded = false
-    }
-
-    /// Fold one history page. `prepend` is true for an older page.
-    public func absorb(page: JSONValue, prepend: Bool) {
-        let entries = page["events"]?.arrayValue ?? []
-        if prepend {
-            // Older events belong before everything already held. Folding them
-            // into a scratch conversation and splicing the result keeps the fold
-            // itself append-only, which is the only order it is correct in.
-            let older = Conversation(sessionId: sessionId)
-            older.absorb(page: page, prepend: false)
-            // Minus anything already on screen. A thinned page drops the chunks
-            // of a message it holds whole, so the page above can still carry
-            // them — and folded on their own they are a second, unfinished copy
-            // of a bubble that is already here complete.
-            let held = Set(items.map(\.id))
-            let carried = older.items.filter { !held.contains($0.id) }
-            items.insert(contentsOf: carried, at: 0)
-            reindex()
-            seen.formUnion(older.seen)
-        } else {
-            for entry in entries {
-                guard let event = entry["event"] else { continue }
-                apply(event: event, view: entry["view"])
-            }
-            replayEarly()
-            // Only the tail page makes a conversation loaded. An older page
-            // lands on one that already is; one landing on a reset
-            // conversation must not pass for the refetch.
-            loaded = true
+        cursor = nil
+        let records = snapshot["records"]?.arrayValue ?? []
+        for record in records {
+            guard let event = record["event"] else { continue }
+            apply(event: event)
         }
-        if let first = entries.first?["event"]?["seq"]?.intValue {
-            oldestSeq = min(oldestSeq ?? first, first)
-        }
-        // Whichever page just landed is the one that knows whether anything is
-        // left: the tail page for a fresh load, the older page for a scroll-back.
-        hasMore = page["hasMore"]?.boolValue ?? false
-        if let projections = page["projections"] {
+        oldestSeq = records.first?["event"]?["seq"]?.intValue
+        cursor = snapshot["cursor"]?.intValue ?? cursor
+        hasMore = snapshot["hasMore"]?.boolValue ?? false
+        if let projections = snapshot["projections"] {
             absorbProjections(projections)
         }
+        if let attempt = snapshot.path("assistantStream", "activeAttempt") {
+            resume(attempt)
+        }
+        // Whatever the log did not confirm goes back where it was: at the end.
+        for entry in pending {
+            append(.user(UserTurn(id: entry.id, text: entry.text, images: [], synthetic: false, at: Date())))
+        }
+        loaded = true
+    }
+
+    /// Fold an older page from `session/page` in front of what is held.
+    public func absorb(page: JSONValue) {
+        let records = page["records"]?.arrayValue ?? []
+        // Folded into a scratch conversation and spliced, which keeps the fold
+        // itself append-only — the only order it is correct in.
+        let older = Conversation(sessionId: sessionId)
+        for record in records {
+            guard let event = record["event"] else { continue }
+            older.apply(event: event)
+        }
+        let held = Set(items.map(\.id))
+        items.insert(contentsOf: older.items.filter { !held.contains($0.id) }, at: 0)
+        reindex()
+        seen.formUnion(older.seen)
+        if let first = records.first?["event"]?["seq"]?.intValue {
+            oldestSeq = min(oldestSeq ?? first, first)
+        }
+        hasMore = page["hasMore"]?.boolValue ?? false
     }
 
     /// Show a title this device just set, until the machine's own projection
@@ -212,30 +219,8 @@ public final class Conversation {
         self.title = title
     }
 
-    /// Fold one event from the live stream — now, or once the history it
-    /// belongs after has arrived. See `early`.
-    public func receiveLive(event: JSONValue, view: JSONValue?) {
-        guard !awaitingPage else {
-            early.append((event: event, view: view))
-            return
-        }
-        apply(event: event, view: view)
-    }
-
-    /// The history could not be fetched. What arrived live is still true, and
-    /// holding it back for a page that is not coming would only lose it.
-    public func historyFailed() {
-        replayEarly()
-    }
-
-    private func replayEarly() {
-        awaitingPage = false
-        let held = early
-        early = []
-        for entry in held { apply(event: entry.event, view: entry.view) }
-    }
-
-    /// Apply the projection baseline that rides the tail history page.
+    /// Apply a projection block: a snapshot's, or one session's share of the
+    /// `session/control` baseline.
     public func absorbProjections(_ block: JSONValue) {
         let asOf = block["asOfSeq"]?.intValue ?? 0
         for (key, value) in block["values"]?.objectValue ?? [:] {
@@ -243,7 +228,72 @@ public final class Conversation {
         }
     }
 
-    /// Apply one `session/projection` frame.
+    // MARK: - Streaming
+
+    /// Fold one `assistant-stream` frame (docs/dsh-0.2-protocol.md §4.2).
+    ///
+    /// `start` names the bubble, `chunk` grows it, `end` settles it. The
+    /// persisted `assistant/message` arrives before `end` and has already
+    /// replaced the bubble's text by then; an `abandoned` attempt has no such
+    /// message, and what it streamed is taken down.
+    public func receiveStream(_ frame: JSONValue) {
+        switch frame["type"]?.stringValue {
+        case "start":
+            guard let id = frame["attemptId"]?.stringValue else { return }
+            streaming = (id, frame["turn"]?.intValue ?? 0, frame["step"]?.intValue ?? 0)
+        case "chunk":
+            guard let attempt = streaming, frame["attemptId"]?.stringValue == attempt.attemptId,
+                  let chunk = frame["chunk"] else { return }
+            applyChunk(chunk, turn: attempt.turn, step: attempt.step, at: Conversation.date(frame["time"]))
+        case "end":
+            guard let attempt = streaming, frame["attemptId"]?.stringValue == attempt.attemptId else { return }
+            streaming = nil
+            if frame.path("outcome", "kind")?.stringValue == "abandoned" {
+                dropStreamed(turn: attempt.turn, step: attempt.step)
+            }
+        default:
+            break
+        }
+    }
+
+    /// Pick up an attempt that was already streaming when the snapshot was
+    /// taken: its output so far, in the log's compact form, then the frames
+    /// that follow on the stream.
+    private func resume(_ attempt: JSONValue) {
+        guard let id = attempt["attemptId"]?.stringValue else { return }
+        let turn = attempt["turn"]?.intValue ?? 0
+        let step = attempt["step"]?.intValue ?? 0
+        streaming = (id, turn, step)
+        for record in attempt["stream"]?.arrayValue ?? [] {
+            let text = (record["texts"]?.arrayValue ?? []).compactMap(\.stringValue).joined()
+            let at = Conversation.date(record["time0"] ?? record["time"])
+            switch record["type"]?.stringValue {
+            case "text-chunks" where !text.isEmpty:
+                mutateAssistant(turn: turn, step: step, at: at) { $0.text += text }
+            case "reasoning-chunks" where !text.isEmpty:
+                mutateAssistant(turn: turn, step: step, at: at) { $0.reasoning += text }
+            case "chunk":
+                if let chunk = record["chunk"] { applyChunk(chunk, turn: turn, step: step, at: at) }
+            default:
+                break
+            }
+        }
+    }
+
+    /// Take down a bubble whose text the log will never hold.
+    private func dropStreamed(turn: Int, step: Int) {
+        guard let index = assistantIndex["\(turn).\(step)"], case .assistant(let bubble) = items[index],
+              !bubble.complete else { return }
+        items.remove(at: index)
+        reindex()
+    }
+
+    static func date(_ milliseconds: JSONValue?) -> Date {
+        guard let value = milliseconds?.doubleValue else { return Date() }
+        return Date(timeIntervalSince1970: value / 1000)
+    }
+
+    /// Apply one projection change: from `session/control`, or a block above.
     public func applyProjection(key: String, value: JSONValue, seq: Int) {
         // Higher sequence wins. Frames can overtake the history baseline on a
         // reconnect, and a stale one must not undo a newer value.
@@ -279,7 +329,11 @@ public final class Conversation {
         case "contextBreakdown":
             contextBreakdown = ContextBreakdown(value)
         case "permissions":
-            permissions = PermissionChoice(value)
+            permissions = PermissionChoice(value).map { choice in
+                choice.options.isEmpty ? PermissionChoice(current: choice.current, options: presetOptions) : choice
+            }
+        case "inbox":
+            applyInbox(value)
         default:
             break
         }
@@ -294,11 +348,12 @@ public final class Conversation {
     // MARK: - Events
 
     /// Fold one session event.
-    public func apply(event: JSONValue, view: JSONValue?) {
+    public func apply(event: JSONValue) {
         guard let type = event["type"]?.stringValue else { return }
         let seq = event["seq"]?.intValue ?? 0
-        guard seq == 0 || seen.insert(seq).inserted else { return }
-        let at = Date(timeIntervalSince1970: (event["time"]?.doubleValue ?? 0) / 1000)
+        guard seen.insert(seq).inserted else { return }
+        cursor = max(cursor ?? seq, seq)
+        let at = Conversation.date(event["time"])
         let data = event["data"] ?? .emptyObject
 
         switch type {
@@ -308,7 +363,9 @@ public final class Conversation {
             running = false
             completeStreaming()
             if let reason = data["reason"]?["kind"]?.stringValue, reason != "success", reason != "completed" {
-                let detail = data["reason"]?["message"]?.stringValue ?? data["reason"]?["failure"]?["message"]?.stringValue
+                let detail = data.path("reason", "error", "message")?.stringValue
+                    ?? data.path("reason", "message")?.stringValue
+                    ?? data.path("reason", "failure", "message")?.stringValue
                 if let detail, !detail.isEmpty {
                     append(.notice(Notice(id: "n\(seq)", kind: .failure, text: detail, at: at)))
                 }
@@ -342,17 +399,22 @@ public final class Conversation {
             }
         case "user/message":
             appendUserMessage(data, seq: seq, at: at)
-        case "assistant/chunk":
-            applyChunk(data, seq: seq, at: at)
         case "assistant/message":
             finishAssistant(data, seq: seq, at: at)
+        case "assistant/attempt":
+            // An attempt that ended without a message — a failure, or one a
+            // retry replaces. What it streamed is not the answer; the retry
+            // streams into the same step.
+            dropStreamed(turn: data["turn"]?.intValue ?? 0, step: data["step"]?.intValue ?? 0)
+        case "session/title":
+            if let named = data["title"]?.stringValue { title = named }
         case "tool/call":
-            openToolCard(data, view: view, at: at)
+            openToolCard(data, at: at)
         case "tool/result":
             // A result with no card to land on is not folded, so its sequence
             // is not spent either: were its call to arrive later, the result
             // re-delivered behind it has to be able to land.
-            if !closeToolCard(data, view: view, at: at) { seen.remove(seq) }
+            if !closeToolCard(data, at: at) { seen.remove(seq) }
         case "todo/write":
             todos = (data["todos"]?.arrayValue ?? []).compactMap { item in
                 guard let content = item["content"]?.stringValue,
@@ -367,7 +429,8 @@ public final class Conversation {
         case "request/header":
             modelName = data.path("header", "config", "model")?.stringValue ?? modelName
         default:
-            // Log-only events (`step/start`, `request/context`, `session/end-seed`)
+            // Log-only events (`step/start`, `request/context`, `agent/inbox/spliced`
+            // — the `inbox` projection says the same, whole)
             // and every event a plugin adds after this build shipped. Silence is
             // the documented default; a client that guessed would render noise.
             break
@@ -386,6 +449,12 @@ public final class Conversation {
             guard let id = ref["attachmentId"]?.stringValue else { return nil }
             return ImageAttachment(id: id, mediaType: ref["mediaType"]?.stringValue ?? "image/png", base64: nil)
         }
+        if kind == "runtime-context" {
+            // The machine's own note to the model about where it is running,
+            // refreshed every turn. Nobody said it, and shown it would be a
+            // page of boilerplate in front of every answer.
+            return
+        }
         if kind != "user" {
             // Injected context: a file-change notice, an AGENTS.md, a skill body.
             // It is real model input, so hiding it would misrepresent the
@@ -396,41 +465,29 @@ public final class Conversation {
             return
         }
         if text.isEmpty && images.isEmpty { return }
-        // This is the real copy of something already on screen optimistically.
-        // Matching is by text rather than by id because the harness mints the id
-        // and the app never learns which of its sends it belongs to; the oldest
-        // outstanding send with the same body is the right one, since a person
-        // cannot send two messages out of order.
-        clearPending(matching: text)
-        // And reconcile the queue strip the same way. dsh does send an empty
-        // `session/queue` snapshot when it claims a message, but that snapshot
-        // is a transient — it rides the live stream, there is no call to
-        // re-ask, and one missed reconnect window leaves the strip offering to
-        // promote a message the transcript shows already answered. The
-        // machine speaking the message *is* the claim, so hearing it fold in
-        // is enough to retire the strip's copy. One entry, oldest first, for
-        // the same reason `clearPending` matches that way.
-        let spoken = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let claimed = queue.firstIndex(where: { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) == spoken }) {
-            queue.remove(at: claimed)
+        // The real copy of something this device sent: the `requestId` it went
+        // under comes back as `source.rpcId`. Its optimistic bubble and its
+        // provisional queue entry are retired here rather than by the `inbox`
+        // update, which can be missed across a reconnect.
+        if let requestId = message.path("source", "rpcId")?.stringValue {
+            clearPending(requestId)
+            provisional.removeAll { $0.id == requestId }
+            queue.removeAll { $0.id == requestId }
         }
         let id = message["id"]?.stringValue ?? "u\(seq)"
         append(.user(UserTurn(id: id, text: text, images: images, synthetic: false, at: at)))
     }
 
-    /// Remove the oldest optimistic bubble whose text matches.
-    private func clearPending(matching text: String) {
-        let wanted = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let index = pending.firstIndex(where: { $0.text == wanted }) else { return }
-        let id = pending.remove(at: index).id
-        items.removeAll { $0.id == id }
+    /// Remove the optimistic bubble sent under this `requestId`.
+    private func clearPending(_ requestId: String) {
+        guard let index = pending.firstIndex(where: { $0.id == requestId }) else { return }
+        pending.remove(at: index)
+        items.removeAll { $0.id == requestId }
         reindex()
     }
 
-    private func applyChunk(_ data: JSONValue, seq: Int, at: Date) {
-        guard let chunk = data["chunk"], let kind = chunk["type"]?.stringValue else { return }
-        let turn = data["turn"]?.intValue ?? 0
-        let step = data["step"]?.intValue ?? 0
+    private func applyChunk(_ chunk: JSONValue, turn: Int, step: Int, at: Date) {
+        guard let kind = chunk["type"]?.stringValue else { return }
         switch kind {
         case "text-delta":
             guard let text = chunk["text"]?.stringValue, !text.isEmpty else { return }
@@ -481,12 +538,12 @@ public final class Conversation {
         items.append(.assistant(fresh))
     }
 
-    private func openToolCard(_ data: JSONValue, view: JSONValue?, at: Date) {
+    private func openToolCard(_ data: JSONValue, at: Date) {
         guard let callId = data["callId"]?.stringValue else { return }
         let name = data["name"]?.stringValue ?? "tool"
         let arguments = data["arguments"]?.stringValue ?? "{}"
         let presentation = Conversation.questionPresentation(name: name, arguments: arguments)
-            ?? Conversation.callPresentation(view?["view"], for: view?["for"]?.stringValue, name: name, arguments: arguments)
+            ?? Conversation.callPresentation(name: name, arguments: arguments)
         let card = ToolCard(
             id: callId,
             name: name,
@@ -506,20 +563,19 @@ public final class Conversation {
     }
 
     @discardableResult
-    private func closeToolCard(_ data: JSONValue, view: JSONValue?, at: Date) -> Bool {
-        let block = data.path("message", "content")?.arrayValue?.first
-        let callId = data.path("message", "source", "callId")?.stringValue
-            ?? block?["toolCallId"]?.stringValue
+    private func closeToolCard(_ data: JSONValue, at: Date) -> Bool {
+        let message = data["message"] ?? .emptyObject
+        let callId = message.path("source", "callId")?.stringValue ?? message["toolCallId"]?.stringValue
         guard let callId, let index = toolIndex[callId], case .tool(var card) = items[index] else { return false }
         card.running = false
         card.finishedAt = at
         card.failed = data["error"] != nil && data["error"]?.isNull == false
-            || block?["isError"]?.boolValue == true
-        card.resultText = Conversation.plainText(block?["content"]?.arrayValue ?? [])
+            || message["isError"]?.boolValue == true
+        card.resultText = Conversation.plainText(message["content"]?.arrayValue ?? [])
         if case .question(let questions, _) = card.presentation {
             card.presentation = .question(items: questions, answers: card.failed ? nil : Conversation.answers(in: card.resultText))
-        } else if view?["for"]?.stringValue == "result", let result = view?["view"] {
-            card.presentation = Conversation.resultPresentation(result, current: card.presentation)
+        } else {
+            card.presentation = Conversation.resultPresentation(card.resultText, current: card.presentation)
         }
         items[index] = .tool(card)
         return true
@@ -560,13 +616,31 @@ public final class Conversation {
 
     // MARK: - Side channels
 
-    /// Apply a `session/queue` snapshot. The whole set arrives every time, so
-    /// this replaces rather than merges.
-    public func applyQueue(_ items: [JSONValue]) {
-        queue = items.compactMap { item in
-            guard let id = item["id"]?.stringValue else { return nil }
-            let text = Conversation.plainText(item.path("message", "content")?.arrayValue ?? [])
-            return QueuedMessage(id: id, text: text, placement: item["placement"]?.stringValue ?? "queued")
+    /// Apply the `inbox` projection: messages sent and not yet claimed, those
+    /// waiting for the next turn and those to be cut into the running one. The
+    /// whole set arrives every time, so this replaces rather than merges —
+    /// except for what this device sent and the machine has not listed yet.
+    func applyInbox(_ value: JSONValue) {
+        var listed: [QueuedMessage] = []
+        var requestIds: Set<String> = []
+        for (target, placement) in [("next-step", "steering"), ("next-turn", "queued")] {
+            for message in value[target]?.arrayValue ?? [] {
+                guard let id = message["id"]?.stringValue else { continue }
+                if let requestId = message.path("source", "rpcId")?.stringValue { requestIds.insert(requestId) }
+                let text = Conversation.plainText(message["content"]?.arrayValue ?? [])
+                listed.append(QueuedMessage(id: id, text: text, placement: placement))
+            }
+        }
+        provisional.removeAll { requestIds.contains($0.id) }
+        queue = listed + provisional
+    }
+
+    /// Learn the presets this machine offers, for a projection that names
+    /// only the current one.
+    public func offer(presets: [PermissionChoice.Option]) {
+        presetOptions = presets
+        if let held = permissions, held.options.isEmpty {
+            permissions = PermissionChoice(current: held.current, options: presets)
         }
     }
 
@@ -586,24 +660,27 @@ public final class Conversation {
         if !value { completeStreaming() }
     }
 
-    /// Show a message in the queue strip before the machine has confirmed it.
-    ///
-    /// The next `session/queue` snapshot replaces the whole array, so this
-    /// provisional entry is swapped for the machine's own the moment it
-    /// answers — same shape as `showPending`, aimed at the other place.
+    /// Show a message in the queue strip before the machine has listed it,
+    /// under the `requestId` it is sent with. The machine's own entry replaces
+    /// it the moment `inbox` names that request — same shape as `showPending`,
+    /// aimed at the other place.
     public func showQueued(text: String, id: String) {
-        queue.append(QueuedMessage(id: id, text: text.trimmingCharacters(in: .whitespacesAndNewlines), placement: "queued"))
+        let entry = QueuedMessage(id: id, text: text.trimmingCharacters(in: .whitespacesAndNewlines), placement: "queued")
+        provisional.append(entry)
+        queue.append(entry)
     }
 
-    /// Take back a provisional queue entry whose send failed. A no-op when a
-    /// real snapshot has already replaced it, which is the correct outcome:
-    /// the machine's word beats the guess.
+    /// Take back a provisional queue entry whose send failed. A no-op when the
+    /// machine has already listed it, which is the correct outcome: the
+    /// machine's word beats the guess.
     public func dropQueued(id: String) {
+        provisional.removeAll { $0.id == id }
         queue.removeAll { $0.id == id }
     }
 
-    /// Show a message optimistically, before the machine has logged it. The real
-    /// `user/message` event replaces it by id when it arrives.
+    /// Show a message optimistically, before the machine has logged it, under
+    /// the `requestId` it is sent with. The real `user/message` names that
+    /// request and replaces it.
     public func showPending(text: String, id: String) {
         pending.append((id: id, text: text.trimmingCharacters(in: .whitespacesAndNewlines)))
         append(.user(UserTurn(id: id, text: text, images: [], synthetic: false, at: Date())))
@@ -675,145 +752,65 @@ extension Conversation {
         return answers
     }
 
-    /// Turn a call-time render intent into a card.
-    static func callPresentation(_ view: JSONValue?, for slot: String?, name: String, arguments: String) -> ToolPresentation {
-        guard slot == "call", let view, let card = view["card"]?.stringValue else {
-            return .generic(title: name, kind: nil, detail: nil)
-        }
-        let title = view["title"]?.stringValue ?? name
-        switch card {
-        case "terminal":
-            return .terminal(command: title, cwd: view["cwd"]?.stringValue, output: nil, exitCode: nil)
-        case "diff":
-            return .diff(title: title, files: fileDiffs(view["diffs"]))
-        default:
-            return .generic(title: title, kind: view["kind"]?.stringValue, detail: detail(from: view["rawInput"]))
-        }
-    }
-
-    /// Turn a result-time render intent into a card, keeping what the pending
-    /// card already established. An omitted `title` means "keep the old one",
-    /// which is why this takes the current presentation rather than replacing it
-    /// outright.
-    static func resultPresentation(_ view: JSONValue, current: ToolPresentation) -> ToolPresentation {
-        let card = view["card"]?.stringValue ?? "generic"
-        let replacement = view["title"]?.stringValue
-        switch card {
-        case "terminal":
-            var command = replacement ?? ""
-            var cwd: String?
-            if case .terminal(let existing, let existingCwd, _, _) = current {
-                if replacement == nil { command = existing }
-                cwd = existingCwd
-            }
+    /// Choose a card for a tool call from its name and arguments.
+    ///
+    /// dsh 0.2 sends no render hints (docs/dsh-0.2-protocol.md §8.2), so the
+    /// tools worth a dedicated card are named here — the shell, the two file
+    /// writers, the two searches. Everything else, including whatever a plugin
+    /// adds, gets the generic card with its most telling argument.
+    static func callPresentation(name: String, arguments: String) -> ToolPresentation {
+        let input = (try? JSONValue(data: Data(arguments.utf8))) ?? .emptyObject
+        let path = input["file_path"]?.stringValue
+        switch name {
+        case "bash":
             return .terminal(
-                command: command,
-                cwd: cwd,
-                output: view["output"]?.stringValue,
-                exitCode: view["exitCode"]?.intValue
+                command: input["command"]?.stringValue ?? name,
+                cwd: input["workdir"]?.stringValue,
+                output: nil,
+                exitCode: nil
             )
-        case "diff":
-            return .diff(title: replacement ?? currentTitle(current), files: fileDiffs(view["diffs"]))
-        case "search":
-            let title = replacement ?? currentTitle(current)
-            if view["shape"]?.stringValue == "paths" {
-                let paths = (view["paths"]?.arrayValue ?? []).compactMap { $0.stringValue }
-                return .search(
-                    title: title,
-                    lines: paths,
-                    truncated: view["truncated"]?.boolValue ?? false,
-                    total: view["total"]?.intValue ?? paths.count
-                )
-            }
-            var lines: [String] = []
-            for file in view["files"]?.arrayValue ?? [] {
-                let path = file["path"]?.stringValue ?? "?"
-                for match in file["matches"]?.arrayValue ?? [] {
-                    let number = match["lineNumber"]?.intValue ?? 0
-                    let text = match["line"]?.stringValue ?? ""
-                    lines.append("\(path):\(number)  \(text)")
-                }
-            }
-            return .search(
-                title: title,
-                lines: lines,
-                truncated: view["truncated"]?.boolValue ?? false,
-                total: view["total"]?.intValue ?? lines.count
-            )
-        case "read":
-            let lines = (view["lines"]?.arrayValue ?? []).compactMap { line -> NumberedLine? in
-                guard let number = line["number"]?.intValue else { return nil }
-                return NumberedLine(number: number, text: line["text"]?.stringValue ?? "")
-            }
-            return .read(
-                path: view["path"]?.stringValue ?? currentTitle(current),
-                lines: lines,
-                totalLines: view["totalLines"]?.intValue ?? lines.count
-            )
-        case "web":
-            let title = replacement ?? currentTitle(current)
-            if view["kind"]?.stringValue == "fetch" {
-                let url = view["url"]?.stringValue ?? ""
-                let status = view["statusCode"]?.intValue ?? 0
-                return .generic(title: title, kind: "fetch", detail: "\(status)  \(url)")
-            }
-            let sources = (view["sources"]?.arrayValue ?? []).compactMap { source -> String? in
-                guard let url = source["url"]?.stringValue else { return nil }
-                return source["title"].flatMap { $0.stringValue }.map { "\($0)\n\(url)" } ?? url
-            }
-            let answer = view["answer"]?.stringValue
-            let body = ([answer].compactMap { $0 } + sources).joined(separator: "\n\n")
-            return .generic(title: title, kind: "search", detail: body.isEmpty ? nil : body)
+        case "edit" where path != nil:
+            return .diff(title: path ?? name, files: [FileDiff(
+                path: path ?? name,
+                oldText: input["old_string"]?.stringValue,
+                newText: input["new_string"]?.stringValue ?? ""
+            )])
+        case "write" where path != nil:
+            return .diff(title: path ?? name, files: [FileDiff(path: path ?? name, oldText: nil, newText: input["content"]?.stringValue ?? "")])
+        case "grep", "glob":
+            return .search(title: input["pattern"]?.stringValue ?? name, lines: [], truncated: false, total: 0)
+        case "read", "read_image":
+            return .generic(title: path ?? name, kind: "read", detail: nil)
+        case "web_fetch":
+            return .generic(title: input["url"]?.stringValue ?? name, kind: "fetch", detail: nil)
+        case "web_search":
+            let queries = (input["queries"]?.arrayValue ?? []).compactMap(\.stringValue)
+            return .generic(title: queries.first ?? name, kind: "search", detail: queries.count > 1 ? queries.joined(separator: "\n") : nil)
         default:
-            let content = view["content"]?.arrayValue.map { plainText($0) }
-            return .generic(
-                title: replacement ?? currentTitle(current),
-                kind: currentKind(current),
-                detail: content?.isEmpty == false ? content : currentDetail(current)
-            )
+            let salient = ["description", "file_path", "path", "pattern", "url", "name"].lazy
+                .compactMap { input[$0]?.stringValue }.first { !$0.isEmpty }
+            return .generic(title: name, kind: nil, detail: salient)
         }
     }
 
-    private static func currentTitle(_ presentation: ToolPresentation) -> String {
-        switch presentation {
-        case .generic(let title, _, _): return title
-        case .terminal(let command, _, _, _): return command
-        case .diff(let title, _): return title
-        case .search(let title, _, _, _): return title
-        case .read(let path, _, _): return path
-        case .question(let items, _): return items.first?.header ?? items.first?.question ?? ""
+    /// Fill in a card from its tool's result text: the shell's exit code, the
+    /// lines a search found. Other cards show the text as it is.
+    static func resultPresentation(_ text: String?, current: ToolPresentation) -> ToolPresentation {
+        guard let text else { return current }
+        switch current {
+        case .terminal(let command, let cwd, let output, _):
+            return .terminal(command: command, cwd: cwd, output: output, exitCode: exitCode(in: text))
+        case .search(let title, _, _, _):
+            let lines = text.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
+            return .search(title: title, lines: lines, truncated: false, total: lines.count)
+        default:
+            return current
         }
     }
 
-    private static func currentKind(_ presentation: ToolPresentation) -> String? {
-        if case .generic(_, let kind, _) = presentation { return kind }
-        return nil
-    }
-
-    private static func currentDetail(_ presentation: ToolPresentation) -> String? {
-        if case .generic(_, _, let detail) = presentation { return detail }
-        return nil
-    }
-
-    private static func fileDiffs(_ value: JSONValue?) -> [FileDiff] {
-        (value?.arrayValue ?? []).compactMap { entry in
-            guard let path = entry["path"]?.stringValue else { return nil }
-            return FileDiff(
-                path: path,
-                oldText: entry["oldText"]?.isNull == false ? entry["oldText"]?.stringValue : nil,
-                newText: entry["newText"]?.stringValue ?? ""
-            )
-        }
-    }
-
-    /// A salient input, rendered as text. Tools send either a string or an
-    /// object here, and the object form is worth pretty-printing.
-    private static func detail(from value: JSONValue?) -> String? {
-        guard let value, !value.isNull else { return nil }
-        if let text = value.stringValue { return text.isEmpty ? nil : text }
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        guard let data = try? encoder.encode(value) else { return nil }
-        return String(data: data, encoding: .utf8)
+    /// The `[exit code: N]` marker dsh's shell tool ends its result with.
+    static func exitCode(in text: String) -> Int? {
+        guard let range = text.range(of: #"\[exit code: (-?\d+)\]"#, options: [.regularExpression, .backwards]) else { return nil }
+        return Int(text[range].dropFirst("[exit code: ".count).dropLast())
     }
 }

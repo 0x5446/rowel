@@ -13,12 +13,12 @@
     "bridleSigningPublic": "U11kbxd2nsKeMnLzrGHQocQvkYj0GlDVO83GQ1OyQjU="
   },
   "handshake": {
-    "helloPayload": "eyJ2ZXJzaW9ucyI6WzFdLCJuYW1lIjoiVGVzdCBpUGhvbmUiLCJjbGllbnQiOiJyb3dlbC12ZWN0b3JzLzEifQ==",
-    "messageOne": "fslMX9HmJy+nx3IycmIj7maI06Im9ot2mslMQxzUKHdiL6C0cXi3Jvh/eUVlpsTaSwGYk+mkPvRWPN46b/yymXuM0OtC4iJSADzqzUi1xsE6p0PgGqXKFA/p+yMdpKs/t8I6dDLISdBHO9Bwe7cmFkiBA+KwIjVhIFP226kKoPCRhtxpFZc/o6ph3EwAEQOcVp0e9zkVaRtd619ABdqFuA==",
+    "helloPayload": "eyJ2ZXJzaW9ucyI6WzJdLCJuYW1lIjoiVGVzdCBpUGhvbmUiLCJjbGllbnQiOiJyb3dlbC12ZWN0b3JzLzEifQ==",
+    "messageOne": "fslMX9HmJy+nx3IycmIj7maI06Im9ot2mslMQxzUKHdiL6C0cXi3Jvh/eUVlpsTaSwGYk+mkPvRWPN46b/yymXuM0OtC4iJSADzqzUi1xsE6p0PgGqXKFA/p+yMdp6s/t8I6dDLISdBHO9Bwe7cmFkiBA+KwIjVhIFP226kKoPCRhtxpFZc/o6ph3EwAEQOcBEtEky6vGQOA5ySb0O7Q2A==",
     "replyPayload": "eyJvayI6dHJ1ZSwibWFjaGluZSI6IlZlY3RvciBNYWMiLCJicmlkbGUiOiIwLjEuMCJ9",
-    "messageTwo": "UqVSSwwy6KR/I5q2yo5Cw7kxalTK5IVOzbWIkxHMmn6xJRd0HEL4iX2H5JVd5obNG1fqFtt1PGsXi6P5asaYwLruToX4LAmFuno31VMnqwYR7tDULL2gsbXe8hVV8jDLtteK",
-    "handshakeHash": "HL/9x04RSXPM65fZim8QjLFXqFuBQvwSrXNhPY8bLmY=",
-    "confirmationNumber": "294559"
+    "messageTwo": "UqVSSwwy6KR/I5q2yo5Cw7kxalTK5IVOzbWIkxHMmn6xJRd0HEL4iX2H5JVd5obNG1fqFtt1PGsXi6P5asaYwLruToX4LAmFuno31VMnqwYR7tDdgOowTjZmtXkUj7hrFICV",
+    "handshakeHash": "3jut94+yrt8JZ1kJc2Md6EjohUOY9BgVSGEU7KC3QwI=",
+    "confirmationNumber": "285336"
   },
   "transport": {
     "appToBridlePlaintext": [
@@ -81,19 +81,63 @@
   "frames": [
     {
       "frame": {
-        "t": "req",
-        "id": "p1",
-        "method": "session.list",
-        "payload": {}
+        "t": "call",
+        "id": "c1",
+        "endpoint": "session/list",
+        "args": {
+          "_request": {}
+        }
       },
-      "encoded": "eyJ0IjoicmVxIiwiaWQiOiJwMSIsIm1ldGhvZCI6InNlc3Npb24ubGlzdCIsInBheWxvYWQiOnt9fQ=="
+      "encoded": "eyJ0IjoiY2FsbCIsImlkIjoiYzEiLCJlbmRwb2ludCI6InNlc3Npb24vbGlzdCIsImFyZ3MiOnsiX3JlcXVlc3QiOnt9fX0="
     },
     {
       "frame": {
-        "t": "resume",
-        "since": 12
+        "t": "abort",
+        "id": "c1"
       },
-      "encoded": "eyJ0IjoicmVzdW1lIiwic2luY2UiOjEyfQ=="
+      "encoded": "eyJ0IjoiYWJvcnQiLCJpZCI6ImMxIn0="
+    },
+    {
+      "frame": {
+        "t": "open",
+        "sid": "s1",
+        "endpoint": "session/follow",
+        "args": {
+          "request": {
+            "address": {
+              "kind": "session",
+              "sessionId": "session-1"
+            },
+            "assistantStream": true,
+            "maxMessages": 25
+          }
+        }
+      },
+      "encoded": "eyJ0Ijoib3BlbiIsInNpZCI6InMxIiwiZW5kcG9pbnQiOiJzZXNzaW9uL2ZvbGxvdyIsImFyZ3MiOnsicmVxdWVzdCI6eyJhZGRyZXNzIjp7ImtpbmQiOiJzZXNzaW9uIiwic2Vzc2lvbklkIjoic2Vzc2lvbi0xIn0sImFzc2lzdGFudFN0cmVhbSI6dHJ1ZSwibWF4TWVzc2FnZXMiOjI1fX19"
+    },
+    {
+      "frame": {
+        "t": "item",
+        "sid": "s1",
+        "value": {
+          "text": "hi"
+        }
+      },
+      "encoded": "eyJ0IjoiaXRlbSIsInNpZCI6InMxIiwidmFsdWUiOnsidGV4dCI6ImhpIn19"
+    },
+    {
+      "frame": {
+        "t": "end",
+        "sid": "s1"
+      },
+      "encoded": "eyJ0IjoiZW5kIiwic2lkIjoiczEifQ=="
+    },
+    {
+      "frame": {
+        "t": "cancel",
+        "sid": "s1"
+      },
+      "encoded": "eyJ0IjoiY2FuY2VsIiwic2lkIjoiczEifQ=="
     },
     {
       "frame": {

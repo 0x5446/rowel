@@ -27,9 +27,11 @@
 /// - **Confidentiality from the Relay.** Noise IK with the machine's static key
 ///   known in advance, so the party switching the bytes cannot read or alter
 ///   them, and cannot substitute itself.
-/// - **Losslessness across reconnects.** The Bridle numbers every downlink frame
-///   and keeps a replay buffer. On reconnect the app says how far it got and the
-///   gap arrives in order, so a half-streamed answer resumes instead of jumping.
+/// - **A fresh start after every reconnect.** Neither dsh nor the Bridle resumes
+///   a stream. A dropped connection ends every stream on it, the opener reopens
+///   what it needs, and dsh answers each with a fresh baseline — a conversation
+///   snapshot, the workspace list, the approvals still pending — which is how
+///   dsh's own browser client recovers too (docs/dsh-0.2-migration.md D4).
 /// - **Never hanging.** A phone changes network without telling anyone. Every
 ///   in-flight call has a deadline, every dropped socket fails its calls, and the
 ///   reconnect loop backs off rather than hammering.
@@ -128,19 +130,25 @@ public struct DialDiagnosis: Equatable, Sendable {
 /// Everything the tunnel tells the app about.
 public enum TunnelSignal: Sendable {
     case status(TunnelStatus)
-    /// One downlink frame, in sequence.
-    case event(EventFrame)
-    /// The replay buffer could not reach back far enough. Refetch state.
-    case resync(from: Int)
     /// The machine's harness went away or came back.
     case harness(reachable: Bool, detail: String?)
-    /// A fresh handshake completed.
-    /// `direct` is where the machine says it can be dialled locally right now —
-    /// nil from a Bridle too old to say. `harness` is which dsh this identity
-    /// fronts and where it lives — same vintage rule.
-    case handshake(host: JSONValue?, harness: HarnessInfo?, direct: [String]?)
+    /// A fresh handshake completed: every stream from before it is gone, and
+    /// whoever needs one opens it again. `direct` is where the machine says it
+    /// can be dialled locally right now.
+    case handshake(ReadyFrame)
     /// One line about what the connection is doing, for the diagnostics screen.
     case note(ConnectionNote)
+}
+
+/// One dsh stream through the tunnel.
+///
+/// `items` ends when dsh ends the stream and throws when it fails; see
+/// `Tunnel.open`. Iterate it from one task. `cancel` stops the stream at dsh —
+/// as does cancelling the task that iterates it.
+public struct TunnelStream: Sendable {
+    public let sid: String
+    public let items: AsyncThrowingStream<JSONValue, Error>
+    public let cancel: @Sendable () -> Void
 }
 
 /// One line in the connection log.
@@ -226,7 +234,7 @@ public struct TunnelTimings: Sendable {
     /// file's own header promises not to have.
     ///
     /// Reconnecting costs nothing to be wrong about: the handshake is fast and
-    /// `resume` replays the gap by sequence number, so a false positive is a
+    /// every stream reopens with a fresh baseline, so a false positive is a
     /// blink and a missed detection is minutes of lying.
     public var silenceLimit: TimeInterval = 40
 
@@ -272,11 +280,9 @@ public actor Tunnel {
     private var sleeper: Task<Void, Never>?
     private var sendChain: Task<Void, Never> = Task {}
     private var pending: [String: CheckedContinuation<JSONValue, Error>] = [:]
+    /// Open streams, by the id this end gave them.
+    private var streams: [String: AsyncThrowingStream<JSONValue, Error>.Continuation] = [:]
     private var counter = 0
-    private var highestSeq = 0
-    /// The Bridle process `highestSeq` counts in; see `ResumeFrame.epoch`.
-    private var epoch: String?
-    private var everConnected = false
     private var noteCounter = 0
     /// When the last frame of any kind arrived, including the Bridle's pings.
     private var lastFrameAt = Date()
@@ -442,18 +448,60 @@ public actor Tunnel {
 
     // MARK: - Calls
 
-    /// Invoke one harness method.
+    /// Invoke one dsh endpoint.
     ///
+    /// - Parameters:
+    ///   - endpoint: `<namespace>/<method>`, e.g. `session/list`.
+    ///   - args: the endpoint's arguments, with exactly the names dsh declares.
     /// - Throws: `CallError`. `disconnected` means nothing was sent and the call
     ///   may be retried; `interrupted` and `timeout` mean it was sent and its
     ///   outcome is unknown (`CallError.outcomeUnknown`); anything else came
-    ///   from the harness.
+    ///   from dsh or the Bridle.
     @discardableResult
-    public func call(_ method: String, _ payload: JSONValue = .emptyObject) async throws -> JSONValue {
+    public func call(_ endpoint: String, _ args: JSONValue = .emptyObject) async throws -> JSONValue {
         counter += 1
         let id = "c\(counter)"
-        let frame = RequestFrame(id: id, method: method, payload: payload)
+        let frame = CallFrame(id: id, endpoint: endpoint, args: args)
         return try await withRequest(id: id) { try self.write(frame) }
+    }
+
+    /// Open a dsh stream.
+    ///
+    /// Items arrive in order. The sequence ends when dsh ends the stream, and
+    /// throws a `CallError` when it fails — `disconnected` when this tunnel
+    /// drops, `upstream-lost` when the Bridle's connection to dsh does; either
+    /// way the opener opens it again and gets a fresh baseline. Cancelling the
+    /// consuming task, or `TunnelStream.cancel()`, stops it at dsh.
+    public func open(_ endpoint: String, _ args: JSONValue = .emptyObject) -> TunnelStream {
+        counter += 1
+        let sid = "s\(counter)"
+        var continuation: AsyncThrowingStream<JSONValue, Error>.Continuation!
+        let items = AsyncThrowingStream<JSONValue, Error>(bufferingPolicy: .unbounded) { continuation = $0 }
+        guard case .online = status else {
+            continuation.finish(throwing: CallError(code: "disconnected", message: "Not connected to that Mac."))
+            return TunnelStream(sid: sid, items: items, cancel: {})
+        }
+        streams[sid] = continuation
+        continuation.onTermination = { [weak self] termination in
+            guard case .cancelled = termination else { return }
+            Task { await self?.cancelStream(sid) }
+        }
+        do {
+            try write(OpenFrame(sid: sid, endpoint: endpoint, args: args))
+        } catch {
+            streams.removeValue(forKey: sid)
+            continuation.finish(throwing: CallError(code: "disconnected", message: "Not connected to that Mac."))
+        }
+        return TunnelStream(sid: sid, items: items, cancel: { [weak self] in
+            Task { await self?.cancelStream(sid) }
+        })
+    }
+
+    /// Stop a stream at dsh; nothing more is delivered for it.
+    private func cancelStream(_ sid: String) {
+        guard let continuation = streams.removeValue(forKey: sid) else { return }
+        continuation.finish()
+        try? write(CancelFrame(sid: sid))
     }
 
     /// Offer, or withdraw, somewhere to be woken when this app is not running.
@@ -478,23 +526,6 @@ public actor Tunnel {
         // has and stop ringing a phone that still wants to be rung.
         guard wakeTokenKnown else { return }
         try? write(WakeFrame(token: wakeToken))
-    }
-
-    /// Answer an approval or a question.
-    ///
-    /// The harness routes the answer by the `rpcId` of the request frame, so the
-    /// id is echoed back verbatim; `value` is that responder's own payload.
-    @discardableResult
-    public func respond(rpcId: String, value: JSONValue) async throws -> JSONValue {
-        counter += 1
-        let id = "r\(counter)"
-        let message = JSONValue.object([
-            "type": .string("client-response"),
-            "rpcId": .string(rpcId),
-            "result": .object(["ok": .bool(true), "value": value]),
-        ])
-        let frame = RespondFrame(id: id, message: message)
-        return try await withRequest(id: id) { try self.write(frame) }
     }
 
     private func withRequest(id: String, _ send: @escaping () throws -> Void) async throws -> JSONValue {
@@ -757,8 +788,8 @@ public actor Tunnel {
     /// already thrown away. All of it bought one property: no visible blink.
     ///
     /// That property is not worth it. Reconnecting is the best-tested path in
-    /// this file — a phone does it every time the radio sleeps — and it is
-    /// lossless by construction: `resume` replays the gap by sequence number.
+    /// this file — a phone does it every time the radio sleeps — and nothing is
+    /// lost by it: every stream reopens with a fresh baseline from dsh.
     /// It costs about a second and a line of grey text. So the upgrade is now
     /// the same thing a dropped connection is, deliberately: close the socket
     /// and let the reconnect happen. The opening race already prefers the
@@ -1028,15 +1059,6 @@ public actor Tunnel {
         switch frame {
         case .ready(let ready):
             var learned = false
-            // Events do not flow until the app asks. On a first connection it
-            // asks from the machine's own head, so it gets what happens next
-            // rather than a replay of a conversation it is about to fetch in
-            // full; on a reconnect it asks from where it left off.
-            let reconnecting = everConnected
-            if !everConnected {
-                highestSeq = ready.seq
-                everConnected = true
-            }
             if let direct = ready.direct, direct != learnedDirect {
                 learnedDirect = direct
                 note(.ok, direct.isEmpty
@@ -1054,23 +1076,8 @@ public actor Tunnel {
                 learned = true
             }
             status = .online(carrier: currentCarrier, machine: ready.machine, harnessUp: ready.dshReachable)
-            continuation?.yield(.handshake(host: ready.host, harness: ready.harness, direct: ready.direct))
-            continuation?.yield(.harness(reachable: ready.dshReachable, detail: nil))
-            // A different process on the other end: its numbering is not ours.
-            // Settled here rather than left to the Bridle's reply to the resume
-            // below, so `highestSeq` and `epoch` always describe the same
-            // process — even if that resume is lost with the connection.
-            // Any change counts, including to or from none: a Bridle too old to
-            // send an epoch replaced by one that does is a new process too —
-            // the path every Mac upgrading from 0.1.4 takes once.
-            if reconnecting, ready.epoch != epoch {
-                highestSeq = ready.seq
-                continuation?.yield(.resync(from: ready.seq))
-            }
-            // With the epoch `highestSeq` now counts in; an older Bridle sends
-            // none, and the frame then carries none.
-            try? write(ResumeFrame(since: highestSeq, epoch: ready.epoch))
-            epoch = ready.epoch
+            continuation?.yield(.handshake(ready))
+            continuation?.yield(.harness(reachable: ready.dshReachable, detail: ready.detail))
             // Re-offered on every ready rather than once, because the machine
             // is what stores it and a machine can be reinstalled, restored from
             // a backup, or simply be a different one. Sending it again costs a
@@ -1079,14 +1086,14 @@ public actor Tunnel {
             // After the status is settled, so the guard inside sees the live
             // carrier rather than the one being replaced.
             if learned { considerUpgrade() }
-        case .response(let id, let result):
+        case .result(let id, let result):
             settle(id, result.mapError { $0 as Error })
-        case .event(let event):
-            highestSeq = max(highestSeq, event.seq)
-            continuation?.yield(.event(event))
-        case .resync(let from):
-            highestSeq = from
-            continuation?.yield(.resync(from: from))
+        case .item(let sid, let value):
+            streams[sid]?.yield(value)
+        case .end(let sid):
+            streams.removeValue(forKey: sid)?.finish()
+        case .error(let sid, let error):
+            streams.removeValue(forKey: sid)?.finish(throwing: error)
         case .status(let reachable, let detail):
             if case .online(let carrier, let machine, _) = status {
                 status = .online(carrier: carrier, machine: machine, harnessUp: reachable)
@@ -1130,6 +1137,13 @@ public actor Tunnel {
             // Not "disconnected": these calls were written, and may have taken
             // effect. See `CallError.outcomeUnknown`.
             continuation.resume(throwing: CallError(code: "interrupted", message: "The connection to that Mac dropped before it answered."))
+        }
+        // Streams have no outcome to be unsure of: they are simply over, and
+        // their openers reopen them on the next connection.
+        let open = streams
+        streams.removeAll()
+        for (_, continuation) in open {
+            continuation.finish(throwing: CallError(code: "disconnected", message: "The connection to that Mac dropped."))
         }
     }
 

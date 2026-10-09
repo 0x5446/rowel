@@ -1,0 +1,16 @@
+{
+  "endpoint": "directoryPicker/list",
+  "args": {
+    "path": "/tmp/dsh-home"
+  },
+  "result": {
+    "ok": false,
+    "error": {
+      "code": "directory-picker/unavailable",
+      "message": "directoryPicker.list needs the browse capability; the composed picker serves \"native\"",
+      "details": {
+        "capability": "native"
+      }
+    }
+  }
+}

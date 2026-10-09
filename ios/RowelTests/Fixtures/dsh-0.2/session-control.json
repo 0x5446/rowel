@@ -1,0 +1,103 @@
+{
+  "endpoint": "session/control",
+  "args": {},
+  "items": [
+    {
+      "type": "baseline",
+      "value": {
+        "projections": {
+          "session-a43fd407-8430-445a-892e-adea8dfcbea1": {
+            "asOfSeq": 16,
+            "values": {
+              "title": "Hello from the fixture",
+              "goal": null,
+              "tokenUsage": {
+                "uncachedInputTokens": 0,
+                "outputTokens": 0,
+                "cacheReadTokens": 0,
+                "cacheWriteTokens": 0
+              },
+              "contextPressure": {
+                "contextWindow": 1000000
+              },
+              "contextBreakdown": {
+                "systemTokens": 1458,
+                "toolsTokens": 5157,
+                "messageTokens": 207
+              },
+              "inbox": {
+                "next-turn": [],
+                "next-step": []
+              },
+              "sessionStats": {
+                "turns": 1,
+                "steps": 1,
+                "llmMs": 0,
+                "toolMs": 0,
+                "ttftMs": 0,
+                "ttftSteps": 0,
+                "decodeMs": 0,
+                "decodeTokens": 0
+              },
+              "turnOutline": [
+                {
+                  "turn": 1,
+                  "seq": 4,
+                  "prompt": "Hello from the fixture",
+                  "response": ""
+                }
+              ],
+              "agentPreset": "standard",
+              "userQuestions": {
+                "active": [],
+                "settled": []
+              },
+              "subagentCatalog": [],
+              "subagentTiming": {
+                "settledMs": 0
+              },
+              "subagent": null,
+              "permissions": {
+                "currentValue": "read-only"
+              },
+              "todos": null,
+              "plan": {
+                "active": false,
+                "pending": false
+              },
+              "modelSelection": {
+                "lastUsed": {
+                  "provider": "deepseek-official",
+                  "model": "deepseek-flash",
+                  "reasoningEffort": "high"
+                },
+                "next": {
+                  "provider": "deepseek-official",
+                  "model": "deepseek-flash",
+                  "reasoningEffort": "high"
+                }
+              },
+              "sessionListMetadata": {
+                "blank": false,
+                "lastPromptAt": 1791542103371
+              },
+              "imageLimits": {
+                "maxImageBytes": 20971520,
+                "maxImagesPerMessage": 20,
+                "maxMessageImageBytes": 209715200,
+                "maxImagePixels": 64000000,
+                "maxImageDimension": 8192,
+                "mediaTypes": [
+                  "image/png",
+                  "image/jpeg",
+                  "image/webp",
+                  "image/gif"
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

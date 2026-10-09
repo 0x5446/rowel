@@ -1,0 +1,36 @@
+{
+  "endpoint": "workspace/follow",
+  "args": {},
+  "items": [
+    {
+      "type": "baseline",
+      "value": {
+        "items": [
+          {
+            "workspaceId": "56ac5d65-05a8-4008-b957-f8027d2645b1",
+            "path": "/private/tmp/dsh-home",
+            "title": "Fixture workspace",
+            "sessionIds": [
+              "session-8677f187-3839-419a-87ae-63bfdea6f964",
+              "session-a43fd407-8430-445a-892e-adea8dfcbea1"
+            ],
+            "createdAt": "2026-10-09T10:35:03.167Z",
+            "updatedAt": "2026-10-09T10:35:04.477Z"
+          }
+        ],
+        "archivedSessionIds": [],
+        "pinnedSessionIds": []
+      }
+    },
+    {
+      "type": "archived",
+      "archivedSessionIds": [
+        "session-a43fd407-8430-445a-892e-adea8dfcbea1"
+      ]
+    },
+    {
+      "type": "archived",
+      "archivedSessionIds": []
+    }
+  ]
+}

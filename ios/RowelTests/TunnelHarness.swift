@@ -144,18 +144,16 @@ actor FakeBridle {
     /// Every carrier this machine has served, oldest first, so a test can ask
     /// which sockets were opened and in what order.
     private(set) var served: [LoopbackCarrier] = []
-    private(set) var resumedFrom: [Int] = []
-    /// The `epoch` each resume carried, in order; nil when it carried none.
-    private(set) var resumedEpochs: [String?] = []
-    /// This process's event numbering, as the ready frame names it; nil for a
-    /// Bridle too old to send one.
-    let epoch: String?
     private(set) var handshakes = 0
+    /// Every endpoint called, oldest first.
+    private(set) var calls: [String] = []
+    /// Every stream opened, and every one the app cancelled, by stream id.
+    private(set) var opened: [String] = []
+    private(set) var cancelled: [String] = []
     /// Every `wake` frame received, oldest first; nil for a withdrawal.
     private(set) var wakes: [String?] = []
 
     private var channels: [ObjectIdentifier: SecureChannel] = [:]
-    private var head = 0
     /// Handshakes still to be refused, and with what reason.
     private var refusals: [String] = []
 
@@ -173,11 +171,10 @@ actor FakeBridle {
     /// What the ready frame advertises as this machine's current addresses.
     let direct: [String]
 
-    init(name: String = "a-mac", staticKeys: StaticKeyPair = .generate(), direct: [String] = [], sendsEpoch: Bool = true) {
+    init(name: String = "a-mac", staticKeys: StaticKeyPair = .generate(), direct: [String] = []) {
         self.name = name
         self.staticKeys = staticKeys
         self.direct = direct
-        self.epoch = sendsEpoch ? UUID().uuidString : nil
     }
 
     /// Accept a handshake and then read whatever the app sends.
@@ -210,8 +207,8 @@ actor FakeBridle {
                 "machine": .string(name),
                 "dshReachable": .bool(true),
                 "direct": .array(direct.map(JSONValue.string)),
-                "seq": .number(Double(head)),
-                "epoch": epoch.map(JSONValue.string) ?? .null,
+                "dsh": .string("0.2.0"),
+                "host": .object(["home": .string("/Users/someone")]),
             ])
             while true {
                 let bytes = try await carrier.receive()
@@ -219,9 +216,21 @@ actor FakeBridle {
                 let plain = try channel.decrypt(bytes)
                 guard let value = try? JSONValue(data: plain) else { continue }
                 switch value["t"]?.stringValue {
-                case "resume":
-                    resumedFrom.append(value["since"]?.intValue ?? 0)
-                    resumedEpochs.append(value["epoch"]?.stringValue)
+                case "call":
+                    // Answers every call with the endpoint it was asked.
+                    calls.append(value["endpoint"]?.stringValue ?? "")
+                    try await push(to: carrier, json: [
+                        "t": .string("result"),
+                        "id": value["id"] ?? .null,
+                        "result": .object(["ok": .bool(true), "value": .object(["endpoint": value["endpoint"] ?? .null])]),
+                    ])
+                case "open":
+                    // Opens with one item, and stays open.
+                    let sid = value["sid"]?.stringValue ?? ""
+                    opened.append(sid)
+                    try await push(to: carrier, json: ["t": .string("item"), "sid": .string(sid), "value": .object(["n": 1])])
+                case "cancel":
+                    cancelled.append(value["sid"]?.stringValue ?? "")
                 case "wake":
                     wakes.append(value["token"]?.stringValue)
                 case "ping":
@@ -239,17 +248,6 @@ actor FakeBridle {
         } catch {
             // A closed carrier ends the loop; that is the normal exit.
         }
-    }
-
-    /// Send one event frame on the most recent carrier.
-    func emit(seq: Int, to carrier: LoopbackCarrier) async {
-        head = max(head, seq)
-        try? await push(to: carrier, json: [
-            "t": .string("ev"),
-            "seq": .number(Double(seq)),
-            "stream": .string("mux"),
-            "frame": .object(["type": .string("noop")]),
-        ])
     }
 
     private func push(to carrier: LoopbackCarrier, json: [String: JSONValue]) async throws {

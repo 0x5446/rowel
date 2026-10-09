@@ -1,0 +1,84 @@
+{
+  "endpoint": "session/modelCatalog",
+  "args": {},
+  "result": {
+    "ok": true,
+    "value": {
+      "default": {
+        "provider": "deepseek-official",
+        "model": "deepseek-flash"
+      },
+      "routableProviders": [
+        "deepseek-official"
+      ],
+      "groups": [
+        {
+          "id": "deepseek-official",
+          "name": "DeepSeek",
+          "models": [
+            {
+              "id": "deepseek-flash",
+              "name": "DeepSeek-V41-Flash",
+              "reasoning": {
+                "efforts": [
+                  {
+                    "id": "off",
+                    "name": "Off",
+                    "description": "Use for simple tasks that do not need reasoning."
+                  },
+                  {
+                    "id": "low",
+                    "name": "Low",
+                    "description": "Prefer for routine or latency-sensitive tasks."
+                  },
+                  {
+                    "id": "high",
+                    "name": "High",
+                    "description": "The default balance for most tasks."
+                  },
+                  {
+                    "id": "max",
+                    "name": "Max",
+                    "description": "Reserve for the hardest quality-first tasks."
+                  }
+                ],
+                "defaultEffort": "high"
+              }
+            },
+            {
+              "id": "deepseek-v4-pro",
+              "name": "DeepSeek-V4-Pro",
+              "description": "Stronger agentic coding, knowledge, and difficult reasoning; suited to complex or quality-critical tasks at higher cost.",
+              "reasoning": {
+                "efforts": [
+                  {
+                    "id": "off",
+                    "name": "Off",
+                    "description": "Use for simple tasks that do not need reasoning."
+                  },
+                  {
+                    "id": "low",
+                    "name": "Low",
+                    "description": "Prefer for routine or latency-sensitive tasks."
+                  },
+                  {
+                    "id": "high",
+                    "name": "High",
+                    "description": "The default balance for most tasks."
+                  },
+                  {
+                    "id": "max",
+                    "name": "Max",
+                    "description": "Reserve for the hardest quality-first tasks."
+                  }
+                ],
+                "defaultEffort": "high"
+              }
+            }
+          ]
+        }
+      ],
+      "failures": []
+    }
+  }
+}

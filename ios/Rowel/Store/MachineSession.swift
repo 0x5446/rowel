@@ -4,33 +4,24 @@
 /// and keeps the session list and the open conversations in step with what the
 /// machine says. The views read it and never touch the tunnel directly.
 ///
-/// The refresh policy is the interesting part. A phone loses its connection
-/// constantly — the radio sleeps, the network changes, the app is suspended — so
-/// "reconnected" cannot mean "start over". The Bridle replays the gap by
-/// sequence number, which covers almost every drop; only when the replay buffer
-/// has overflowed (`resync`) does this refetch, and then it refetches exactly
-/// what is on screen rather than everything.
+/// Everything live arrives on dsh's own streams, passed through by the Bridle
+/// (docs/protocol.md §4): `$events` for approvals, questions and the session
+/// list, `workspace/follow` for the sidebar, `session/control` for every loaded
+/// session's projections, and one `session/follow` per conversation held here.
+/// A phone loses its connection constantly, and none of these resume — so each
+/// starts with the whole of its state, and on every reconnect they are simply
+/// opened again (`attach`) and what they say replaces what was held.
 
 import Foundation
 import Observation
 
-/// Messages per history page.
+/// Messages in a conversation's snapshot, and in each older page.
 ///
-/// dsh defaults to 50, and a page is bounded by messages but carries the whole
-/// raw event range they span — which for a streaming-heavy session means tens of
-/// thousands of `assistant/chunk` events. The Bridle strips the superseded ones,
-/// so 50 would be affordable against a current Bridle; this stays lower anyway,
-/// because the app has to survive talking to a Bridle that has not been updated
-/// yet, and because 25 messages already overfills a phone screen several times.
-private let historyPageSize = 25
-
-/// Messages in the first paint of a blank conversation.
-///
-/// Small enough to arrive fast on the relay path — measured at roughly a
-/// quarter of the full page's bytes and half its round trip on a heavy
-/// session, and far better than that on a poor uplink — while still filling a
-/// phone screen past its edge. The rest of the page follows immediately.
-private let firstPaintMessages = 8
+/// dsh defaults to 50. A page is bounded by messages but carries every event
+/// in between — a request header with the full tool schemas on every step among
+/// them — and all of it crosses the relay. 25 messages already overfill a phone
+/// screen several times.
+private let followMessages = 25
 
 /// How many connection log lines to keep.
 ///
@@ -60,21 +51,16 @@ public final class MachineSession {
     /// a machine that has never made a workspace and on one whose dsh is too
     /// old to have the call.
     public private(set) var workspaces: [Workspace] = []
-    /// Whether this machine has *ever* answered `workspace.list`.
+    /// Whether this machine has said anything about its workspaces yet — a
+    /// `workspace/follow` baseline, or a workspace write that came back.
     ///
-    /// The distinction `workspaces.isEmpty` cannot make: a machine with no
-    /// groups yet and a machine that has never heard of them look identical in
-    /// the list, but only the first one can be offered a "make this folder a
-    /// workspace" button that will work.
-    ///
-    /// Only a success sets it, and nothing clears it. A failure could be an old
-    /// dsh answering 404, or the tunnel dropping mid-call, and the two arrive
-    /// indistinguishable — so the app never concludes "this machine cannot
-    /// group" from a failure, it simply keeps not knowing.
+    /// The distinction `workspaces.isEmpty` cannot make: until the machine has
+    /// spoken, an empty list means "not known" rather than "none", and a "make
+    /// this folder a workspace" button would be a guess. Nothing clears it.
     public private(set) var canGroup = false
     /// Conversations the machine has filed away.
     ///
-    /// Kept because `session.list` does not filter them: on this machine
+    /// Kept because `session/list` does not filter them: on this machine
     /// archiving is a sidebar act, the log stays exactly where it was, and
     /// hiding the row is the client's job. Without this the archive button
     /// worked for about a second and then the conversation came back.
@@ -95,7 +81,7 @@ public final class MachineSession {
     public var problem: String?
     /// True while the session list is being fetched.
     public private(set) var listing = false
-    /// Whether `session.list` has ever completed this run, success or not.
+    /// Whether `session/list` has ever completed this run, success or not.
     ///
     /// What separates "the list is still on its way" from "the list is empty".
     /// Without it the moment between coming online and the first page landing
@@ -121,10 +107,16 @@ public final class MachineSession {
     /// Called when the machine reports where it can be dialled directly now,
     /// so the owner can persist the addresses for the next cold start.
     public var learnedDirect: (([String]) -> Void)?
-    /// True while the workspace list is being fetched.
-    private var listingWorkspaces = false
-    /// Set when a host frame arrived while that fetch was in flight.
-    private var workspacesStale = false
+    /// Whether this connection's streams are open — false from a handshake or
+    /// a dsh outage until `attach` runs.
+    @ObservationIgnored private var attached = false
+    /// The three machine-wide streams of this connection. See `attach`.
+    @ObservationIgnored private var machineStreams: [Task<Void, Never>] = []
+    /// One `session/follow` per held conversation, by session id.
+    @ObservationIgnored private var follows: [String: Task<Void, Never>] = [:]
+    /// Who this app is to `$events` on this connection. An answer to an
+    /// approval or a question has to name it (docs/dsh-0.2-protocol.md §5.4).
+    @ObservationIgnored private var eventsClientId: String?
 
     /// What a new conversation starts on, when the person has stated one.
     ///
@@ -138,25 +130,16 @@ public final class MachineSession {
 
     private var conversations: [String: Conversation] = [:]
     /// Conversation ids, most recently opened first. The first is the one on
-    /// screen; see `conversation(_:)` and the `.resync` case.
+    /// screen; see `conversation(_:)`.
     ///
     /// Not observed — none of this bookkeeping is anything a view draws, and
     /// observing it made a read into a write: `conversation(_:)` updates this
     /// on every call, so a view that asked from its `body` invalidated itself
     /// on every render (`SessionInfoView`, a 36 s freeze on a phone).
     @ObservationIgnored private var recent: [String] = []
-    /// Conversations whose `ensureLoaded` is in flight, so a reconnect landing
-    /// mid-load does not start a second one.
-    /// By object, not by session id: a conversation dropped by a resync and
-    /// opened again is a new object with the same id, and must not wait on the
-    /// load of the one it replaced.
-    @ObservationIgnored private var ensuring: Set<ObjectIdentifier> = []
-    /// Conversations asked to load again while a load was already running —
-    /// a reconnect that beat the failure of the attempt it should replace.
-    @ObservationIgnored private var ensureAgain: Set<ObjectIdentifier> = []
-    /// How many conversations stay folded in memory. Each keeps receiving and
-    /// folding its live events, so the cost of an unbounded cache is paid in
-    /// main-thread work as well as memory.
+    /// How many conversations stay folded in memory. Each keeps a follow open
+    /// and folds its live events, so the cost of an unbounded cache is paid in
+    /// main-thread work and relay traffic as well as memory.
     private static let heldConversations = 8
     private var pump: Task<Void, Never>?
     private let notifier: Notifier
@@ -256,16 +239,6 @@ public final class MachineSession {
             let wasOnline = isOnline
             let wasCarrier = carrier
             status = value
-            if case .online = value, !wasOnline {
-                Task { await self.refreshSessions() }
-                // Whatever an outage interrupted — a history page, the rest of
-                // one, the command list — is owed now. The calls fail fast
-                // while offline and were swallowed then on the promise that the
-                // reconnect would retry; this is that retry.
-                for conversation in conversations.values {
-                    Task { await self.ensureLoaded(conversation) }
-                }
-            }
             // Old evidence may not testify about a new outage: `dshReachable`
             // was a fact about a tunnel that no longer exists, and a stale
             // "dsh isn't running" would steer the offline screen to the wrong
@@ -273,6 +246,7 @@ public final class MachineSession {
             if wasOnline, !isOnline {
                 harnessKnown = false
                 harnessDetail = nil
+                attached = false
             }
             // A route that changes under a live connection is worth one line.
             // The chip's icon changes too, but an icon swapping while nobody
@@ -291,47 +265,33 @@ public final class MachineSession {
                     self.routeChange = nil
                 }
             }
-        case .event(let frame):
-            switch frame.stream {
-            case .mux: handleMux(frame.frame)
-            case .host: handleHost(frame.frame)
-            }
-        case .resync(let from):
-            // The gap was too big to replay. Everything on screen is now
-            // suspect, so refetch it — and only it.
-            _ = from
-            let onScreen = recent.first
-            for id in conversations.keys where id != onScreen { conversations[id] = nil }
-            recent = onScreen.map { [$0] } ?? []
-            // The others were dropped rather than refetched: each would cost
-            // two history calls now, for a screen nobody is looking at, and
-            // opening one again rebuilds it from scratch anyway. The one on
-            // screen is reset *now*, so live events from here on wait for the
-            // refetch instead of folding into a transcript about to be thrown
-            // away, and a load already in flight is outdated by the reset.
-            let conversation = onScreen.flatMap { conversations[$0] }
-            conversation?.reset()
-            conversation?.loading = true
-            Task {
-                await self.refreshSessions()
-                if let conversation { await self.ensureLoaded(conversation) }
-            }
         case .harness(let reachable, let detail):
             harnessKnown = true
             harnessDetail = reachable ? nil : (detail ?? "dsh isn’t running on that Mac.")
-        case .handshake(let host, let harness, let direct):
-            // A new connection starts with the machine re-sending everything
-            // still waiting on a person, right behind this signal. Cards held
-            // from before may have been answered — or died with a restarted
-            // dsh — while this phone was away, and nothing else would take
-            // them down; the machine's re-send puts back the ones that are real.
+            // Every stream ended with `upstream-lost` when dsh went; now that it
+            // is back, they are opened again.
+            if !reachable {
+                attached = false
+            } else if !attached {
+                attach()
+            }
+        case .handshake(let ready):
+            // A new connection has no streams, and dsh re-sends everything still
+            // waiting on a person to each new `$events` client. Cards held from
+            // before may have been answered — or died with a restarted dsh —
+            // while this phone was away; the re-send puts back the ones that
+            // are real.
             approvals = [:]
             questions = [:]
-            harnessInfo = harness
-            if let host, let described = MachineDescription(host) {
+            harnessInfo = ready.harness
+            harnessKnown = true
+            harnessDetail = ready.dshReachable ? nil : (ready.detail ?? "dsh isn’t running on that Mac.")
+            if let described = MachineDescription(ready: ready) {
                 machineInfo = described
             }
-            if let direct { learnedDirect?(direct) }
+            if let direct = ready.direct { learnedDirect?(direct) }
+            attached = false
+            if ready.dshReachable { attach() }
         case .note(let entry):
             notes.append(entry)
             if notes.count > connectionLogLimit {
@@ -340,62 +300,254 @@ public final class MachineSession {
         }
     }
 
-    private func handleMux(_ frame: JSONValue) {
-        // The Bridle forwards the harness's `server-request` envelope verbatim,
-        // because the rpcId inside it is what an answer has to echo.
-        let rpcId = frame["rpcId"]?.stringValue ?? ""
-        let payload = frame["payload"] ?? frame
-        guard let type = payload["type"]?.stringValue else { return }
-        let sessionId = payload["sessionId"]?.stringValue ?? ""
-        switch type {
-        case "session/event":
-            guard let event = payload["event"] else { return }
-            // Streamed chunks are held and folded together — see `hold`. Anything
-            // else applies at once, and only after the chunks before it: the fold
-            // reads events in order, and the message that ends a step must not
-            // overtake the chunks that built it.
-            if event["type"]?.stringValue == "assistant/chunk" {
-                hold(event, view: payload["view"], sessionId: sessionId)
+    // MARK: - Streams
+
+    /// Open everything this app follows on the machine, on a connection that
+    /// has none: the three machine-wide streams, the session list, and a follow
+    /// for each conversation held in memory.
+    ///
+    /// Every stream starts with the whole state — a `ready` and the waiting
+    /// requests, a workspace baseline, a projection baseline, a snapshot — so
+    /// there is nothing to replay and nothing to reconcile: what arrives
+    /// replaces what was held.
+    private func attach() {
+        attached = true
+        for task in machineStreams { task.cancel() }
+        machineStreams = [
+            Task { await self.consume({ await $0.events() }, self.handleEvent) },
+            Task { await self.consume({ await $0.followWorkspaces() }, self.handleWorkspaces) },
+            Task { await self.consume({ await $0.followControl() }, self.handleControl) },
+        ]
+        Task { await self.refreshSessions() }
+        Task { await self.refreshAccessDefault() }
+        for conversation in conversations.values {
+            follow(conversation)
+            if !conversation.commandsKnown || !conversation.skillsKnown {
+                Task { await self.loadCommands(conversation) }
+            }
+        }
+    }
+
+    /// Read one machine-wide stream until it ends.
+    ///
+    /// A stream the Bridle cut for a reason that clears by itself (`busy`,
+    /// `slow-consumer`) is opened again after a pause. A lost connection is
+    /// not: the next handshake, or dsh coming back, opens everything at once.
+    private func consume(_ open: @escaping (Harness) async -> TunnelStream, _ handle: @escaping (JSONValue) -> Void) async {
+        while !Task.isCancelled {
+            let stream = await open(harness)
+            do {
+                for try await item in stream.items { handle(item) }
+                return
+            } catch let error as CallError where MachineSession.reopenable(error) {
+                try? await Task.sleep(for: .seconds(1))
+            } catch {
                 return
             }
-            flushHeld()
-            existing(sessionId)?.receiveLive(event: event, view: payload["view"])
-            touch(sessionId, event: event)
-        case "approval/requested":
-            let request = ApprovalRequest(
-                id: rpcId,
+        }
+    }
+
+    private static func reopenable(_ error: CallError) -> Bool {
+        error.code == "busy" || error.code == "slow-consumer"
+    }
+
+    /// One item from `$events`: approvals and questions, and the session list's
+    /// changes (docs/dsh-0.2-protocol.md §5, §6.3).
+    private func handleEvent(_ item: JSONValue) {
+        switch item["type"]?.stringValue {
+        case "ready":
+            eventsClientId = item["clientId"]?.stringValue
+        case "waterfall":
+            handleRequest(item)
+        case "cancel":
+            // Answered somewhere else, or the turn that asked was cancelled.
+            guard let eventId = item["eventId"]?.stringValue else { return }
+            approvals = approvals.filter { $0.value.id != eventId }
+            questions = questions.filter { $0.value.id != eventId }
+        case "emit":
+            handleEmit(item["event"]?.stringValue ?? "", item["args"]?.arrayValue ?? [])
+        default:
+            break
+        }
+    }
+
+    private func handleRequest(_ item: JSONValue) {
+        guard let clientId = eventsClientId,
+              let eventId = item["eventId"]?.stringValue,
+              let sessionId = item["agentId"]?.stringValue else { return }
+        let request = item["request"] ?? .emptyObject
+        switch item["event"]?.stringValue {
+        case "approval/request":
+            let approval = ApprovalRequest(
+                id: eventId,
+                clientId: clientId,
                 sessionId: sessionId,
-                approvalId: payload["approvalId"]?.stringValue ?? "",
-                toolName: payload["toolName"]?.stringValue ?? "a tool",
-                reason: payload["reason"]?.stringValue,
+                approvalId: request["callId"]?.stringValue ?? "",
+                toolName: request["toolName"]?.stringValue ?? "a tool",
+                reason: request.path("displayReason", "en")?.stringValue ?? request["reason"]?.stringValue,
                 at: Date()
             )
-            approvals[sessionId] = request
-            notifier.approval(request, machine: machine.name, title: title(of: sessionId))
-        case "approval/resolved":
-            approvals[sessionId] = nil
-        case "question/requested":
-            let items = (payload["questions"]?.arrayValue ?? []).compactMap(MachineSession.question)
+            approvals[sessionId] = approval
+            notifier.approval(approval, machine: machine.name, title: title(of: sessionId))
+        case "user-questions/request":
+            let items = (request["questions"]?.arrayValue ?? []).compactMap(QuestionItem.init(json:))
             guard !items.isEmpty else { return }
-            let request = QuestionRequest(id: rpcId, sessionId: sessionId, items: items, at: Date())
-            questions[sessionId] = request
-            notifier.question(request, machine: machine.name, title: title(of: sessionId))
-        case "question/resolved":
+            let question = QuestionRequest(id: eventId, clientId: clientId, sessionId: sessionId, items: items, at: Date())
+            questions[sessionId] = question
+            notifier.question(question, machine: machine.name, title: title(of: sessionId))
+        default:
+            break
+        }
+    }
+
+    private func handleEmit(_ event: String, _ args: [JSONValue]) {
+        let sessionId = args.first?.stringValue ?? ""
+        switch event {
+        case "api-session/added":
+            // Upsert: dsh sends this when a session appears and again when its
+            // agent comes or goes, often twice in a row.
+            guard let summary = args.first.flatMap(SessionSummary.init), !summary.isSubagent else { return }
+            if let index = sessions.firstIndex(where: { $0.id == summary.id }) {
+                sessions[index] = summary
+            } else {
+                sessions.insert(summary, at: 0)
+            }
+        case "api-session/removed":
+            sessions.removeAll { $0.id == sessionId }
+            drop(sessionId)
+            approvals[sessionId] = nil
             questions[sessionId] = nil
-        case "session/queue":
-            existing(sessionId)?.applyQueue(payload["items"]?.arrayValue ?? [])
-        case "session/projection":
-            guard let key = payload["key"]?.stringValue else { return }
-            let value = payload["value"] ?? .null
-            let seq = payload["seq"]?.intValue ?? 0
-            existing(sessionId)?.applyProjection(key: key, value: value, seq: seq)
+        case "api-session/status":
+            let running = args.dropFirst().first?.boolValue ?? false
+            update(sessionId) {
+                $0.running = running
+                if running { $0.blank = false }
+            }
+            existing(sessionId)?.setRunning(running)
+            if !running { notifier.finished(machine: machine.name, title: title(of: sessionId)) }
+        case "api-session/activity":
+            // A message moved the session up the list.
+            update(sessionId) {
+                $0.updatedAt = Conversation.date(args.dropFirst().first)
+                $0.blank = false
+            }
+            guard let index = sessions.firstIndex(where: { $0.id == sessionId }), index > 0 else { return }
+            sessions.insert(sessions.remove(at: index), at: 0)
+        case "api-session/error":
+            let message = args.dropFirst().first?.stringValue ?? "The agent failed."
+            existing(sessionId)?.note(message, kind: .failure)
+            if conversations[sessionId] == nil { problem = message }
+        default:
+            // Settings, credentials, plugins, and whatever a newer dsh adds.
+            break
+        }
+    }
+
+    /// One item from `workspace/follow`: a baseline on every open, then changes.
+    private func handleWorkspaces(_ item: JSONValue) {
+        switch item["type"]?.stringValue {
+        case "baseline":
+            workspaces = (item.path("value", "items")?.arrayValue ?? []).compactMap(Workspace.init)
+            archivedSessionIds = MachineSession.ids(item.path("value", "archivedSessionIds"))
+            canGroup = true
+        case "upsert":
+            if let workspace = item["workspace"].flatMap(Workspace.init) { adopt(workspace) }
+        case "remove":
+            let removed = item["workspaceId"]?.stringValue
+            workspaces.removeAll { $0.id == removed }
+        case "archived":
+            // The whole set each time. `sessions` keeps archived rows and the
+            // list filters by this, so both directions apply without a refetch.
+            archivedSessionIds = MachineSession.ids(item["archivedSessionIds"])
+        default:
+            // `order` and `pinned`: this app sorts by activity, not by hand.
+            break
+        }
+    }
+
+    /// One item from `session/control`: projections of every session dsh has
+    /// loaded — a baseline per open, then each key that changes.
+    private func handleControl(_ item: JSONValue) {
+        switch item["type"]?.stringValue {
+        case "baseline":
+            for (sessionId, block) in item.path("value", "projections")?.objectValue ?? [:] {
+                existing(sessionId)?.absorbProjections(block)
+                if let title = block.path("values", "title")?.stringValue {
+                    update(sessionId) { $0.title = title }
+                }
+            }
+        case "projection":
+            guard let sessionId = item["sessionId"]?.stringValue, let key = item["key"]?.stringValue else { return }
+            let value = item["value"] ?? .null
+            existing(sessionId)?.applyProjection(key: key, value: value, seq: item["seq"]?.intValue ?? 0)
             if key == "title", let title = value.stringValue {
                 update(sessionId) { $0.title = title }
             }
-        case "stream/error":
-            problem = payload.path("error", "message")?.stringValue
         default:
-            // `session/subscribed`, `session/jobs`, and anything a plugin adds.
+            break
+        }
+    }
+
+    private static func ids(_ value: JSONValue?) -> Set<String> {
+        Set((value?.arrayValue ?? []).compactMap(\.stringValue))
+    }
+
+    /// Follow one conversation for as long as it is held and the connection
+    /// lasts. Replaces a follow already running for it.
+    private func follow(_ conversation: Conversation) {
+        let sessionId = conversation.sessionId
+        follows[sessionId]?.cancel()
+        follows[sessionId] = Task { await self.run(follow: conversation) }
+    }
+
+    private func run(follow conversation: Conversation) async {
+        var maxMessages = followMessages
+        while !Task.isCancelled, conversations[conversation.sessionId] === conversation {
+            let stream = await harness.follow(sessionId: conversation.sessionId, maxMessages: maxMessages)
+            do {
+                for try await item in stream.items {
+                    receive(follow: item, into: conversation)
+                }
+                return
+            } catch let error as CallError where error.code == "too-large" && maxMessages > 1 {
+                // A snapshot over the frame ceiling: a handful of enormous
+                // tool results. Fewer messages, until it fits.
+                maxMessages /= 2
+            } catch let error as CallError where MachineSession.reopenable(error) {
+                try? await Task.sleep(for: .seconds(1))
+            } catch let error as CallError where error.isConnectionLoss || error.code == "upstream-lost" {
+                // Opened again with everything else when the connection is back.
+                return
+            } catch {
+                conversation.loading = false
+                conversation.note((error as? LocalizedError)?.errorDescription ?? "Could not load this conversation.", kind: .failure)
+                return
+            }
+        }
+    }
+
+    private func receive(follow item: JSONValue, into conversation: Conversation) {
+        switch item["type"]?.stringValue {
+        case "snapshot":
+            flushHeld()
+            conversation.adopt(snapshot: item)
+            conversation.loading = false
+        case "event":
+            guard let event = item["event"] else { return }
+            // After the chunks before it: the message that ends a step must
+            // not overtake the text that built it.
+            flushHeld()
+            conversation.apply(event: event)
+            touch(conversation.sessionId, event: event)
+        case "assistant-stream":
+            guard let frame = item["frame"] else { return }
+            if frame["type"]?.stringValue == "chunk" {
+                hold(frame, for: conversation)
+            } else {
+                flushHeld()
+                conversation.receiveStream(frame)
+            }
+        default:
             break
         }
     }
@@ -403,7 +555,7 @@ public final class MachineSession {
     // MARK: - Streaming
 
     /// Streamed chunks waiting for the next flush, in arrival order.
-    private var held: [(event: JSONValue, view: JSONValue?, sessionId: String)] = []
+    private var held: [(frame: JSONValue, conversation: Conversation)] = []
     /// The flush already scheduled, if any. One at a time, so the cadence is the
     /// interval rather than the arrival rate.
     private var flushing: Task<Void, Never>?
@@ -427,10 +579,10 @@ public final class MachineSession {
     /// allowance inside `AttributeGraph`.
     ///
     /// Holding them for one frame changes nothing about the result: the fold is
-    /// order-preserving and `Conversation.apply(event:)` is additive, so a batch
-    /// folded at once is the same transcript as the chunks folded one by one.
-    private func hold(_ event: JSONValue, view: JSONValue?, sessionId: String) {
-        held.append((event: event, view: view, sessionId: sessionId))
+    /// order-preserving and additive, so a batch folded at once is the same
+    /// transcript as the chunks folded one by one.
+    private func hold(_ frame: JSONValue, for conversation: Conversation) {
+        held.append((frame: frame, conversation: conversation))
         guard flushing == nil else { return }
         flushing = Task { [weak self] in
             try? await Task.sleep(for: MachineSession.flushInterval)
@@ -439,7 +591,7 @@ public final class MachineSession {
         }
     }
 
-    /// Fold everything held, now. Also called before any event that is not a
+    /// Fold everything held, now. Also called before anything that is not a
     /// chunk, so a stream can never be applied out of order.
     private func flushHeld() {
         flushing?.cancel()
@@ -447,72 +599,7 @@ public final class MachineSession {
         guard !held.isEmpty else { return }
         let batch = held
         held = []
-        for entry in batch {
-            // No `touch`: it answers to `user/message`, and a chunk is never one.
-            existing(entry.sessionId)?.receiveLive(event: entry.event, view: entry.view)
-        }
-    }
-
-    private func handleHost(_ frame: JSONValue) {
-        let payload = frame["payload"] ?? frame
-        guard let type = payload["type"]?.stringValue else { return }
-        let sessionId = payload["sessionId"]?.stringValue ?? ""
-        switch type {
-        case "host/session-added":
-            guard !sessions.contains(where: { $0.id == sessionId }) else { return }
-            guard var summary = SessionSummary(payload) else { return }
-            summary.updatedAt = Date()
-            guard !summary.isSubagent else { return }
-            sessions.insert(summary, at: 0)
-        case "host/session-removed":
-            sessions.removeAll { $0.id == sessionId }
-            conversations[sessionId] = nil
-            approvals[sessionId] = nil
-            questions[sessionId] = nil
-        case "host/session-status":
-            let running = payload["running"]?.boolValue ?? false
-            update(sessionId) {
-                $0.running = running
-                // The added frame fires at creation, so `blank` is always true
-                // there; a session that has started running has been used.
-                if running { $0.blank = false }
-            }
-            existing(sessionId)?.setRunning(running)
-            if !running { notifier.finished(machine: machine.name, title: title(of: sessionId)) }
-        case "host/agent-error":
-            let message = payload["message"]?.stringValue ?? "The agent failed."
-            existing(sessionId)?.note(message, kind: .failure)
-            if conversations[sessionId] == nil { problem = message }
-        case "host/workspace-changed":
-            // The frame says a workspace moved, not what it now holds, and
-            // membership is the only part of it this app draws. Re-reading the
-            // whole list is three items on the wire and cannot drift; patching
-            // from a payload whose shape is not pinned down anywhere could.
-            Task { await self.refreshWorkspaces() }
-        case "host/workspace-removed":
-            // Locally first so the section goes on the same frame, then a
-            // re-read, because the local half depends on guessing the id field
-            // right and the re-read does not.
-            if let removed = payload["workspaceId"]?.stringValue {
-                workspaces.removeAll { $0.id == removed }
-            }
-            Task { await self.refreshWorkspaces() }
-        case "host/workspace-order-changed":
-            // Nothing, on purpose. The sidebar order is a filing decision made
-            // at the keyboard; this app sorts its sections by what was touched
-            // most recently instead, so there is nothing here to apply.
-            break
-        case "host/archived-sessions-changed":
-            // The whole set, not a delta, so it can be taken as read — and both
-            // directions cost nothing, because `sessions` holds everything the
-            // machine reported and the archive is applied when the list is
-            // arranged. Unarchiving at the keyboard puts the row straight back.
-            archivedSessionIds = Set((payload["archivedSessionIds"]?.arrayValue ?? []).compactMap { $0.stringValue })
-        case "stream/error":
-            problem = payload.path("error", "message")?.stringValue
-        default:
-            break
-        }
+        for entry in batch { entry.conversation.receiveStream(entry.frame) }
     }
 
     /// Note that a session produced an event, so the list can reorder without
@@ -537,13 +624,9 @@ public final class MachineSession {
         sessions.first { $0.id == sessionId }?.displayTitle ?? "a conversation"
     }
 
-    private static func question(_ item: JSONValue) -> QuestionItem? {
-        QuestionItem(json: item)
-    }
-
     // MARK: - Reads
 
-    /// The conversation for a session, creating and loading it on first ask.
+    /// The conversation for a session, creating and following it on first ask.
     ///
     /// Also the record of which one is on screen: the conversation view asks
     /// for its conversation every time it appears, so the most recent ask is
@@ -554,18 +637,21 @@ public final class MachineSession {
         if let held = conversations[sessionId] { return held }
         let summary = sessions.first { $0.id == sessionId }
         let fresh = Conversation(sessionId: sessionId, title: summary?.title, cwd: summary?.cwd)
-        // Set here rather than left to `loadHistory`, which sets it too — but
-        // from inside a Task, and until that Task gets a turn the view holds a
-        // conversation with no items and no reason given, which is the empty
-        // state. Every conversation opened by flashing "Nothing here yet" at
-        // the person before its contents arrived.
+        // Set here rather than when the follow opens, which happens from a
+        // Task: until it gets a turn the view would hold a conversation with
+        // no items and no reason given, which is the empty state.
         fresh.loading = true
+        if summary?.running == true { fresh.setRunning(true) }
+        fresh.offer(presets: presetOptions)
         conversations[sessionId] = fresh
         for dropped in recent.dropFirst(MachineSession.heldConversations) {
-            conversations[dropped] = nil
+            drop(dropped)
         }
         recent = Array(recent.prefix(MachineSession.heldConversations))
-        Task { await ensureLoaded(fresh) }
+        if attached {
+            follow(fresh)
+            Task { await loadCommands(fresh) }
+        }
         // Independently of the history: the machine knows which model this
         // session is on before it has ever run one, and a wrong model is worth
         // seeing before spending a turn on it rather than after.
@@ -576,39 +662,11 @@ public final class MachineSession {
         return fresh
     }
 
-    /// Bring a conversation up to date with whatever it is still missing.
-    ///
-    /// The one way a conversation gets loaded — on open, and again after every
-    /// reconnect — so a part that failed because the connection was down is
-    /// fetched when it comes back, instead of leaving a spinner or an empty
-    /// command list until the app is killed. Each part is tracked on its own:
-    /// the tail page can land and the rest of the page fail, or the commands
-    /// arrive and the skills not.
-    func ensureLoaded(_ conversation: Conversation) async {
-        let key = ObjectIdentifier(conversation)
-        guard conversations[conversation.sessionId] === conversation else { return }
-        guard !ensuring.contains(key) else {
-            ensureAgain.insert(key)
-            return
-        }
-        ensuring.insert(key)
-        defer {
-            ensuring.remove(key)
-            ensureAgain.remove(key)
-        }
-        repeat {
-            ensureAgain.remove(key)
-            if !conversation.loaded {
-                await loadHistory(conversation)
-            } else if conversation.topUpOwed {
-                conversation.loading = true
-                try? await topUp(conversation, generation: conversation.generation)
-                conversation.loading = false
-            }
-            if !conversation.commandsKnown || !conversation.skillsKnown {
-                await loadCommands(conversation)
-            }
-        } while ensureAgain.contains(key) && conversations[conversation.sessionId] === conversation
+    /// Let go of a conversation: its follow stops, and opening it again starts
+    /// from a fresh snapshot.
+    private func drop(_ sessionId: String) {
+        follows.removeValue(forKey: sessionId)?.cancel()
+        conversations[sessionId] = nil
     }
 
     /// Fetch the children of a conversation.
@@ -625,11 +683,10 @@ public final class MachineSession {
     /// What the composer offers after a slash: the session's skills, and the
     /// commands the machine will run for it.
     ///
-    /// Two calls, and each is allowed to fail on its own. They are separate
-    /// mechanisms with separate ages — a dsh too old for `commands/list` still
-    /// has skills, and losing the commands costs a menu entry, not a session.
-    /// Both are fetched once per open: neither list changes mid-sentence, and a
-    /// request per keystroke would.
+    /// Two calls, and each is allowed to fail on its own: losing the commands
+    /// costs a menu entry, not a session. Both are fetched once per open —
+    /// neither list changes mid-sentence, and a request per keystroke would —
+    /// and again after a reconnect if the first try did not land.
     private func loadCommands(_ conversation: Conversation) async {
         async let skills = try? harness.skills(sessionId: conversation.sessionId)
         async let commands = try? harness.commands(sessionId: conversation.sessionId)
@@ -658,6 +715,9 @@ public final class MachineSession {
     }
 
     /// Fetch the session list.
+    ///
+    /// Once per connection; `$events` keeps it current from there. The
+    /// workspaces come down their own stream.
     public func refreshSessions() async {
         guard !listing else { return }
         listing = true
@@ -665,125 +725,16 @@ public final class MachineSession {
             listing = false
             everListed = true
         }
-        // Alongside the session list rather than after it. Two round trips on
-        // one tunnel cost about what one does, and the alternative is a list
-        // that draws flat and then rearranges itself into sections a beat
-        // later, which on the home screen reads as a glitch.
-        async let grouping: Void = refreshWorkspaces()
         do {
             let items = try await harness.listSessions()
             sessions = items.filter { !$0.isSubagent }.sorted { $0.updatedAt > $1.updatedAt }
-            if machineInfo == nil, let described = try? await harness.describe() {
-                machineInfo = MachineDescription(described)
-            }
-        } catch let error as CallError where error.isConnectionLoss {
+        } catch let error as CallError where error.isConnectionLoss || error.code == "upstream-lost" {
             // The reconnect will refresh again. Saying so would be noise.
         } catch {
             problem = (error as? LocalizedError)?.errorDescription ?? "Could not read the conversation list."
         }
-        await grouping
     }
 
-    /// Fetch the sidebar groups. Best effort, always.
-    ///
-    /// Three ways this can fail and none of them is worth a word on screen: dsh
-    /// predates `workspace.list` and answers `method-not-found`, the tunnel
-    /// dropped between the two calls, or the machine simply has no workspaces.
-    /// All three mean the same thing to the person holding the phone — there is
-    /// nothing to group by — and the list falls back to the flat one it has
-    /// always drawn. A banner here would report a missing convenience as a
-    /// broken conversation list.
-    ///
-    /// A failure keeps whatever was last known rather than clearing it, so one
-    /// dropped call on a machine that *does* group cannot flatten the screen
-    /// and un-flatten it a second later.
-    public func refreshWorkspaces() async {
-        guard !listingWorkspaces else {
-            // A frame that lands mid-fetch describes a state the in-flight call
-            // may have been too early to see, so it books another round rather
-            // than being dropped. Dragging a conversation between workspaces on
-            // the Mac emits a burst of these; this collapses the burst into two
-            // calls instead of one per frame — and, unlike a plain guard, not
-            // into one that settles on the state from before the drag.
-            workspacesStale = true
-            return
-        }
-        listingWorkspaces = true
-        defer { listingWorkspaces = false }
-        repeat {
-            workspacesStale = false
-            guard let answer = try? await harness.listWorkspaces() else { return }
-            workspaces = answer.items
-            archivedSessionIds = answer.archived
-            // Only ever set by a call that came back. See `canGroup`.
-            canGroup = true
-        } while workspacesStale
-    }
-
-    /// Load a conversation's tail page, or reload it after a resync.
-    ///
-    /// In two stages when the screen is blank. The cost of a history page is
-    /// almost all in its size — measured on a heavy session, 25 messages were
-    /// 253 KiB after the Bridle's thinning and 1.2s through the relay, while 8
-    /// were 69 KiB and 535ms; on a poor uplink the gap is seconds. And what a
-    /// person opens a conversation *for* is the last few exchanges. So the
-    /// tail arrives first, small enough to paint fast, and the rest of the
-    /// page follows behind it while they read — the same prepend the "load
-    /// earlier" button does, without the button.
-    func loadHistory(_ conversation: Conversation) async {
-        // After a failed attempt, what is on screen is live events with no
-        // history under them. The page will carry those same events in their
-        // place, so start clean rather than appending it behind them.
-        if conversation.foldedWithoutHistory { conversation.reset() }
-        let generation = conversation.generation
-        conversation.loading = true
-        defer { if conversation.generation == generation { conversation.loading = false } }
-        do {
-            let blank = conversation.items.isEmpty
-            let page = try await harness.history(
-                sessionId: conversation.sessionId,
-                maxMessages: blank ? firstPaintMessages : historyPageSize
-            )
-            // A reset while this was out makes it a page about a log that has
-            // since been refetched from scratch; the new load owns the screen.
-            guard conversation.generation == generation else { return }
-            conversation.absorb(page: page, prepend: false)
-            // The top-up happens inside `loading`, so the "load earlier"
-            // control stays quiet until the conversation holds the same page
-            // it always used to start with.
-            if blank, conversation.hasMore {
-                conversation.topUpOwed = true
-                try await topUp(conversation, generation: generation)
-            }
-        } catch let error as CallError where error.isConnectionLoss {
-            // The reconnect retries — `ensureLoaded`, on the way back online.
-        } catch {
-            guard conversation.generation == generation else { return }
-            conversation.historyFailed()
-            conversation.note((error as? LocalizedError)?.errorDescription ?? "Could not load this conversation.", kind: .failure)
-        }
-    }
-
-    /// Fetch the rest of the opening page, behind a tail that already landed.
-    private func topUp(_ conversation: Conversation, generation: Int) async throws {
-        guard let before = conversation.oldestSeq else {
-            conversation.topUpOwed = false
-            return
-        }
-        let rest = try await harness.history(
-            sessionId: conversation.sessionId,
-            beforeSeq: before,
-            maxMessages: historyPageSize - firstPaintMessages
-        )
-        guard conversation.generation == generation else { return }
-        conversation.absorb(page: rest, prepend: true)
-        conversation.topUpOwed = false
-    }
-
-    /// Ask which model this session is on.
-    ///
-    /// Failure is silent. The header falls back to offering the picker, which is
-    /// the same thing this call would have enabled.
     /// Switch a conversation's model, and show it straight away.
     ///
     /// The write lived in the picker, which updated its own copy of the catalog
@@ -807,6 +758,10 @@ public final class MachineSession {
         }
     }
 
+    /// Ask which model this session is on.
+    ///
+    /// Failure is silent. The header falls back to offering the picker, which is
+    /// the same thing this call would have enabled.
     private func loadModel(_ conversation: Conversation) async {
         guard let catalog = try? await harness.models(sessionId: conversation.sessionId) else { return }
         conversation.setModel(catalog.current?.name)
@@ -814,16 +769,22 @@ public final class MachineSession {
 
     /// Load the page before what is held.
     public func loadOlder(_ conversation: Conversation) async {
-        guard conversation.hasMore, let before = conversation.oldestSeq, !conversation.loading else { return }
+        guard conversation.hasMore, let before = conversation.oldestSeq, let through = conversation.cursor,
+              !conversation.loading else { return }
         let generation = conversation.generation
         conversation.loading = true
         defer { if conversation.generation == generation { conversation.loading = false } }
         do {
-            let page = try await harness.history(sessionId: conversation.sessionId, beforeSeq: before, maxMessages: historyPageSize)
-            // Same rule as every other page: one asked for before a reset
-            // describes a log that has since been refetched.
+            let page = try await harness.page(
+                sessionId: conversation.sessionId,
+                throughSeq: through,
+                beforeSeq: before,
+                maxMessages: followMessages
+            )
+            // A snapshot that landed meanwhile replaced the window this page
+            // was meant to extend.
             guard conversation.generation == generation else { return }
-            conversation.absorb(page: page, prepend: true)
+            conversation.absorb(page: page)
         } catch {
             // Scrolling back is optional. A failure leaves what is on screen
             // intact and the person can pull again.
@@ -833,7 +794,6 @@ public final class MachineSession {
     // MARK: - Writes
 
     /// Send a message, showing it immediately.
-    /// Send a message.
     ///
     /// - Parameter steer: interrupt the running turn instead of waiting for it.
     ///   Defaults to queueing, which is what dsh's own client does and the safer
@@ -868,32 +828,34 @@ public final class MachineSession {
         // promote or withdraw the very same words. It waits where it actually
         // is — at the bottom, in the strip — and enters the transcript when
         // the machine's own `user/message` says it was heard.
+        //
+        // Either copy is shown under the request id the message is sent with,
+        // which the machine logs on it — that is how the copy is retired.
+        let requestId = UUID().uuidString
         if !steer && conversation.running {
-            let queuedId = "queued-\(UUID().uuidString)"
-            conversation.showQueued(text: text, id: queuedId)
+            conversation.showQueued(text: text, id: requestId)
             do {
-                try await harness.prompt(sessionId: sessionId, text: text, images: images, steer: false)
+                try await harness.prompt(sessionId: sessionId, requestId: requestId, text: text, images: images, steer: false)
             } catch {
-                await settleFailedSend(error, in: conversation, isStill: { conversation.isQueued(id: queuedId) }) {
-                    conversation.dropQueued(id: queuedId)
+                await settleFailedSend(error, in: conversation, isStill: { conversation.isQueued(id: requestId) }) {
+                    conversation.dropQueued(id: requestId)
                 }
             }
             return
         }
-        let pendingId = "pending-\(UUID().uuidString)"
-        conversation.showPending(text: text, id: pendingId)
+        conversation.showPending(text: text, id: requestId)
         do {
-            try await harness.prompt(sessionId: sessionId, text: text, images: images, steer: steer)
+            try await harness.prompt(sessionId: sessionId, requestId: requestId, text: text, images: images, steer: steer)
         } catch {
-            await settleFailedSend(error, in: conversation, isStill: { conversation.isPending(id: pendingId) }) {
-                conversation.dropPending(id: pendingId)
+            await settleFailedSend(error, in: conversation, isStill: { conversation.isPending(id: requestId) }) {
+                conversation.dropPending(id: requestId)
             }
         }
     }
 
     /// How long a message whose send was cut off waits for the machine to show
     /// it arrived, before this device says it did not. Long enough to cover a
-    /// reconnect and its replay; tests shorten it.
+    /// reconnect and the snapshot after it; tests shorten it.
     var unconfirmedSendWait: Duration = .seconds(30)
 
     /// Deal with a send that did not come back cleanly.
@@ -901,8 +863,8 @@ public final class MachineSession {
     /// "Didn't send" is only true when nothing left this device. A send cut off
     /// after it was written may have reached the machine, and telling someone
     /// it did not is how the same instruction gets given twice. So that copy
-    /// stays up: when the machine's own `user/message` arrives — on the
-    /// reconnect's replay, usually within seconds — it replaces it as usual.
+    /// stays up: when the machine's own `user/message` arrives — in the
+    /// reconnect's snapshot, usually within seconds — it replaces it as usual.
     /// Only if nothing comes in `unconfirmedSendWait` is it taken back.
     private func settleFailedSend(
         _ error: Error,
@@ -916,8 +878,8 @@ public final class MachineSession {
             return
         }
         try? await Task.sleep(for: unconfirmedSendWait)
-        // A conversation dropped meanwhile (a resync) has been rebuilt from the
-        // machine's log, which already shows whether the message arrived.
+        // A conversation dropped meanwhile is rebuilt from the machine's log
+        // when it is opened again, which shows whether the message arrived.
         guard isStill(), conversations[conversation.sessionId] === conversation else { return }
         drop()
         problem = "That message may not have reached the Mac — the connection dropped before it answered. Check before sending it again."
@@ -953,27 +915,13 @@ public final class MachineSession {
         }
     }
 
-    /// Cut a queued message into the running turn.
-    ///
-    /// dsh has no "promote" on `session.updateQueue` — it edits and removes —
-    /// so this is a remove followed by a steered resend. The order matters: if
-    /// the remove fails the message is still queued and nothing was lost, while
-    /// the reverse would risk the same text arriving twice.
+    /// Cut a queued message into the running turn. dsh moves it from the
+    /// next turn's queue to the running one's; the `inbox` projection shows it.
     public func promote(sessionId: String, item: QueuedMessage) async {
         do {
-            try await harness.updateQueue(sessionId: sessionId, itemId: item.id, action: .remove)
+            try await harness.updateQueue(sessionId: sessionId, itemId: item.id, action: .steer)
         } catch {
             problem = (error as? LocalizedError)?.errorDescription ?? "That message could not be moved up."
-            return
-        }
-        do {
-            try await harness.prompt(sessionId: sessionId, text: item.text, steer: true)
-        } catch {
-            // Removed and not resent: say so, because the message is now gone
-            // from a queue the person was watching and silence would read as
-            // "it went through".
-            problem = (error as? LocalizedError)?.errorDescription
-                ?? "That message left the queue but could not be sent. Send it again."
         }
     }
 
@@ -985,10 +933,16 @@ public final class MachineSession {
 
     /// What new conversations on this machine start as. Nil until read.
     public private(set) var accessDefault: PermissionChoice?
+    /// The presets a conversation can be switched to. See `Conversation.offer`.
+    @ObservationIgnored private var presetOptions: [PermissionChoice.Option] = []
 
-    /// Read the machine's access default.
+    /// Read the machine's access presets: its default, and the choices every
+    /// held conversation offers.
     public func refreshAccessDefault() async {
-        accessDefault = (try? await harness.permissionDefault()) ?? accessDefault
+        guard let catalog = try? await harness.permissionPresets() else { return }
+        accessDefault = catalog.defaults ?? accessDefault
+        presetOptions = catalog.options
+        for conversation in conversations.values { conversation.offer(presets: catalog.options) }
     }
 
     /// Change how much the agent may touch, machine-wide.
@@ -1007,12 +961,7 @@ public final class MachineSession {
             // The machine accepted the write, so reflect it. Nothing else will:
             // the per-session projection does not move for a settings change,
             // which is exactly what made the old control look dead.
-            accessDefault = PermissionChoice(.object([
-                "currentValue": .string(preset),
-                "options": .array((accessDefault?.options ?? []).map {
-                    .object(["value": .string($0.value), "name": .string($0.name)])
-                }),
-            ])) ?? accessDefault
+            accessDefault = PermissionChoice(current: preset, options: accessDefault?.options ?? [])
             return nil
         } catch {
             return (error as? LocalizedError)?.errorDescription ?? "The Mac would not change the access mode."
@@ -1115,14 +1064,10 @@ public final class MachineSession {
     /// File a just-created conversation under the workspace for its folder.
     ///
     /// A second call rather than creating it with `workspaceId` in the first
-    /// place, which the machine also supports. The reason is what happens on a
-    /// machine that is *nearly* new enough: a dsh with `workspace.list` but an
-    /// older `session.create` would drop the unknown `workspaceId`, fall back to
-    /// its own default directory, and start the conversation somewhere else
-    /// entirely. Sending the folder is the thing that must not be got wrong;
-    /// the grouping is a convenience and can be attempted afterwards, where
-    /// failing means an ungrouped conversation rather than one in the wrong
-    /// place.
+    /// place, which the machine also supports: sending the folder is the thing
+    /// that must not be got wrong, and the grouping is a convenience that can
+    /// be attempted afterwards, where failing means an ungrouped conversation
+    /// rather than one in the wrong place.
     ///
     /// A folder nothing stands for is claimed on the way, so that there is
     /// something to file the conversation into. The machine's ledger is written
@@ -1155,8 +1100,8 @@ public final class MachineSession {
     /// Write a conversation into its workspace's ledger, best effort.
     private func file(_ sessionId: String, into workspaceId: String) async {
         do {
+            // The workspace stream reports the new member.
             try await harness.fileSession(sessionId, into: workspaceId)
-            await refreshWorkspaces()
         } catch {
             // Not reported, deliberately, and this used to say "It's under
             // Ungrouped". It no longer is: the board seats a conversation by
@@ -1191,7 +1136,7 @@ public final class MachineSession {
     /// screen the person is looking at and a row that lingers for a round trip
     /// reads as a failed tap. A refusal puts it back.
     ///
-    /// Marked rather than removed. `session.list` keeps answering with archived
+    /// Marked rather than removed. `session/list` keeps answering with archived
     /// conversations — the machine treats hiding them as the client's job — so
     /// dropping the row here would only have held until the next refresh, which
     /// is exactly what used to happen. The set is what the list is filtered by,
@@ -1401,5 +1346,23 @@ extension MachineSession {
     /// appear.
     func receiveForTesting(_ signal: TunnelSignal) {
         receive(signal)
+    }
+
+    /// Feed one `$events` item, as its stream does. The `ready` that names
+    /// this client comes first, as it does from dsh.
+    func receiveForTesting(events item: JSONValue) {
+        if eventsClientId == nil { handleEvent(.object(["type": .string("ready"), "clientId": .string("test-client")])) }
+        handleEvent(item)
+    }
+
+    /// Feed one `workspace/follow` item, as its stream does.
+    func receiveForTesting(workspaces item: JSONValue) {
+        handleWorkspaces(item)
+    }
+
+    /// Feed one `session/follow` item to a held conversation, as its stream does.
+    func receiveForTesting(follow item: JSONValue, sessionId: String) {
+        guard let conversation = conversations[sessionId] else { return }
+        receive(follow: item, into: conversation)
     }
 }

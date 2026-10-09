@@ -3,12 +3,12 @@
 /// Two kinds arrive by different routes, and they behave differently when sent,
 /// so the list has to say which is which:
 ///
-/// - a **skill** is text. `session.prompt` needs nothing new for those: the
+/// - a **skill** is text. `session/prompt` needs nothing new for those: the
 ///   words go to the model and the model reads the skill. What was missing was
 ///   only discovery — nobody can be expected to remember thirty names.
 /// - a **command** is something the machine runs: `/permission read-only`
 ///   switches *this* session's access mode. It is not text at all. Measured: a
-///   `session.prompt` carrying a slash line lands in the log as an ordinary user
+///   `session/prompt` carrying a slash line lands in the log as an ordinary user
 ///   message and starts a turn, with the model left to work out what the words
 ///   meant. So a command has to be recognised here and handed to
 ///   `commands/execute` instead — which is exactly what the browser's composer
@@ -29,7 +29,7 @@ import SwiftUI
 public struct SlashCommand: Identifiable, Equatable, Sendable {
     /// Which of the two mechanisms sends this one.
     public enum Kind: Equatable, Sendable {
-        /// Text the model reads (`skill.list`).
+        /// Text the model reads (`skills/list`).
         case skill
         /// Something the machine runs (`commands/list`).
         case command
@@ -44,7 +44,7 @@ public struct SlashCommand: Identifiable, Equatable, Sendable {
     /// takes none.
     public var hint: String?
 
-    /// A skill, from `skill.list`.
+    /// A skill, from `skills/list`.
     public init?(_ value: JSONValue) {
         guard let name = value["name"]?.stringValue, !name.isEmpty else { return nil }
         self.name = name

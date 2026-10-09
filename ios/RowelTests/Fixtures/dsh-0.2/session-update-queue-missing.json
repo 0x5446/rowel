@@ -1,0 +1,21 @@
+{
+  "endpoint": "session/updateQueue",
+  "args": {
+    "request": {
+      "sessionId": "session-a43fd407-8430-445a-892e-adea8dfcbea1",
+      "itemId": "nothing",
+      "action": "remove"
+    }
+  },
+  "result": {
+    "ok": false,
+    "error": {
+      "code": "gateway/input-invalid",
+      "message": "typert gateway: session/updateQueue: wire field \"request\" failed boundary validation",
+      "details": {
+        "endpoint": "session/updateQueue",
+        "field": "request"
+      }
+    }
+  }
+}

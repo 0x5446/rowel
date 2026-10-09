@@ -90,7 +90,9 @@ const VERSION = '0.1.0-test'
  * @throws {@link Error} when no harness can be found.
  */
 export async function startStack(options: StackOptions = {}): Promise<Stack> {
-  const dshUrl = options.dshUrl ?? process.env['ROWEL_E2E_DSH_URL'] ?? await probeDsh()
+  // A stand-in harness needs no dsh to be found, and must not go looking for
+  // one: the probe finds whatever happens to be on the usual ports.
+  const dshUrl = options.agent?.baseUrl ?? options.dshUrl ?? process.env['ROWEL_E2E_DSH_URL'] ?? await probeDsh()
   if (dshUrl === undefined) {
     throw new Error('no DeepSeek Harness found; set ROWEL_E2E_DSH_URL to a running web server')
   }

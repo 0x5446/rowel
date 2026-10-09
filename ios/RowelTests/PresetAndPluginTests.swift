@@ -1,162 +1,143 @@
-/// The agent picker and the plugin list, at the wire.
+/// The agent picker, the plugin list and the command list, at the wire.
 ///
-/// Both shapes here are measured, not designed: `agentPreset.list` and
-/// `pluginInventory/list` were called against a live dsh and these fixtures
-/// are what came back. The second one is the reason this file exists at all —
-/// it is not a typert method but a cordis remote event, and its transport
-/// rejects the payload every other method sends. A test that used a friendlier
-/// made-up shape would pass against the app and fail against every real Mac.
+/// Every answer here is a recording of a real dsh 0.2 (`Fixtures/dsh-0.2`, made
+/// by `e2e/scripts/capture-fixtures.mjs`), and every request is checked against
+/// what the recording sent. dsh checks argument names exactly — one too many or
+/// too few is `gateway/arguments-invalid` — so a friendlier made-up shape would
+/// pass against the app and fail against every real Mac.
 
 import XCTest
 @testable import Rowel
 
-/// A transport that answers from a script.
-private actor StubTransport: HarnessTransport {
+/// A transport that answers from recordings, and keeps what it was sent.
+private actor RecordedTransport: CallOnlyTransport {
     private var answers: [String: JSONValue] = [:]
-    private var sent: [(method: String, payload: JSONValue)] = []
+    private var sent: [(endpoint: String, args: JSONValue)] = []
 
-    func answer(_ method: String, _ value: JSONValue) {
-        answers[method] = value
+    /// Answer the recording's endpoint with the recording's result.
+    func play(_ name: String) throws -> JSONValue {
+        let recording = try fixture(name)
+        answers[recording["endpoint"]?.stringValue ?? ""] = recording.path("result", "value") ?? .null
+        return recording
     }
 
-    func payloads(_ method: String) -> [JSONValue] {
-        sent.filter { $0.method == method }.map(\.payload)
+    func answer(_ endpoint: String, _ value: JSONValue) {
+        answers[endpoint] = value
     }
 
-    func call(_ method: String, _ payload: JSONValue) async throws -> JSONValue {
-        sent.append((method, payload))
-        guard let answer = answers[method] else {
-            throw CallError(code: "not-found", message: "no script for \(method)", details: .null)
+    func payloads(_ endpoint: String) -> [JSONValue] {
+        sent.filter { $0.endpoint == endpoint }.map(\.args)
+    }
+
+    func call(_ endpoint: String, _ args: JSONValue) async throws -> JSONValue {
+        sent.append((endpoint, args))
+        guard let answer = answers[endpoint] else {
+            throw CallError(code: "not-found", message: "no recording for \(endpoint)", details: .null)
         }
         return answer
-    }
-
-    func respond(rpcId: String, value: JSONValue) async throws -> JSONValue {
-        .emptyObject
     }
 }
 
 final class PresetAndPluginTests: XCTestCase {
     // MARK: - Presets
 
-    /// The measured `agentPreset.list` answer, abbreviated.
-    private static let presetAnswer: JSONValue = .object([
-        "presets": .array([
-            .object(["id": .string("standard"), "trust": .string("system"), "isDefault": .bool(true),
-                     "name": .string("标准模式"), "description": .string("功能完整的编码 Agent。")]),
-            .object(["id": .string("minimal"), "trust": .string("system"), "isDefault": .bool(false),
-                     "name": .string("极简模式"), "description": .string("双工具编码 Agent。")]),
-        ]),
-        "authorable": .bool(true),
-        "hasDocument": .bool(true),
-    ])
-
-    func testPresetsParseTheMeasuredShape() async throws {
-        let transport = StubTransport()
-        await transport.answer("agentPreset.list", PresetAndPluginTests.presetAnswer)
+    func testPresetsParseTheRecordedShape() async throws {
+        let transport = RecordedTransport()
+        let recording = try await transport.play("agent-presets")
         let presets = try await Harness(transport: transport).presets()
 
-        XCTAssertEqual(presets.map(\.id), ["standard", "minimal"])
-        XCTAssertEqual(presets[0].name, "标准模式")
+        let sent = await transport.payloads("agentPresets/list")
+        XCTAssertEqual(sent, [recording["args"] ?? .null])
+        XCTAssertEqual(presets.map(\.id), ["standard", "ptc", "minimal", "cordis"])
+        XCTAssertEqual(presets[0].name, "standard", "dsh 0.2 names a preset only by its id")
         XCTAssertTrue(presets[0].isDefault)
         XCTAssertFalse(presets[1].isDefault)
     }
 
-    /// Choosing the default sends no field at all: that is what keeps an older
-    /// dsh — which predates `agentPreset` on `session.create` — working.
+    /// Choosing the default sends no field at all — nil must mean absent, not null.
     func testCreateOmitsThePresetWhenNoneIsChosen() async throws {
-        let transport = StubTransport()
-        await transport.answer("session.create", .object(["sessionId": .string("s1")]))
-        _ = try await Harness(transport: transport).createSession(cwd: "/tmp", agentPreset: nil)
+        let transport = RecordedTransport()
+        let recording = try await transport.play("session-create")
+        let id = try await Harness(transport: transport).createSession(cwd: "/tmp", agentPreset: nil)
 
-        let payload = await transport.payloads("session.create").first
-        XCTAssertNil(payload?["agentPreset"], "nil must mean absent, not null")
-        XCTAssertEqual(payload?["cwd"]?.stringValue, "/tmp")
+        XCTAssertEqual(id, recording.path("result", "value", "sessionId")?.stringValue)
+        let payload = await transport.payloads("session/create").first
+        XCTAssertEqual(payload, .object(["request": .object(["cwd": .string("/tmp")])]))
     }
 
     func testCreateCarriesTheChosenPreset() async throws {
-        let transport = StubTransport()
-        await transport.answer("session.create", .object(["sessionId": .string("s1")]))
+        let transport = RecordedTransport()
+        _ = try await transport.play("session-create")
         _ = try await Harness(transport: transport).createSession(cwd: "/tmp", agentPreset: "minimal")
 
-        let payload = await transport.payloads("session.create").first
-        XCTAssertEqual(payload?["agentPreset"]?.stringValue, "minimal")
+        let payload = await transport.payloads("session/create").first
+        XCTAssertEqual(payload?.path("request", "agentPreset")?.stringValue, "minimal")
     }
 
     // MARK: - Plugins
 
-    func testInventorySendsTheArgsEnvelopeTheRemoteTransportDemands() async throws {
-        let transport = StubTransport()
-        await transport.answer("pluginInventory/list", .object(["entries": .array([])]))
-        _ = try await Harness(transport: transport).pluginInventory()
-
-        let payload = await transport.payloads("pluginInventory/list").first
-        // Measured: anything else is refused with "Remote payload must contain
-        // exactly one plain-object args field".
-        XCTAssertNotNil(payload?["args"])
-        XCTAssertEqual(payload, .object(["args": .emptyObject]))
-    }
-
-    func testInventoryParsesTheMeasuredShape() async throws {
-        let transport = StubTransport()
-        await transport.answer("pluginInventory/list", .object(["entries": .array([
-            .object(["entryId": .string("include:llm"), "moduleName": .string("@deepseek-ai/dsh-llm"),
-                     "enabled": .bool(true), "fiberPhase": .string("active")]),
-            .object(["entryId": .string("include:hmr"), "moduleName": .string("@deepseek-ai/cordis-plugin-hmr"),
-                     "enabled": .bool(false), "fiberPhase": .null]),
-        ])]))
+    func testInventoryIsAskedForAsTheRecordingAskedAndParses() async throws {
+        let transport = RecordedTransport()
+        let recording = try await transport.play("plugin-inventory")
         let entries = try await Harness(transport: transport).pluginInventory()
 
-        XCTAssertEqual(entries.count, 2)
-        XCTAssertEqual(entries[0].module, "@deepseek-ai/dsh-llm")
-        XCTAssertTrue(entries[0].enabled)
-        XCTAssertEqual(entries[0].phase, "active")
-        XCTAssertFalse(entries[1].enabled)
-        XCTAssertNil(entries[1].phase, "a null phase must come through as absence, not the string \"null\"")
+        let sent = await transport.payloads("pluginInventory/list")
+        XCTAssertEqual(sent, [recording["args"] ?? .null])
+        XCTAssertEqual(entries.first?.module, "cordis:include")
+        XCTAssertEqual(entries.first?.enabled, true)
+        XCTAssertEqual(entries.first?.phase, "active")
+        guard let off = entries.first(where: { !$0.enabled }) else { return XCTFail("the recording has a disabled plugin") }
+        XCTAssertNil(off.phase, "a null phase must come through as absence, not the string \"null\"")
+    }
+
+    // MARK: - Access
+
+    /// What new conversations start as: read from the preset catalog, written
+    /// to the `permission` settings namespace against the revision just read.
+    func testChangingTheDefaultAccessSendsWhatTheRecordingSent() async throws {
+        let transport = RecordedTransport()
+        _ = try await transport.play("settings-describe")
+        let update = try await transport.play("settings-update-permission")
+        try await Harness(transport: transport).setPermission("read-only")
+
+        let sent = await transport.payloads("settings/update")
+        XCTAssertEqual(sent, [update["args"] ?? .null])
+
+        _ = try await transport.play("permission-presets-after-update")
+        let presets = try await Harness(transport: transport).permissionPresets()
+        XCTAssertEqual(presets.defaults?.current, "read-only")
+        XCTAssertEqual(presets.options.map(\.value), ["read-only", "workspace-write", "danger-full-access"])
     }
 
     // MARK: - Commands
 
-    /// The measured `commands/list` answer, abbreviated.
-    private static let commandAnswer: JSONValue = .array([
-        .object(["name": .string("compact"), "description": .string("Compact older conversation history")]),
-        .object(["name": .string("permission"),
-                 "description": .string("Switch the permission preset (sandbox mode + approval policy)"),
-                 "input": .object(["hint": .string("<preset>")])]),
-    ])
+    func testCommandsAreAskedForAsTheRecordingAskedAndParseWithTheirHints() async throws {
+        let transport = RecordedTransport()
+        let recording = try await transport.play("commands-list")
+        let sessionId = recording.path("args", "agentId")?.stringValue ?? ""
+        let commands = try await Harness(transport: transport).commands(sessionId: sessionId)
 
-    func testCommandsAreAskedForWithTheArgsEnvelope() async throws {
-        let transport = StubTransport()
-        await transport.answer("commands/list", PresetAndPluginTests.commandAnswer)
-        _ = try await Harness(transport: transport).commands(sessionId: "s1")
-
-        let payload = await transport.payloads("commands/list").first
-        // A Typert remote: the arguments live under exactly one `args` object,
-        // and the agent is named the way `commands/execute` names it.
-        XCTAssertEqual(payload, .object(["args": .object(["agentId": .string("s1")])]))
-    }
-
-    func testCommandsParseAsCommandsWithTheirHints() async throws {
-        let transport = StubTransport()
-        await transport.answer("commands/list", PresetAndPluginTests.commandAnswer)
-        let commands = try await Harness(transport: transport).commands(sessionId: "s1")
-
-        XCTAssertEqual(commands.map(\.name), ["compact", "permission"])
-        XCTAssertEqual(commands.map(\.kind), [.command, .command])
+        let sent = await transport.payloads("commands/list")
+        XCTAssertEqual(sent, [recording["args"] ?? .null])
+        XCTAssertEqual(commands.map(\.name), ["compact", "export", "feedback", "goal", "permission", "plan"])
+        XCTAssertTrue(commands.allSatisfy { $0.kind == .command })
         XCTAssertNil(commands[0].hint, "a command that takes nothing has no hint")
-        XCTAssertEqual(commands[1].hint, "<preset>")
-        XCTAssertEqual(commands[1].summary, "Switch the permission preset (sandbox mode + approval policy)")
+        XCTAssertNotNil(commands.first { $0.name == "permission" }?.hint)
     }
 
     func testASkillIsNotACommandEvenUnderTheSameSlash() async throws {
         // The two lists share one namespace in the composer, and the difference
         // decides where a line is sent, so the parse has to keep them apart.
-        let transport = StubTransport()
-        await transport.answer("skill.list", .object(["skills": .array([
-            .object(["name": .string("permission"), "description": .string("A skill that looks the same.")]),
+        let transport = RecordedTransport()
+        let recording = try await transport.play("skills-list")
+        await transport.answer("skills/list", .object(["skills": .array([
+            .object(["name": .string("permission"), "description": .string("A skill that looks the same."), "modelInvocable": .bool(true)]),
         ])]))
-        let skills = try await Harness(transport: transport).skills(sessionId: "s1")
+        let sessionId = recording.path("args", "request", "sessionId")?.stringValue ?? ""
+        let skills = try await Harness(transport: transport).skills(sessionId: sessionId)
 
+        let sent = await transport.payloads("skills/list")
+        XCTAssertEqual(sent, [recording["args"] ?? .null])
         XCTAssertEqual(skills.map(\.kind), [.skill])
         XCTAssertNil(skills[0].hint)
     }

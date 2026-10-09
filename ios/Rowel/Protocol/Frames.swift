@@ -1,8 +1,12 @@
 /// Tunnel frames: the application protocol carried inside the Noise channel.
 ///
 /// The Swift twin of `protocol/src/frames.ts`. One tunnel multiplexes everything
-/// — unary RPC, both harness downlinks, cancellation — so the phone holds exactly
-/// one socket no matter how much is going on.
+/// — unary calls, any number of dsh streams, cancellation of either — so the
+/// phone holds exactly one socket no matter how much is going on.
+///
+/// Version 2 is dsh 0.2's own API, passed through by the Bridle: a call is
+/// `POST /api/<endpoint>` with `args`, a stream is a logical stream on dsh's
+/// `/api/remote.mux` (docs/protocol.md §4, docs/dsh-0.2-protocol.md).
 ///
 /// Outbound frames state their key order (see `TunnelFrame`) rather than relying
 /// on `JSONEncoder`, which has none to give.
@@ -15,7 +19,11 @@ import Foundation
 /// app sits in a review queue while the Bridle is one `npm install` away, so
 /// after release version skew is the normal case. Both ends offer what they can
 /// speak and the machine picks the highest they share.
-public let tunnelVersions: [Int] = [1]
+///
+/// Only 2: version 1 was dsh 0.1's API, which dsh 0.2 removed. A Bridle that
+/// only speaks 1 refuses this app in the handshake with `supported: [1]`, and
+/// the app says "update Bridle" (docs/protocol.md §4.6).
+public let tunnelVersions: [Int] = [2]
 
 /// The newest version this build speaks; what it reports about itself.
 public let tunnelVersion = tunnelVersions[0]
@@ -28,14 +36,6 @@ public let tunnelVersion = tunnelVersions[0]
 /// from a wrong machine key from tampering. The version is negotiated in the
 /// handshake payload instead.
 public let tunnelPrologue = Data("rowel-tunnel".utf8)
-
-/// Which harness downlink an event frame came from.
-public enum StreamName: String, Codable, Sendable {
-    /// Every session's events, aggregated.
-    case mux
-    /// Machine-level events: sessions added and removed, running flips, workspaces.
-    case host
-}
 
 /// The encoder both ends agree on: no slash escaping, no pretty printing.
 ///
@@ -95,60 +95,103 @@ func orderedJSON(_ members: [(String, JSONValue?)]) throws -> Data {
 
 // MARK: - App to Bridle
 
-/// Invoke one unary harness method (`POST /api/<method>` on the far side).
-public struct RequestFrame: TunnelFrame {
-    public let t = "req"
+/// Invoke one unary dsh endpoint (`POST /api/<endpoint>` on the far side).
+public struct CallFrame: TunnelFrame {
+    public let t = "call"
     /// App-minted correlation id, unique per tunnel.
     public let id: String
-    /// Method path segment, e.g. `session.prompt` or `goals/create`.
-    public let method: String
-    /// The request payload (`{ args }` for Typert Remote methods).
-    public let payload: JSONValue
+    /// dsh endpoint, `<namespace>/<method>`, e.g. `session/list`.
+    public let endpoint: String
+    /// The endpoint's arguments — dsh's `payload.args`, with exactly the names
+    /// dsh declares.
+    public let args: JSONValue
 
-    public init(id: String, method: String, payload: JSONValue) {
+    public init(id: String, endpoint: String, args: JSONValue) {
         self.id = id
-        self.method = method
-        self.payload = payload
+        self.endpoint = endpoint
+        self.args = args
     }
 
     var members: [(String, JSONValue?)] {
-        [("t", .string(t)), ("id", .string(id)), ("method", .string(method)), ("payload", payload)]
+        [("t", .string(t)), ("id", .string(id)), ("endpoint", .string(endpoint)), ("args", args)]
     }
 }
 
-/// Answer an approval or a question (`POST /api/respond` on the far side).
-public struct RespondFrame: TunnelFrame {
-    public let t = "respond"
+/// Abandon an in-flight call.
+public struct AbortFrame: TunnelFrame {
+    public let t = "abort"
     public let id: String
-    /// The harness `client-response` message, verbatim.
-    public let message: JSONValue
 
-    public init(id: String, message: JSONValue) {
+    public init(id: String) {
         self.id = id
-        self.message = message
     }
 
     var members: [(String, JSONValue?)] {
-        [("t", .string(t)), ("id", .string(id)), ("message", message)]
+        [("t", .string(t)), ("id", .string(id))]
     }
 }
 
-/// After a reconnect, replay everything past `since`.
-public struct ResumeFrame: TunnelFrame {
-    public let t = "resume"
-    /// Highest sequence the app already holds; `0` asks for a fresh subscription.
-    public let since: Int
-    /// The `ready.epoch` of the connection `since` was counted on, so a Bridle
-    /// that restarted — and restarted its numbering — answers `resync`.
-    public let epoch: String?
+/// Open a dsh stream (a logical stream on `/api/remote.mux`).
+public struct OpenFrame: TunnelFrame {
+    public let t = "open"
+    /// App-minted stream id, unique per tunnel among streams still open.
+    public let sid: String
+    /// dsh stream endpoint, e.g. `session/follow`, or `$events`.
+    public let endpoint: String
+    public let args: JSONValue
 
-    public init(since: Int, epoch: String? = nil) {
-        self.since = since
-        self.epoch = epoch
+    public init(sid: String, endpoint: String, args: JSONValue) {
+        self.sid = sid
+        self.endpoint = endpoint
+        self.args = args
     }
 
     var members: [(String, JSONValue?)] {
-        [("t", .string(t)), ("since", .number(Double(since))), ("epoch", epoch.map(JSONValue.string))]
+        [("t", .string(t)), ("sid", .string(sid)), ("endpoint", .string(endpoint)), ("args", args)]
+    }
+}
+
+/// Uplink data on an open stream. Most dsh streams read none.
+public struct UplinkItemFrame: TunnelFrame {
+    public let t = "item"
+    public let sid: String
+    public let value: JSONValue
+
+    public init(sid: String, value: JSONValue) {
+        self.sid = sid
+        self.value = value
+    }
+
+    var members: [(String, JSONValue?)] {
+        [("t", .string(t)), ("sid", .string(sid)), ("value", value)]
+    }
+}
+
+/// Half-close a stream's uplink.
+public struct UplinkEndFrame: TunnelFrame {
+    public let t = "end"
+    public let sid: String
+
+    public init(sid: String) {
+        self.sid = sid
+    }
+
+    var members: [(String, JSONValue?)] {
+        [("t", .string(t)), ("sid", .string(sid))]
+    }
+}
+
+/// Stop a stream. Nothing more arrives for it, not even an end.
+public struct CancelFrame: TunnelFrame {
+    public let t = "cancel"
+    public let sid: String
+
+    public init(sid: String) {
+        self.sid = sid
+    }
+
+    var members: [(String, JSONValue?)] {
+        [("t", .string(t)), ("sid", .string(sid))]
     }
 }
 
@@ -336,11 +379,18 @@ public struct ReadyFrame: Sendable {
     public let version: Int
     public let bridle: String
     public let machine: String
+    /// Whether the Bridle holds a signed-in connection to dsh right now.
     public let dshReachable: Bool
-    /// Which harness, and where the identity lives. `nil` from an older Bridle.
+    /// Why not, in words a person can act on, when it does not.
+    public var detail: String? = nil
+    /// dsh's version, when the Bridle knows it.
+    public var dsh: String? = nil
+    /// Which harness, and where the identity lives.
     public let harness: HarnessInfo?
-    /// The harness `host.describe` value when reachable.
-    public let host: JSONValue?
+    /// The Mac account's home directory: where the folder picker starts.
+    /// dsh 0.2 no longer describes the machine through a method, so the Bridle
+    /// says it here.
+    public var home: String? = nil
     /// Where this machine can be dialled directly right now, best first.
     ///
     /// `nil` from a Bridle too old to send it — which must leave the app's
@@ -348,29 +398,19 @@ public struct ReadyFrame: Sendable {
     /// direct listener is off, and keeping stale addresses around would have
     /// the app dialling a listener the operator turned off.
     public let direct: [String]?
-    /// Highest event sequence the Bridle has produced.
-    public let seq: Int
-    /// Which Bridle process's numbering `seq` belongs to. `nil` from an older Bridle.
-    public var epoch: String? = nil
-}
-
-/// One downlink frame, tagged with a tunnel-level sequence.
-public struct EventFrame: Sendable {
-    public let seq: Int
-    public let stream: StreamName
-    /// The harness `server-request` frame, verbatim.
-    public let frame: JSONValue
 }
 
 /// Everything the Bridle can send.
 public enum ServerFrame: Sendable {
     case ready(ReadyFrame)
-    case response(id: String, result: Result<JSONValue, CallError>)
-    case event(EventFrame)
-    /// Events were lost to this app — the replay buffer no longer reaches back,
-    /// the Bridle restarted, or an event was too large to carry. Refetch state.
-    case resync(from: Int)
-    /// The local harness went away or came back.
+    case result(id: String, result: Result<JSONValue, CallError>)
+    /// One item on an open stream, dsh's own.
+    case item(sid: String, value: JSONValue)
+    /// The stream finished.
+    case end(sid: String)
+    /// The stream failed and is gone.
+    case error(sid: String, error: CallError)
+    /// The connection to dsh went away or came back.
     case status(reachable: Bool, detail: String?)
     case ping(nonce: String)
     case pong(nonce: String)
@@ -398,32 +438,30 @@ public extension ServerFrame {
                 bridle: value["bridle"]?.stringValue ?? "unknown",
                 machine: value["machine"]?.stringValue ?? "a computer",
                 dshReachable: value["dshReachable"]?.boolValue ?? false,
+                detail: value["detail"]?.stringValue,
+                dsh: value["dsh"]?.stringValue,
                 harness: (value["harness"]?["url"]?.stringValue).map { url in
                     HarnessInfo(url: url, home: value["harness"]?["home"]?.stringValue ?? "")
                 },
-                host: value["host"],
-                direct: value["direct"]?.arrayValue.map { $0.compactMap(\.stringValue) },
-                seq: value["seq"]?.intValue ?? 0,
-                epoch: value["epoch"]?.stringValue
+                home: value["host"]?["home"]?.stringValue,
+                direct: value["direct"]?.arrayValue.map { $0.compactMap(\.stringValue) }
             ))
-        case "res":
-            guard let id = value["id"]?.stringValue else { throw FrameError(reason: "response has no id") }
+        case "result":
+            guard let id = value["id"]?.stringValue else { throw FrameError(reason: "result has no id") }
             let result = value["result"]
             if result?["ok"]?.boolValue == true {
-                return .response(id: id, result: .success(result?["value"] ?? .null))
+                return .result(id: id, result: .success(result?["value"] ?? .null))
             }
-            let error = result?["error"]
-            return .response(id: id, result: .failure(CallError(
-                code: error?["code"]?.stringValue ?? "internal",
-                message: error?["message"]?.stringValue ?? "the machine reported a failure",
-                details: error?["details"] ?? .null
-            )))
-        case "ev":
-            guard let seq = value["seq"]?.intValue else { throw FrameError(reason: "event has no sequence") }
-            let stream = StreamName(rawValue: value["stream"]?.stringValue ?? "mux") ?? .mux
-            return .event(EventFrame(seq: seq, stream: stream, frame: value["frame"] ?? .null))
-        case "resync":
-            return .resync(from: value["from"]?.intValue ?? 0)
+            return .result(id: id, result: .failure(CallError(result?["error"], fallback: "the machine reported a failure")))
+        case "item":
+            guard let sid = value["sid"]?.stringValue else { throw FrameError(reason: "item has no stream id") }
+            return .item(sid: sid, value: value["value"] ?? .null)
+        case "end":
+            guard let sid = value["sid"]?.stringValue else { throw FrameError(reason: "end has no stream id") }
+            return .end(sid: sid)
+        case "error":
+            guard let sid = value["sid"]?.stringValue else { throw FrameError(reason: "error has no stream id") }
+            return .error(sid: sid, error: CallError(value["error"], fallback: "the stream failed"))
         case "status":
             return .status(reachable: value["dshReachable"]?.boolValue ?? false, detail: value["detail"]?.stringValue)
         case "ping":
@@ -438,5 +476,16 @@ public extension ServerFrame {
         default:
             return .unknown(tag: tag)
         }
+    }
+}
+
+extension CallError {
+    /// A failure in dsh's shape, `{code, message, details}`.
+    init(_ error: JSONValue?, fallback: String) {
+        self.init(
+            code: error?["code"]?.stringValue ?? "internal",
+            message: error?["message"]?.stringValue ?? fallback,
+            details: error?["details"] ?? .null
+        )
     }
 }

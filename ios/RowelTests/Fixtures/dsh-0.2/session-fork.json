@@ -1,0 +1,14 @@
+{
+  "endpoint": "session/fork",
+  "args": {
+    "request": {
+      "sessionId": "session-a43fd407-8430-445a-892e-adea8dfcbea1"
+    }
+  },
+  "result": {
+    "ok": true,
+    "value": {
+      "sessionId": "session-8677f187-3839-419a-87ae-63bfdea6f964"
+    }
+  }
+}
