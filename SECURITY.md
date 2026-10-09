@@ -110,9 +110,9 @@ answers `426` to anything that is not a WebSocket upgrade, and `400` to an
 upgrade on any path but its one. It
 never exposes a byte of the harness API to the network, even to a host on the
 same Wi-Fi. Test: `the direct listener is not a web server`. This matters more
-than it sounds: the harness has no authentication of its own, so a plain
-`socat` from `0.0.0.0` to its loopback port would hand unauthenticated remote
-code execution to the whole subnet.
+than it sounds: the Bridle holds the harness's sign-in, so a listener that
+passed requests through without the Noise handshake would hand the harness's
+full authority to the whole subnet.
 
 **Push carries no content.** The relay takes only `token` and `machine` from a
 wake request, cuts `machine` to 64 characters, and ignores anything else, so the
@@ -123,18 +123,21 @@ reconnects over its own Noise channel.
 
 ### What it does not protect, and cannot
 
-**A paired device has the harness's full authority.** The harness ships with no
-authentication of its own; its fence is a loopback bind plus a Host header, and
-the Bridle is on the far side of that fence. So a paired phone can run commands,
-read and write files, and approve the agent's own requests to do the same.
+**A paired device has the harness's full authority.** dsh 0.2 signs a client in
+with the launch token it prints — a cookie good for thirty days — and nothing
+finer: whoever is signed in can do everything. The Bridle is signed in (it
+launched dsh and read the token, or dsh handed the token to it as a plugin), so a
+paired phone can run commands, read and write files, and approve the agent's own
+requests to do the same.
 
 Note the shape of this carefully: **the tunnel is generic, and the app's
 restraint is not the protocol's.** `docs/architecture.md` §17 says the app
-deliberately does not expose `settings.*` or `credentials.*` — writing an API key
-from a phone would widen what a paired device is. That is a decision in the app.
-`TunnelSession.handleRequest` passes the method name straight through, so
-*anything speaking the protocol* can call all of the harness's methods, including
-the loopback-privileged ones. Treat a pairing as equivalent to shell access, not
+deliberately does not expose credentials or provider settings — writing an API
+key from a phone would widen what a paired device is; its one settings write is
+the default access preset. That is a decision in the app.
+`TunnelSession.handleCall` passes the endpoint straight through, and streams are
+opened the same way, so *anything speaking the protocol* can call every endpoint
+the harness serves to a signed-in client. Treat a pairing as equivalent to shell access, not
 as the subset of it the app draws buttons for.
 
 `bridle revoke` is the only way to take that back. It is also, today, not
@@ -183,16 +186,17 @@ An **active** relay is also a denial of service in several ways it cannot be
 prevented from being. It can drop, delay, duplicate, or reorder frames;
 duplicates and reordering tear the tunnel down by design, so a hostile relay can
 keep a tunnel permanently broken. It can also truncate — close a socket after
-withholding the last few frames — and the gap is only detected on the next
-`resume`. Run your own relay if that matters to you; `bridle --relay <url>` is
+withholding the last few frames. A stream cut that way ends as disconnected, and
+the app opens it again from a fresh snapshot, so nothing is silently lost — but
+nothing stops it happening again. Run your own relay if that matters to you; `bridle --relay <url>` is
 all it takes, and the Node implementation in `relay/` is a single process with no
 database.
 
 **Same-network hosts can see that the Bridle is there.** The LAN listener binds
 `0.0.0.0`, so it is reachable from every attached network — including Docker
 bridges, VPN legs, and a tailnet. Its `426` body names it, which makes it
-identifiable to any scanner and therefore points at a machine running an
-unauthenticated harness. Nothing on that path is authenticated below Noise: the
+identifiable to any scanner and therefore points at a machine running a
+harness. Nothing on that path is authenticated below Noise: the
 transport is plain `ws://`. The listener admits at most eight connections that
 have not completed a handshake and drops any that take longer than ten seconds,
 but it has no rate limit, so a host on your network can keep those places full

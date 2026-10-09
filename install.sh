@@ -70,6 +70,20 @@ fi
 
 command -v git >/dev/null 2>&1 || fail "Rowel needs git. Install the Xcode command line tools: xcode-select --install"
 
+# --- dsh ----------------------------------------------------------------------
+#
+# Bridle 0.2 speaks dsh 0.2's API and nothing older; Bridle 0.1 the reverse.
+# Installing the one that cannot talk to this Mac's dsh would succeed quietly
+# and fail at the first conversation, so a mismatch is said here. Said, not
+# enforced: dsh may be about to be upgraded, or live somewhere not on the PATH.
+
+dsh_version=$(dsh --version 2>/dev/null || true)
+case "$REF:$dsh_version" in
+  v0.1.*:0.1.*|v0.1.*:|*:) ;;
+  v0.1.*:*) say "${bold}Note:${off} this Mac's dsh is $dsh_version, and Bridle $REF only speaks dsh 0.1. dsh 0.2 needs Bridle 0.2: run this again with ROWEL_REF set to the newest v0.2 tag (see CHANGELOG.md)." ;;
+  *:0.1.*|*:0.0.*) say "${bold}Note:${off} this Mac's dsh is $dsh_version. Bridle $REF needs dsh 0.2 — upgrade dsh (back up ~/.dsh first), or install ROWEL_REF=v0.1.7 to stay on 0.1." ;;
+esac
+
 # --- Source -----------------------------------------------------------------
 
 if [ -d "$SRC_DIR/.git" ]; then

@@ -220,7 +220,7 @@
         <code>curl -fsSL https://rowel.novabox.ai/install | sh</code>
         <button type="button" class="copy" aria-label="Copy the install command">Copy</button>
       </div>
-      <p>Needs Node 22+ and git — it stops and says so if either is missing.</p>
+      <p>Needs Node 22+ and git — it stops and says so if either is missing — and <code>dsh</code> 0.2 or newer. Still on dsh 0.1? Add <code>ROWEL_REF=v0.1.7</code> and use app 1.0; upgrading dsh is one-way, so see <a href="https://github.com/0x5446/rowel#upgrading-from-dsh-01">the upgrade notes</a> first.</p>
     </li>
     <li>
       <span class="step">2</span>
@@ -243,7 +243,7 @@
 
 <section class="wrap get" id="get">
   <h2 class="section-title">Get the app.</h2>
-  <p class="section-sub">Rowel 1.0 is in App Store review. The same build is on TestFlight today.</p>
+  <p class="section-sub">Rowel 1.1, for dsh 0.2, is on TestFlight today and headed for the App Store.</p>
   <div class="get-grid">
     <div class="card get-card">
       <h3>TestFlight</h3>
@@ -275,6 +275,10 @@ open ios/Rowel.xcodeproj   # pick your iPhone, Run</code></pre>
     <details>
       <summary>Connected, but "dsh isn't running"</summary>
       <p>Bridle is fine; the DeepSeek Harness isn't. Start it, and the app notices within a few seconds — nothing to restart on the phone.</p>
+    </details>
+    <details>
+      <summary>"dsh asks to sign in"</summary>
+      <p>dsh 0.2 lets in only clients holding the token it printed, and Bridle cannot read that from a dsh someone else started. Run Bridle inside dsh instead: <code>bridle plugin install</code>, then restart dsh. (A dsh that Bridle starts itself needs nothing.)</p>
     </details>
     <details>
       <summary>Pairing fails, or the code is refused</summary>
