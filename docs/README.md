@@ -1,14 +1,18 @@
 # 文档索引
 
-四份文档，职责不重叠。按需要读，不必按顺序。
+职责不重叠。按需要读，不必按顺序。
 
 | 文档 | 回答什么 | 谁该读 |
 |---|---|---|
 | [`architecture.md`](architecture.md) | **为什么这样设计**，接缝在哪，新功能落在哪 | 要改这个系统的人；review 设计的人 |
-| [`protocol.md`](protocol.md) | **线上到底是什么字节**，精确到位 | 要写第三方客户端、或重新实现任一端的人 |
-| [`fold.md`](fold.md) | **事件如何变成屏幕上的东西**，逐事件规则与边界情况 | 要写任何一个客户端的人 |
-| [`dsh-api-inventory.md`](dsh-api-inventory.md) | dsh 的 44 个客户端方法与四象限 RPC 模型 | 要调用 dsh 的人 |
+| [`protocol.md`](protocol.md) | **App 与 Bridle 之间线上到底是什么字节**（配对、Noise、隧道版本 2 的帧、Relay），精确到位 | 要写第三方客户端、或重新实现任一端的人 |
+| [`fold.md`](fold.md) | **dsh 0.2 的事件如何变成屏幕上的东西**：快照替换、流式帧、逐事件规则与边界情况 | 要写任何一个客户端的人 |
+| [`dsh-api-inventory.md`](dsh-api-inventory.md) | app 实际调用的 dsh 0.2 端点与流、参数形状、在代码里由谁调用 | 要调用 dsh 的人 |
+| [`dsh-0.2-protocol.md`](dsh-0.2-protocol.md) | dsh 0.2 自己的线协议：认证、`/api`、`remote.mux`、follow/page、`$events`，带源码出处与实测记录 | 排查 dsh 行为、或 dsh 升级后核对接口的人 |
+| [`dsh-0.2-migration.md`](dsh-0.2-migration.md) | 从 dsh 0.1 迁到 0.2 的设计决策（D1–D8）、里程碑与风险 | 想知道某个取舍为什么这样定的人 |
 | [`deployment.md`](deployment.md) | Relay 怎么部署，DNS 怎么配，上架前还缺什么 | 要把它跑起来的人 |
+| [`instance-awareness.md`](instance-awareness.md) | 设计：一台 Mac 上有多个 dsh 时，app 怎么说清连着哪一个 | 改实例识别、救援提示的人 |
+| [`one-pair-per-mac.md`](one-pair-per-mac.md) | 已否决的设计，留作记录：为什么不做"一机一配对" | 又想动这个念头的人 |
 
 ## 规格等级
 
@@ -17,7 +21,7 @@
 **规范级** —— 已实现，有测试守着，可照着重新实现：
 
 - `protocol.md` 全部（权威是 `protocol/scripts/emit-vectors.js` 的向量）
-- `fold.md` 全部（权威是 `ios/RowelTests/StoreTests.swift`）
+- `fold.md` 全部（权威是 `ios/RowelTests/StoreTests.swift` 与 `LoadingTests.swift`，dsh 0.2 的真实形状见 `Fixtures/dsh-0.2/`）
 - `architecture.md` §1–§9、§14–§18
 
 **设计级** —— 决策已定、落点已定，但尚未实现：

@@ -2,17 +2,19 @@
 
 agent 不发送渲染结果，它发送 append-only 事件日志，每个客户端各自折叠成屏幕上的东西。
 
-**折叠是纯函数**：`items = fold(events)`。同一串事件必须得到同一个结果，与到达顺序、分页边界、断线重连无关。
+**折叠是纯函数**：`items = fold(events)`。同一串事件必须得到同一个结果，与分页边界、断线重连无关。
 
-本文档规定折叠的确切语义。参考实现 `ios/Rowel/Store/Conversation.swift`，回归测试 `ios/RowelTests/StoreTests.swift`。
+dsh 0.2 用 `session/follow` 送这份日志（`docs/dsh-0.2-protocol.md` §4）：先一个尾页**快照**，然后按 seq 递增、无缺口地推后续事件，另有不落盘的 `assistant-stream` 流式帧。follow 不能从某个位置续传，所以每次重连都会来一个新快照，**新快照整体替换窗口**（§4.1）。
+
+本文档规定折叠的确切语义。参考实现 `ios/Rowel/Store/Conversation.swift`，回归测试 `ios/RowelTests/StoreTests.swift`（加载与重连在 `LoadingTests.swift`）。
 
 - 状态：§1
 - 事件信封：§2
 - 逐事件规则：§3
-- 分页：§4
+- 快照与分页：§4
 - projection：§5
-- 乐观发送：§6
-- 渲染意图：§7
+- 乐观发送与排队：§6
+- 工具卡片：§7
 - 边界情况：§8
 
 ---
@@ -25,23 +27,26 @@ agent 不发送渲染结果，它发送 append-only 事件日志，每个客户�
 |---|---|---|
 | `items` | `[ConversationItem]` | 转录，日志顺序 |
 | `running` | bool | 在 `turn/start` 与 `turn/end` 之间 |
-| `title` | string? | 来自 projection |
+| `title` | string? | 来自 projection 或 `session/title` |
 | `todos` | `[TodoItem]` | 来自 projection 或 `todo/write` |
-| `queue` | `[QueuedMessage]` | 未被 agent 领取的消息 |
+| `queue` | `[QueuedMessage]` | 未被 agent 领取的消息，来自 `inbox` projection（§6.2） |
 | `contextFraction` | double? | 上下文占用比例 |
 | `planning` | bool | 是否在计划模式 |
 | `modelName` | string? | 当前模型 |
-| `hasMore` / `oldestSeq` / `loaded` | | 分页游标 |
+| `hasMore` / `oldestSeq` / `cursor` / `loaded` | | 窗口游标：最早 seq、最晚 seq、有无更早页、快照是否已到 |
+| `generation` | int | 每次窗口被替换加一；替换前发出的翻页请求据此作废 |
 
-以及三个**内部索引**（不对外暴露）：
+以及若干**内部状态**（不对外暴露）：
 
-| 索引 | 用途 |
+| 名称 | 用途 |
 |---|---|
 | `assistantIndex: [String: Int]` | `"turn.step"` → `items` 下标，流式气泡定位 |
 | `toolIndex: [String: Int]` | callId → `items` 下标 |
 | `seen: Set<Int>` | 已折叠的事件序号 |
-| `projectionSeq: [String: Int]` | 每个 projection 键的水位线 |
-| `pending: [(id, text)]` | 乐观气泡，见 §6 |
+| `projectionSeq: [String: Int]` | 每个 projection 键的水位线，**跨快照保留**（§5.1） |
+| `streaming: (attemptId, turn, step)?` | 正在流式输出的那次尝试，来自 `start` 帧（§3.4） |
+| `pending: [(id, text)]` | 乐观气泡，id 是发送时的 `requestId`（§6.1） |
+| `provisional: [QueuedMessage]` | 机器还没列出的排队项，id 同上（§6.2） |
 
 **任何插入或删除 `items` 中间元素的操作，都必须重建索引。**下标会移位，不重建会导致后续 chunk 拼进错误的气泡。
 
@@ -55,27 +60,29 @@ user(UserTurn) | assistant(AssistantTurn) | tool(ToolCard) | notice(Notice)
 
 ## 2. 事件信封
 
+follow 的 `event` 项、快照与翻页的 `records[]` 里，每条都是：
+
 ```json
-{ "type": "assistant/chunk", "seq": 1234, "time": 1700000000000, "data": { ... } }
+{ "type": "tool/call", "seq": 1234, "time": 1700000000000, "data": { ... } }
 ```
 
 | 字段 | 说明 |
 |---|---|
 | `type` | 事件类型，字符串 |
-| `seq` | 会话内单调递增序号 |
+| `seq` | 会话内单调递增序号，从 0 开始 |
 | `time` | 毫秒时间戳 |
 | `data` | 类型相关载荷 |
 
 ### 2.1 去重
 
 ```
-若 seq != 0 且 seq 已在 seen 中 → 丢弃整个事件
-否则 → 记入 seen，继续折叠
+若 seq 已在 seen 中 → 丢弃整个事件
+否则 → 记入 seen，cursor = max(cursor, seq)，继续折叠
 ```
 
-`seq == 0` 视为"无序号"，不去重也不记录。
+dsh 0.2 的事件都有 seq，且从 0 开始，所以 0 也去重。
 
-**这是分页与实时流可以重叠的唯一原因。**一页历史盖住实时流的一段时，重叠部分被静默丢弃。
+**这是更早的页可以与窗口重叠的原因。**重叠部分被静默丢弃。
 
 ### 2.2 未知类型
 
@@ -83,7 +90,7 @@ user(UserTurn) | assistant(AssistantTurn) | tool(ToolCard) | notice(Notice)
 
 agent 的事件词汇是开放的——插件会加新类型。渲染未知事件会让每个装了插件的用户看到噪音。
 
-已知的"只记日志不渲染"类型包括 `step/start`、`step/end`、`request/context`、`session/end-seed`，它们与"这个 build 之后才出现的类型"走同一条路径。
+已知的"只记日志不渲染"类型包括 `step/start`、`step/end`、`system/message`、`request/context`、`agent/inbox/spliced`（排队区读 `inbox` projection，它说的是同一件事的全量）、`approval/asked`、`approval/decided`，它们与"这个 build 之后才出现的类型"走同一条路径。
 
 ---
 
@@ -101,9 +108,11 @@ running = true
 running = false
 完成所有未完成的流式内容（见下）
 若 data.reason.kind 存在且不是 "success" / "completed"：
-    detail = data.reason.message ?? data.reason.failure.message
+    detail = data.reason.error.message ?? data.reason.message ?? data.reason.failure.message
     若 detail 非空 → 追加 notice(id: "n<seq>", kind: .failure, text: detail)
 ```
+
+0.2 的失败原因形如 `{kind: "error", error: {message, code}}`；取消是 `{kind: "aborted", reason: {kind: "user"}}`，没有 message，不出 notice。
 
 **"完成所有未完成的流式内容"** 指：
 
@@ -122,9 +131,12 @@ kind = data.source.kind ?? "user"
 
 blocks = data.content[]
 text   = 拼接所有 type=="text" 的 block 的 text
-images = 所有 type=="image" 且有 attachment.attachmentId 的 block
+images = 所有 type=="image" 且有 attachment.attachmentId 的 block（只有引用，字节按需用 session/attachment 取）
 
-若 kind != "user"（注入的上下文：AGENTS.md、skill 正文、文件变更通知）：
+若 kind == "runtime-context" → 丢弃
+    （机器每个 turn 前给模型的运行环境说明。不是谁说的话，画出来是每个回答前一页样板）
+
+若 kind != "user"（注入的上下文：AGENTS.md、skill 正文、审批说明等）：
     追加 user(text: data.source.summary ?? text, synthetic: true)
     结束
     （它是真实的模型输入，隐藏会歪曲对话；但它不是人说的，
@@ -132,26 +144,32 @@ images = 所有 type=="image" 且有 attachment.attachmentId 的 block
 
 若 text 与 images 皆空 → 丢弃
 
-清理匹配的乐观气泡（§6）
+若 data.source.rpcId 存在（本机或别处发送时带的 requestId）：
+    撤下 id 等于它的乐观气泡、provisional 排队项与 queue 里的同名项（§6）
 追加 user(id: data.id ?? "u<seq>", text, images, synthetic: false)
 ```
 
-### 3.4 `assistant/chunk`
+### 3.4 流式帧（`assistant-stream`）
+
+0.2 **不再持久化** `assistant/chunk`。模型的输出以 follow 上的 `assistant-stream` 帧到达（`docs/dsh-0.2-protocol.md` §4.2），落盘的只有之后的 `assistant/message`（或失败时的 `assistant/attempt`）。
 
 ```
-turn = data.turn ?? 0，step = data.step ?? 0，key = "<turn>.<step>"
-kind = data.chunk.type
-
-text-delta      → 定位/新建 key 对应的气泡，text += data.chunk.text
-reasoning-delta → 同上，reasoning += data.chunk.text
-其他            → 忽略
-    （tool-call-delta 由随后的 tool/call 覆盖；
-      usage / finish / block-* 没有可渲染内容）
+start {attemptId, turn, step}   → streaming = (attemptId, turn, step)
+chunk {attemptId, time, chunk}  → attemptId 必须等于 streaming.attemptId，否则忽略
+                                   key = "<streaming.turn>.<streaming.step>"
+                                   text-delta      → 定位/新建 key 的气泡，text += chunk.text
+                                   reasoning-delta → 同上，reasoning += chunk.text
+                                   其他            → 忽略（tool-call-delta 由随后的 tool/call 覆盖；
+                                                      usage / finish / block-* 没有可渲染内容）
+end {attemptId, outcome}        → streaming = nil
+                                   outcome.kind == "abandoned" → 撤下该 key 下未完成的气泡
 ```
 
-空字符串的 delta **必须**忽略（不新建气泡）。
+空字符串的 delta **必须**忽略（不新建气泡）。新建的气泡：`id = "a<turn>.<step>"`，`complete = false`。
 
-新建的气泡：`id = "a<turn>.<step>"`，`complete = false`。
+`abandoned` 的尝试日志里什么都不留，所以它流出的文字必须撤下；`committed` 的那次，持久事件已先于 `end` 到达并替换了气泡（§3.5），`end` 不再做任何事。
+
+App 把 chunk 攒一帧（33 ms）再一起折叠（`MachineSession.hold`），其他任何 follow 项到达前先把攒着的折完——结束这一步的消息不能越过构成它的文字。
 
 ### 3.5 `assistant/message`
 
@@ -170,50 +188,63 @@ reasoning = 拼接 type=="reasoning"
 否则：定位/新建气泡，设 text、reasoning，complete = true
 ```
 
-### 3.6 `tool/call`
+### 3.6 `assistant/attempt`
+
+一次没有提交成消息的尝试（失败、被重试取代）。撤下 `data.turn.data.step` 下未完成的气泡：重试会流进同一个 step，不撤的话新文字会接在失败那次后面。
+
+### 3.7 `tool/call`
 
 ```
 callId = data.callId          若缺失 → 丢弃
 name   = data.name ?? "tool"
-arguments = data.arguments ?? "{}"
-presentation = callPresentation(view.view, view.for, name, arguments)   见 §7
+arguments = data.arguments ?? "{}"      （未解析的 JSON 字符串）
+presentation = questionPresentation(name, arguments) ?? callPresentation(name, arguments)   见 §7
 
 若 callId 已在 toolIndex → 原地替换（重发）
 否则 → 追加 tool(running: true)
 ```
 
-### 3.7 `tool/result`
+### 3.8 `tool/result`
+
+0.2 的结果消息直接带内容：`data.message = {role: "tool", source: {kind: "tool", callId}, toolCallId, content: [...], isError}`。
 
 ```
-block  = data.message.content[0]
-callId = data.message.source.callId ?? block.toolCallId
+callId = data.message.source.callId ?? data.message.toolCallId
 
-若 callId 缺失，或 toolIndex 里没有它 → 丢弃
-    （调用在更早的历史页上。凭空造一张没有上下文的卡片更糟）
+若 callId 缺失，或 toolIndex 里没有它 → 丢弃，且**不记入 seen**
+    （调用在更早的页上。凭空造一张没有上下文的卡片更糟；
+      不占用 seq，是为了调用随后到达时，重发的结果还能落下）
 
 card.running = false
-card.failed  = (data.error 存在且非 null) 或 block.isError == true
-card.resultText = 拼接 block.content[] 里的 text
-若 view.for == "result" → card.presentation = resultPresentation(view.view, 当前 presentation)
+card.failed  = (data.error 存在且非 null) 或 data.message.isError == true
+card.resultText = 拼接 data.message.content[] 里的 text
+若是提问卡 → 从 resultText 解析答案（§7.2）
+否则 → card.presentation = resultPresentation(resultText, 当前 presentation)
 ```
 
-### 3.8 `todo/write`
+### 3.9 `todo/write`
 
 ```
 todos = data.todos[] 中每个有 content 且 status ∈ {pending, in_progress, completed} 的项
 ```
 
-### 3.9 `request/header`
+### 3.10 `session/title`
+
+```
+title = data.title ?? 保持原值
+```
+
+### 3.11 `request/header`
 
 ```
 modelName = data.header.config.model ?? 保持原值
 ```
 
-### 3.10 `command/run` 与 `command/done`
+### 3.12 `command/run` 与 `command/done`
 
 斜杠命令由客户端发起（`commands/execute`），机器把它的生命周期原样记进会话日志：`command/run` 在
 handler 之前、`command/done` 在结算之后，两者都不包在 turn 里。所以命令的结果不用等回包，它自己会
-沿着重放路径回来。
+沿着 follow 回来。
 
 ```
 command/run:  running[data.commandId] = "/" + data.name + data.args      （记着，不画）
@@ -223,58 +254,69 @@ command/done: line = running.removeValue(forKey: data.commandId)
 ```
 
 **为什么要配对**：`command/done` 只有 `commandId` 和结果，没有产生它的那行字。不配对的话屏幕上只有
-"preset read-only"，看不出是谁要求的。浏览器端跑的命令、或事后翻页加载进来的日志没有 `command/run`
+"preset read-only"，看不出是谁要求的。浏览器端跑的命令、或翻页加载进来的日志没有 `command/run`
 可配，这时只显示结果那半句——那也是这个会话自己的记录，总比没有强。
+
+### 3.13 `subagent/descriptor`
+
+不画。只置一个"子代理列表过期"的标记，子代理面板下次打开时重新拉取。
 
 ---
 
-## 4. 分页
+## 4. 快照与分页
 
-历史按**消息**分页（`maxMessages`），但一页携带这些消息跨越的**全部原始事件**。
+窗口按**消息**分页（`maxMessages`，app 取 25），但一页携带这些消息跨越的**全部事件**。
 
-### 4.1 尾页（`prepend = false`）
+### 4.1 快照（`adopt`）
 
-按顺序折叠每个 `events[].event`，`view` 取 `events[].view`，然后按到达顺序回放尾页到达**之前**收到的实时事件（`receiveLive` 在尾页到达前——`awaitingPage`——只缓冲，不折叠；取历史失败后不再缓冲）。重叠部分由 `seen` 去重。
-
-先缓冲是因为打开一个正在运行的会话时，实时流几乎总比历史页先到：直接折叠会把正在写的气泡建在它之后的历史**前面**，历史再追加到后面——`seen` 能去重，却无法把折叠顺序排回来。取历史失败时缓冲照样回放（`historyFailed`），不为一页不会来的历史扣着已到的事件。
+follow 的第一项。**整体替换**窗口，不与旧窗口拼接——这是 dsh 自己的客户端的做法，也是"重开即一致"成立的前提。
 
 ```
-oldestSeq = min(oldestSeq ?? 首条seq, 首条seq)
-hasMore   = page.hasMore
-若 page.projections 存在 → 吸收（§5）
-loaded    = true
+generation += 1
+清空 items、索引、seen、command 配对、streaming        （projectionSeq 保留，见 §5.1）
+按顺序折叠 records[].event
+oldestSeq = 首条 seq；cursor = snapshot.cursor；hasMore = snapshot.hasMore
+吸收 snapshot.projections（§5）
+若有 assistantStream.activeAttempt → 续上那次尝试（见下）
+把仍未被日志确认的乐观气泡（pending）追加回末尾
+loaded = true
 ```
 
-### 4.2 更早的页（`prepend = true`）
+**续上正在进行的尝试**：快照里的 `activeAttempt = {attemptId, turn, step, stream[]}` 是重连时还在写的那一次。`streaming` 设为它；`stream[]` 是落盘格式的紧凑流：`text-chunks` / `reasoning-chunks` 的 `texts[]` 拼起来分别加进 text / reasoning，`chunk` 项按 §3.4 的 chunk 处理。随后的 chunk 帧接着往上写。
+
+之前翻过的更早页随替换丢弃，需要时重新翻。
+
+### 4.2 更早的页（`absorb`，来自 `session/page`）
+
+请求 `{throughSeq: cursor, beforeSeq: oldestSeq}`：上界取窗口的 `cursor`，保证这一页和窗口读的是同一份日志。
 
 **不能**直接倒序折叠——折叠只在追加顺序下正确。
 
 ```
-1. 新建一个临时折叠器
-2. 用它以 prepend=false 折叠这一页
-3. 把它的 items 中 **id 不在当前 items 里的**整体插到当前 items 前面（瘦身后的尾页可能从一条 `assistant/message` 开始，而构成它的 chunk 落在上一页里；单独折叠它们就是同一个气泡的第二份、永远未完成的拷贝）
-4. 重建索引
-5. seen ∪= 临时折叠器的 seen
+1. 新建一个临时折叠器，按顺序折叠 records[].event
+2. 把它的 items 中 **id 不在当前 items 里的**整体插到当前 items 前面
+3. 重建索引
+4. seen ∪= 临时折叠器的 seen
+5. oldestSeq = min(oldestSeq, 首条 seq)；hasMore = page.hasMore
 ```
 
-第 4 步是必须的：插入使所有下标右移，不重建的话一条实时 chunk 会拼进错误的位置（或新建重复气泡）。
+第 3 步是必须的：插入使所有下标右移，不重建的话一条实时 chunk 会拼进错误的位置（或新建重复气泡）。
 
-### 4.3 瘦身
+翻页请求发出后若窗口被替换（`generation` 变了），这一页丢弃。
 
-Bridle 会剥掉**已提交消息**的 `assistant/chunk`（同一 `turn.step` 已有 `assistant/message`）。
+### 4.3 帧上限
 
-对折叠语义**无影响**：committed 消息的完整内容在 `assistant/message` 里；未提交那条的 chunk 会被保留。
-
-客户端**禁止**依赖 chunk 一定存在。
+快照或某一页超过隧道的单帧上限时，Bridle 回 `too-large`；app 把 `maxMessages` 减半重开（快照）或重取（翻页），直到放得下。这是 `MachineSession` 的事，折叠器不感知。
 
 ---
 
 ## 5. projection
 
-projection 是 agent 算好的派生状态，两条路到达：
+projection 是 agent 算好的派生状态，三条路到达：
 
-- 历史页里的 `projections` 基线块：`{ asOfSeq, values: { key: value } }`
-- 实时 `session/projection` 帧：`{ key, value, seq }`
+- 快照里的 `projections`：`{ asOfSeq, values: { key: value } }`
+- `session/control` 流：每次打开先给 `baseline`（所有已挂载会话各自一块 `{asOfSeq, values}`），之后逐键 `projection {sessionId, key, value, seq}`
+- `session/projections` 一元调用（模型、子代理目录等按需读取，不经折叠器）
 
 ### 5.1 水位线
 
@@ -283,79 +325,81 @@ projection 是 agent 算好的派生状态，两条路到达：
 否则 → projectionSeq[key] = seq，应用
 ```
 
-重连时实时帧可能先于历史基线到达。**陈旧的值禁止覆盖较新的值。**
+`session/control` 与 `session/follow` 是两条独立的流，谁先到没有保证。**陈旧的值禁止覆盖较新的值**——所以替换窗口时水位线**保留**，否则一个较旧的快照会把 control 先送到的新值（排队、标题）改回去。
+
+本机改名（`retitle`）直接改 `title`，不经水位线：给本地猜测抬高水位，会压住 Mac 上之后的每一次改名。
 
 ### 5.2 已折叠的键
 
 | key | 效果 |
 |---|---|
 | `title` | `title = value` |
-| `todos` | 同 §3.8 |
+| `todos` | 同 §3.9 |
 | `contextPressure` | `window = value.contextWindow`；`used = value.projectedTokens ?? value.pressureTokens`；`window > 0` 且 `used` 存在时 `contextFraction = min(1, used/window)`，否则置 nil。另外原样留下 `contextTokens = used`、`contextWindow = window`——"83%" 和 "830k / 1M" 回答的不是同一个问题 |
 | `plan` | `planning = (value.mode == "plan") 或 (value.active == true)` |
 | `sessionStats` | `stats = SessionStats(value)`。`ttftMs` 是**总和**、`ttftSteps` 是次数，平均值要自己除；`ttftSteps == 0` 时返回 nil 而不是 0 |
 | `tokenUsage` | `tokens = TokenUsage(value)`。`cacheHitRate` 在没有任何输入时返回 nil——"还没请求过"和"每次都没命中"是两件事，用 0% 表达前者是错的 |
 | `contextBreakdown` | `contextBreakdown = ContextBreakdown(value)`（system / tools / messages 三段） |
-| `permissions` | `permissions = PermissionChoice(value)`（`options[]` + `currentValue`）。**是会话级的**：机器从该会话自己的日志（`permission/preset` + `sandbox/mode` + `approval/policy`）折叠出来，改一个会话不影响别的。机器级的是另一个东西——settings 里 `permission.defaultPreset`，只决定新会话的起点，两者共用一个取值词表。`options` 里的 `custom` 只在当前旋钮不匹配任何 preset 时出现，是显示状态、不是可切换目标，`PermissionChoice.choices` 把它过滤掉 |
+| `permissions` | `permissions = PermissionChoice(value)`。0.2 的值只有 `currentValue`，**不带可选项**；可选项取自机器的 `permissionPresets/catalog`（`offer(presets:)`），两者谁先到都能补齐。**是会话级的**：机器从该会话自己的日志折叠出来，改一个会话不影响别的。机器级的默认档位是 settings 里 `permission.defaultPreset`，只决定新会话的起点。`custom` 只在当前旋钮不匹配任何 preset 时出现，是显示状态、不是可切换目标，`PermissionChoice.choices` 把它过滤掉 |
+| `inbox` | 排队区，见 §6.2 |
 | 其他 | 忽略 |
 
 ### 5.3 尚未折叠的键
 
 数据已在传输中，加一个 case 即可用（无需新请求）：
 
-`subagent` · `subagentTiming` · `goal` · `sessionListMetadata` · `imageLimits`
+`goal` · `turnOutline` · `agentPreset` · `userQuestions` · `subagentCatalog` · `subagent` · `subagentTiming` · `modelSelection` · `sessionListMetadata` · `imageLimits`
 
-形状见 `docs/architecture.md` §3.2。
+其中 `modelSelection` 与 `subagentCatalog` 已由 `Harness.models` / `Harness.subagents` 经 `session/projections` 读取，只是不进折叠器。
 
 > `scripts/check-docs.mjs` 从上面两个小节**解析**键名再比对代码，不是手抄一份清单。这一条本身就是被这个 bug 教出来的：早先脚本里硬编了 §5.3 九个键中的三个，于是折叠另外六个中的任何一个，检查都不会响。
 
 ---
 
-## 6. 乐观发送
+## 6. 乐观发送与排队
 
-发送时立即上屏，不等 agent 回音。
+发送时立即上屏，不等 agent 回音。每次发送都带一个新铸造的 `requestId`，dsh 把它记在消息上（`source.rpcId`）——这是乐观副本与真实消息之间唯一可靠的对应。
+
+### 6.1 乐观气泡（`pending`）
+
+发给空闲会话、或 steer 进正在运行的 turn 时，消息马上就是转录的一部分：
 
 ```
-showPending(text, id):
+showPending(text, id = requestId):
     pending += (id, trim(text))
     追加 user(id, text, synthetic: false)
 
-发送失败：
-    dropPending(id) → 从 pending 和 items 中删除，重建索引
+收到 source.rpcId == id 的 user/message → 从 pending 与 items 删除该 id，重建索引，再追加真实消息
+发送失败（确定没送出）→ dropPending(id)
 ```
 
-### 6.1 与真实回音的合并
+agent 铸造自己的消息 id，与客户端的永不相同；**按 `rpcId` 匹配，不按文本**。别处（webui、另一台手机）发来的消息 rpcId 不同，即使文字一样也不会误吃。
 
-agent 铸造自己的消息 id，**与客户端铸造的乐观 id 永不相同**。因此不能按 id 匹配。
+快照替换窗口时，`pending` 里还没被日志确认的条目追加回末尾——那条消息还在路上。
+
+> 这条规则是从一个真实 bug 来的：早期按 id 匹配，两者永不相等，导致**每一条消息都在屏幕上出现两次**。0.1 没有 rpcId，只能按文本匹配；0.2 起改为精确匹配。测试 `testTheRealMessageReplacesTheOptimisticOne` 与 `testRepeatedTextClearsOneBubblePerEcho` 守着它。
+
+### 6.2 排队区（`inbox` + `provisional`）
+
+排队（`mode: "queue"`）发给正在运行的会话时，消息还没对模型说出口，不该画成转录里的气泡，而是放进底部的排队条：
 
 ```
-收到 kind=="user" 的 user/message 时：
-    在 pending 中找第一条 text == trim(收到的 text) 的记录
-    找到 → 从 pending 移除，从 items 删除该 id 的项，重建索引
-    然后再追加真实消息
+showQueued(text, id = requestId): provisional += 项；queue += 项
+
+inbox projection {next-step: [...], next-turn: [...]}：
+    listed = next-step 的每条（placement "steering"）+ next-turn 的每条（placement "queued"）
+             id = 消息 id，text = 拼接 content 里的 text
+    provisional 中 id 出现在任何一条的 source.rpcId 里的 → 移除
+    queue = listed + 剩下的 provisional
 ```
 
-**按最早匹配**：人不可能乱序发送同样的内容。
-
-> 这条规则是从一个真实 bug 来的：早期按 id 匹配，两者永不相等，导致**每一条消息都在屏幕上出现两次**。测试 `testTheRealMessageReplacesTheOptimisticOne` 与 `testRepeatedTextClearsOneBubblePerEcho` 守着它。
-
-### 6.2 不匹配时
-
-来自别处（webui、另一台手机）的消息**不会**误吃乐观气泡，因为文本不同。文本恰好相同时会误吃一条——代价是一次显示合并，不会丢内容，可接受。
-
-`reset()` **必须**清空 `pending`。
+`inbox` 是全量，所以替换而不是合并——只有本机发出、机器还没列出的那几条保留。真实 `user/message` 到达（§3.3）也会撤下同 rpcId 的 provisional 与 queue 项：机器把它说出口就是领取，不依赖可能在重连中错过的那次 `inbox` 更新。
 
 ---
 
-## 7. 渲染意图
+## 7. 工具卡片
 
-agent 在事件旁附 `view`，host 已算好这个工具该怎么画。
-
-```json
-{ "for": "call" | "result", "view": { "card": "terminal", ... } }
-```
-
-客户端翻译成闭集：
+0.2 的 follow 与 page **不再附 `view`**（README："the controller does not resolve a Tool definition, run a presenter, or attach UI data"）。卡片由客户端按**工具名与参数**选，闭集是：
 
 ```
 generic(title, kind, detail)
@@ -363,45 +407,38 @@ terminal(command, cwd, output, exitCode)
 diff(title, files[{path, oldText, newText}])
 search(title, lines[], truncated, total)
 read(path, lines[{number, text}], totalLines)
+question(items, answers)
 ```
 
-### 7.1 call 时
+### 7.1 call 时（`callPresentation(name, arguments)`）
 
-```
-若 for != "call" 或 view 缺失 或 view.card 缺失 → generic(title: 工具名)
-terminal → terminal(command: view.title ?? 名, cwd: view.cwd, output: nil, exitCode: nil)
-diff     → diff(title, files: view.diffs)
-其他     → generic(title, kind: view.kind, detail: view.rawInput 的可读化)
-```
+`arguments` 解析失败按空对象处理。
 
-### 7.2 result 时
-
-**`title` 缺省意味着"沿用 call 时定下的"**，所以此函数必须接收当前 presentation，而不是整个替换。
-
-| card | 规则 |
+| 工具 | 卡片 |
 |---|---|
-| `terminal` | 沿用 command 与 cwd，填入 `output` 与 `exitCode` |
-| `diff` | 替换 files |
-| `search` | `shape == "paths"` 时取 `paths[]`；否则把 `files[].matches[]` 摊平成 `"<path>:<line>  <text>"` |
-| `read` | `lines[{number, text}]`，**保留文件原行号** |
-| `web` | `kind=="fetch"` → generic(detail: `"<status>  <url>"`)；否则 generic(detail: answer + sources) |
-| 其他 | generic，沿用旧 title/kind，`view.content[]` 有内容则取之 |
+| `bash` | `terminal(command: command, cwd: workdir)` |
+| `edit`（有 `file_path`） | `diff(title: file_path, files: [{file_path, old_string, new_string}])` |
+| `write`（有 `file_path`） | `diff(title: file_path, files: [{file_path, nil, content}])` |
+| `grep` / `glob` | `search(title: pattern, lines: [])` |
+| `read` / `read_image` | `generic(title: file_path, kind: "read")` |
+| `web_fetch` | `generic(title: url, kind: "fetch")` |
+| `web_search` | `generic(title: queries[0], kind: "search", detail: 多条时全部列出)` |
+| 其他（含插件新加的） | `generic(title: 工具名, detail: description / file_path / path / pattern / url / name 中第一个非空的)` |
 
-### 7.3 未知 card
+### 7.2 result 时（`resultPresentation(resultText, 当前)`）
 
-**必须**降级为 `generic`，**禁止**丢弃或崩溃。
+| 当前卡片 | 规则 |
+|---|---|
+| `terminal` | 沿用 command 与 cwd，`exitCode` 取结果末尾的 `[exit code: N]` 标记；输出由视图直接显示 `resultText` |
+| `search` | `lines` = `resultText` 的非空行，`total` = 行数 |
+| `question` | `ask_user_question` 的答案是结果里的 JSON `{"answers":[{id, selected, custom?}]}`，失败时不解析 |
+| 其他 | 不变，`resultText` 原样显示在卡片里 |
 
-但"不崩溃"不等于"支持"。降级时**必须**：
+`ask_user_question` 在 call 时就是提问卡：参数里的 `questions[]` **每一条**都能读出时才用提问卡，有一条读不出就退回 generic——一张漏掉问题的卡片比原样显示参数更糟。
 
-1. 保留完整的原始渲染意图（结构化载荷，不只是标题）
-2. 保留结果文本
-3. **明说这个版本画不了它** —— 例如"这个工具的展示需要更新 Rowel"
+### 7.3 不认识的工具
 
-第 3 条不是礼貌，是正确性。未知 card 可能带着位置信息或**可执行的动作**，降级成一张只读的通用卡片会让人以为"就这些了"，而实际上有操作被吞掉了——那正好重新制造这个品类的第二痛点（手机端只能看不能做）。
-
-> 这与 `architecture.md` §12 的能力协商是同一条原则：**能力缺失要明说，不能静默降级。**早期版本这两处互相矛盾，deep review 指出后统一到"明说"。
-
-**客户端永远不需要知道某个具体工具做什么**——但需要知道自己画不了它。
+**必须**画成 `generic`，**禁止**丢弃或崩溃，并且保留完整的参数（卡片可展开查看）与结果文本。客户端不需要知道每个工具做什么，但不能把它吞掉。
 
 ---
 
@@ -414,18 +451,26 @@ diff     → diff(title, files: view.diffs)
 | 同一 seq 到达两次 | 第二次丢弃（`testDuplicateSequenceIsIgnored`） |
 | 未知事件类型 | 静默（`testUnknownEventIsSilent`） |
 | 只调工具的一步（空 assistant 消息） | 不留空气泡（`testEmptyAssistantStepLeavesNoBubble`） |
-| 孤儿 `tool/result`（调用在更早页上） | 丢弃（`testOrphanResultIsIgnored`） |
-| turn 无最终消息就结束 | 气泡与卡片都置为完成（`testTurnEndCompletesStreamingBubbles`） |
-| `turn/end` 且 `reason.kind == "success"` | 不产生 notice（`testSuccessfulTurnEndAddsNoNotice`） |
+| 孤儿 `tool/result`（调用在更早页上） | 丢弃（`testOrphanResultIsIgnored`）；调用随后到达时结果仍能落下（`testAnUnplacedResultCanLandWhenItsCallArrives`） |
+| turn 无最终消息就结束 | 气泡与卡片都置为完成，失败原因成一条 notice（`testTurnEndCompletesStreamingBubbles`） |
+| `turn/end` 且 `reason.kind == "completed"` | 不产生 notice（`testSuccessfulTurnEndAddsNoNotice`） |
+| 尝试被放弃（`abandoned`） | 撤下它流出的文字（`testAnAbandonedAttemptIsTakenDown`） |
+| 失败后重试同一 step | 新尝试从空气泡开始（`testARetriedAttemptStartsAFreshBubble`） |
+| 没见过 `start` 的 chunk | 忽略（`testChunksWithoutTheirStartAreIgnored`） |
+| 结束这一步的消息紧跟在 chunk 后 | 先折完 chunk，再替换（`testStreamedTextFoldsBeforeTheMessageThatEndsIt`） |
+| 快照中途打开 | 续上正在写的尝试（`testASnapshotResumesTheAttemptInFlight`） |
+| 重连的新快照 | 整体替换窗口，仅保留还在路上的乐观气泡（`testASnapshotReplacesTheWindow`） |
 | prepend 之后来了实时 chunk | 拼进正确的气泡（`testPrependKeepsLiveStreamingCoherent`） |
-| 尾页之前到达的实时事件 | 排在历史之后，工具结果不丢（`testLiveEventsThatBeatTheHistoryPageLandBehindIt`） |
-| 上一页带来屏幕上已有消息的 chunk | 不产生第二个气泡（`testTheChunksOfAMessageAlreadyHeldDoNotBecomeASecondBubble`） |
-| projection 乱序 | 高 seq 胜出（`testStaleProjectionIsDropped`） |
+| projection 乱序 | 高 seq 胜出（`testStaleProjectionIsDropped`），快照不改回 control 的新值（`testASnapshotDoesNotPutBackAnOlderProjection`） |
 | 注入的上下文 | 标 synthetic，显示 summary（`testSyntheticUserMessageIsMarked`） |
+| runtime-context 消息 | 不显示（`testRuntimeContextIsNotShown`） |
 | `source.kind == "tool"` 的 user 消息 | 丢弃（`testToolSourcedUserMessageIsDropped`） |
-| 乐观气泡与真实回音 | 合并为一条（`testTheRealMessageReplacesTheOptimisticOne`） |
-| 相同文本发两次 | 一次回音消一条（`testRepeatedTextClearsOneBubblePerEcho`） |
-| 发送失败后又收到同文本 | 不受影响（`testAFailedSendLeavesNoGhost`） |
+| 乐观气泡与真实回音 | 按 rpcId 合并为一条（`testTheRealMessageReplacesTheOptimisticOne`） |
+| 相同文本发两次 | 各自按自己的 rpcId 消掉（`testRepeatedTextClearsOneBubblePerEcho`） |
+| 发送失败后又收到同 rpcId | 不受影响（`testAFailedSendLeavesNoGhost`） |
+| 排队项被机器列出 / 被说出口 | provisional 让位（`testTheInboxReplacesTheProvisionalEntry`、`testAClaimedMessageLeavesTheQueueStrip`） |
+| 权限 projection 只有当前档位 | 可选项从目录补齐（`testAccessChoicesComeFromTheCatalog`） |
+| 真 dsh 0.2 的一段录制 | 折叠结果与 webui 一致（`testARecordedFollowFoldsIntoWhatTheWebUIShows`） |
 
 ---
 
@@ -434,13 +479,13 @@ diff     → diff(title, files: view.diffs)
 从零写一个客户端折叠器，建议顺序：
 
 1. 信封解析 + `seq` 去重 + 未知类型静默 → 此时能安全消费任何日志
-2. `user/message` + `assistant/message` → 能看到对话
-3. `assistant/chunk` → 流式
-4. `tool/call` / `tool/result` + generic 渲染意图 → 能看到工具
+2. 快照整体替换 + `user/message` + `assistant/message` → 能看到对话
+3. `assistant-stream` 帧 → 流式，含 abandoned 撤回与 activeAttempt 续上
+4. `tool/call` / `tool/result` + generic 卡片 → 能看到工具
 5. `turn/start` / `turn/end` → 状态正确
-6. 分页（先尾页，再 prepend + 重建索引）
-7. projection
-8. 乐观发送与合并
-9. 各种具体渲染意图
+6. 更早的页（prepend + 重建索引）
+7. projection（含跨快照保留的水位线）
+8. 乐观发送（按 rpcId）与排队区
+9. 按工具名的具体卡片
 
 每一步都可独立测试，且都对应 `StoreTests.swift` 里的一组用例。

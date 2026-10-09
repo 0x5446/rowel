@@ -46,11 +46,16 @@ There are no accounts. Pairing is a QR code in your terminal.
 
 ## Where this is
 
-The Mac side is finished and in daily use. The relay is deployed. **The app is in
-App Store review**; until it clears, the submitted build is on
-[TestFlight](https://testflight.apple.com/join/HHCQBu38). You can also build it
-yourself with Xcode, which is free but comes with
+The Mac side is finished and in daily use. The relay is deployed. **Rowel 1.1
+needs dsh 0.2 or newer** — dsh 0.2 replaced its whole API, and the app and Bridle
+now speak it directly. The app is on
+[TestFlight](https://testflight.apple.com/join/HHCQBu38) until it clears App Store
+review. You can also build it yourself with Xcode, which is free but comes with
 [a seven-day catch](https://rowel.novabox.ai/get).
+
+Still on dsh 0.1? Bridle 0.1.x and app 1.0 go on working with it; install with
+`ROWEL_REF=v0.1.7`. Moving to dsh 0.2 is one-way — read
+[Upgrading from dsh 0.1](#upgrading-from-dsh-01) first.
 
 ## Getting it running
 
@@ -60,8 +65,8 @@ yourself with Xcode, which is free but comes with
 curl -fsSL https://rowel.novabox.ai/install | sh
 ```
 
-Needs Node 22+ and git. The script installs neither — it stops and tells you what
-is missing. Everything it installs lives in `~/.rowel`, plus one symlink onto
+Needs Node 22+ and git — the script installs neither; it stops and tells you
+what is missing — and dsh 0.2, which it checks for and warns about. Everything it installs lives in `~/.rowel`, plus one symlink onto
 your PATH (and npm's usual cache). It is 144 lines, over a third of them
 comments, if you would rather read it before running it.
 
@@ -75,6 +80,18 @@ It starts Bridle if none is running, prints a QR code, and stays running. In
 the app, tap *Connect a Mac*, then *I've run it — scan the code*. With Bridle
 already running (a service, or dsh's plugin), it just prints a fresh code.
 `--code` does the same, for typing instead of scanning.
+
+**If dsh is already running** — started by hand, or kept up by a login item —
+Bridle cannot sign in to it from outside: dsh 0.2 hands its sign-in token only
+to its own plugins. Run Bridle inside it instead, then restart dsh:
+
+```sh
+bridle plugin install
+```
+
+`bridle status` says which of the two you have, and `bridle doctor` says what
+to do when it is neither. Left to itself, with no dsh running, Bridle starts one
+and signs in with the token it prints.
 
 Over SSH, where a terminal may not draw a QR code, add `--link` to print the raw
 pairing link. When the camera is not an option, `bridle pair --code` prints an
@@ -102,6 +119,7 @@ bridle revoke <prefix>    remove one
 bridle backup <file>      save this machine's identity, encrypted
 bridle restore <file>     put a saved identity back
 bridle service install    keep it running after login
+bridle plugin install     run bridle inside dsh instead (how it signs in to a dsh already running)
 bridle doctor             check this machine's setup
 ```
 
@@ -149,6 +167,46 @@ Its first run prints its own QR code, and the app shows a second machine —
 same name, told apart by a fingerprint suffix. `bridle pair` needs none of
 this: it starts nothing, so it runs happily beside a Bridle that is already up.
 
+## Upgrading from dsh 0.1
+
+dsh 0.2 rewrites `~/.dsh` the first time it starts — `settings.yaml` becomes
+`settings.yaml.imported` and its sections move into the profile — and dsh 0.1
+cannot read the conversations 0.2 writes. So:
+
+1. **Back up `~/.dsh` whole** before upgrading. Going back means restoring that
+   copy and reinstalling `@deepseek-ai/dsh@0.1.1-rc.2`, not just downgrading.
+2. Upgrade dsh, Bridle (`curl -fsSL https://rowel.novabox.ai/install | sh`), and
+   the app to 1.1 together. App 1.0 cannot talk to Bridle 0.2, and Bridle 0.2
+   cannot talk to dsh 0.1.
+3. **If your models came from a gateway** — Command Code, OpenRouter, anything
+   configured under `llm-pi-ai` — they are gone after the upgrade: dsh 0.2's
+   default profile does not load that adapter, and the import drops the
+   section. Put it back in `~/.dsh/profiles/web/cordis.patch.yml`, copying the
+   `providers` block (and your default model) from `settings.yaml.imported`:
+
+   ```yaml
+   - insert:
+       - id: llm-pi-ai
+         name: '@deepseek-ai/dsh-llm-pi-ai'
+         config:
+           providers:
+             commandcode:           # as it was under llm-pi-ai.providers
+               apiKeyEnv: COMMANDCODE_API_KEY
+               api: openai-completions
+               baseURL: https://api.commandcode.ai/provider/v1
+               # … its models list, unchanged
+
+   - id: agent-default-model
+     config:
+       provider: commandcode
+       model: deepseek/deepseek-v4.1-flash
+   ```
+
+   Then restart dsh. Keys stay where they were: routes name them by
+   environment variable.
+4. If Bridle ran as dsh's plugin before, it still does; otherwise run
+   `bridle plugin install` and restart dsh (see [Pair](#2-pair)).
+
 ## What it is protecting, and what it is not
 
 The relay switches sealed frames between two sockets by circuit number. It has no
@@ -162,8 +220,9 @@ implementations of the tunnel use only their platform's own primitives, Node's
 `node:crypto` and Swift's `CryptoKit`. There is no third-party cryptography
 dependency in the tree.
 
-**The part people underestimate:** `dsh` has no authentication of its own, so a
-paired phone has the same authority over that Mac as its own terminal — it can
+**The part people underestimate:** dsh asks a browser for nothing more than the
+token it printed, and Bridle holds that sign-in, so a paired phone has the same
+authority over that Mac as its own terminal — it can
 run commands and read and write files. `bridle revoke` is the only way to take
 that back. Nothing in the app is a smaller permission than that; the app just
 draws fewer buttons.
@@ -177,7 +236,8 @@ reading before you pair anything you care about.
 ```sh
 npm install
 npm test               # build, docs check, unit tests. Seconds.
-npm run test:e2e       # the whole stack (most of it needs a harness running)
+npm run test:e2e       # the whole stack; ROWEL_E2E_DSH_BIN=<dsh 0.2> for the parts that need dsh,
+                       # ROWEL_E2E_MODEL=1 for the few that spend model turns
 npm run test:ios       # needs Xcode and `brew install xcodegen`
 npm run vectors        # regenerate the cross-language test vectors
 ```
@@ -225,7 +285,7 @@ code comments and commit messages are English throughout.
 | [`docs/architecture.md`](docs/architecture.md) | why it is shaped this way, where a new feature goes |
 | [`docs/protocol.md`](docs/protocol.md) | the exact bytes on the wire, enough to write a third client |
 | [`docs/fold.md`](docs/fold.md) | how an event log becomes a screen, rule by rule |
-| [`docs/dsh-api-inventory.md`](docs/dsh-api-inventory.md) | the harness's 51 methods and its RPC model |
+| [`docs/dsh-api-inventory.md`](docs/dsh-api-inventory.md) | the dsh 0.2 endpoints and streams the app uses, and where |
 | [`docs/deployment.md`](docs/deployment.md) | running the relay, DNS, and what shipping still needs |
 
 [`docs/README.md`](docs/README.md) says which sections are specification-grade

@@ -277,6 +277,18 @@ Noise 明文即一个 JSON 对象，UTF-8 编码。所有帧有字符串字段 `
 | `endpoint` | string | dsh 端点 `<命名空间>/<方法>`，如 `session/list` |
 | `args` | any | 端点参数，即 dsh 的 `payload.args`；参数名**必须**与 dsh 声明的完全一致 |
 
+Bridle 不检查也不改写 `args`，形状完全由 dsh 定。常见的几种（完整清单见 [`dsh-api-inventory.md`](dsh-api-inventory.md)，语义见 [`dsh-0.2-protocol.md`](dsh-0.2-protocol.md) §2.1）：
+
+| 形状 | 端点举例 |
+|---|---|
+| `{request: {…}}` | `session/create`、`session/prompt`、`session/page`、`session/rename`，以及全部 `workspace/*` 一元调用 |
+| `{_request: {}}` | `session/list`（线名就带下划线） |
+| `{agentId, …}`（`agentId` 即 sessionId） | `commands/list {agentId}`、`commands/execute {agentId, line, submittedAttachments}` |
+| 顶层键，无包装 | `settings/update {ns, patch, expectedRevision}`、`$events/result {clientId, eventId, outcome}` |
+| `{}` | `session/modelCatalog`、`permissionPresets/catalog`、`agentPresets/list`、流端点 `$events` / `workspace/follow` / `session/control` |
+
+多一个或少一个键，dsh 都回 `gateway/arguments-invalid`。
+
 唯一由 Bridle 自己回答的端点是 **`$export`**（`args: { sessionId, includeDescendants? }`）：dsh 把会话归档作为普通下载提供（`GET /api/session.export`），不是一元端点，Bridle 取回后以 `{ filename, contentType, base64 }` 作为 `result.value` 返回；归档超过帧上限时回 `too-large`，且**不会**先整份读进内存。
 
 **`abort`** — 放弃在途的 `call`
