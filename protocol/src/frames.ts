@@ -34,7 +34,7 @@ export const TUNNEL_VERSION = 2
  * path enforces one, and all of them enforce it the same brutal way — the
  * oversized message is never delivered and the *connection* is closed with a
  * 1009. There is no per-request failure and nothing to catch, so a sender that
- * does not check first produces a tunnel that drops, reconnects, resumes,
+ * does not check first produces a tunnel that drops, reconnects, reopens,
  * resends the same frame and drops again, with no layer able to say why.
  *
  * Which is why this is shared: both ends check against it before writing, so

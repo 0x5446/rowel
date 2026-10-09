@@ -100,10 +100,15 @@ const MAX_STREAMS = 64
 
 /**
  * How far behind a phone may fall before its streams are cut, in bytes. dsh
- * writes as fast as it produces and never waits for a reader; past this, the
- * stream being written to is cancelled with a `slow-consumer` error the app can
- * recover from by reopening it, instead of the Bridle holding an ever-growing
- * buffer for a phone on a bad connection.
+ * writes as fast as it produces and never waits for a reader; past this, a
+ * stream that writes to the phone is cancelled with a `slow-consumer` error the
+ * app can recover from by reopening it, instead of the Bridle holding an
+ * ever-growing buffer for a phone on a bad connection.
+ *
+ * Only where the buffer is the phone's own (`TunnelTransport.buffered`): the
+ * direct path, one socket per phone. On the Relay path one socket carries
+ * every phone, so its buffer says nothing about which phone is slow, and the
+ * Relay's own limits are what bound it there.
  */
 const MAX_BUFFERED_BYTES = 8 * 1024 * 1024
 
@@ -402,14 +407,20 @@ export class TunnelSession {
     }
     const controller = new AbortController()
     this.inflight.set(id, controller)
+    let result: CallResult
     try {
-      const result = endpoint === EXPORT_ENDPOINT
-        ? await this.exportSession(args)
+      result = endpoint === EXPORT_ENDPOINT
+        ? await this.exportSession(args, controller.signal)
         : await this.core.dsh.call(endpoint, args, controller.signal)
-      if (!this.closed) this.sendFrame({ t: 'result', id, result })
+    } catch (error) {
+      // Never let a call escape as a rejection: nothing awaits this promise,
+      // and in Node an unhandled one ends the process — inside dsh, with the
+      // plugin. An archive download cut off halfway is the way it happens.
+      result = failure(controller.signal.aborted ? 'cancelled' : 'internal', error instanceof Error ? error.message : String(error))
     } finally {
       this.inflight.delete(id)
     }
+    if (!this.closed) this.sendFrame({ t: 'result', id, result })
   }
 
   /**
@@ -421,7 +432,10 @@ export class TunnelSession {
   private handleOpen(sid: string, endpoint: string, args: unknown): void {
     if (this.streams.has(sid)) {
       // dsh closes its whole socket for this; here it costs only the stream.
-      this.sendFrame({ t: 'error', sid, error: { code: 'bad-request', message: `stream ${sid} is already open`, details: {} } })
+      // Both opens are given up: an error for `sid` is the end of `sid` as
+      // far as the phone can tell, so the stream already running under that
+      // id is cancelled too rather than left open with nobody listening.
+      this.cutStream(sid, 'bad-request', `stream ${sid} was opened twice; both are closed`)
       return
     }
     if (this.streams.size >= MAX_STREAMS) {
@@ -446,11 +460,12 @@ export class TunnelSession {
     opened = this.core.dsh.open(endpoint, args, {
       item: (value) => {
         if (this.streams.get(sid) !== entry) return
+        this.sendFrame({ t: 'item', sid, value })
+        // Measured after writing, so the item that takes the phone over the
+        // line counts against the stream that wrote it.
         if ((this.transport.buffered?.() ?? 0) > MAX_BUFFERED_BYTES) {
           this.cutStream(sid, 'slow-consumer', 'this phone fell too far behind the stream; reopen it')
-          return
         }
-        this.sendFrame({ t: 'item', sid, value })
       },
       end: () => {
         if (this.streams.get(sid) !== entry) return
@@ -475,12 +490,12 @@ export class TunnelSession {
     this.sendFrame({ t: 'error', sid, error: { code, message, details } })
   }
 
-  private async exportSession(args: unknown): Promise<CallResult> {
+  private async exportSession(args: unknown, signal: AbortSignal): Promise<CallResult> {
     const request = (args ?? {}) as { sessionId?: unknown; includeDescendants?: unknown }
     if (typeof request.sessionId !== 'string') {
       return failure('bad-request', `${EXPORT_ENDPOINT} needs a sessionId`)
     }
-    const response = await this.core.dsh.export(request.sessionId, request.includeDescendants === true)
+    const response = await this.core.dsh.export(request.sessionId, request.includeDescendants === true, signal)
     if (!response.ok) {
       return { ok: false, error: { code: 'internal', message: `dsh export answered HTTP ${String(response.status)}`, details: {} } }
     }
@@ -510,7 +525,7 @@ export class TunnelSession {
     const channel = this.channel
     if (channel === undefined || this.closed) return
     const encoded = encodeFrame(frame)
-    if (encoded.length > MAX_FRAME_BYTES) {
+    if (encoded.length + WIRE_OVERHEAD_BYTES > MAX_FRAME_BYTES) {
       this.sendOversize(frame, encoded.length)
       return
     }
@@ -546,9 +561,22 @@ export class TunnelSession {
     }
     if (frame.t === 'result') {
       this.sendFrame({ t: 'result', id: frame.id, result: { ok: false, error: { code: 'too-large', message, details } } })
+      return
+    }
+    if (frame.t === 'error') {
+      // The stream is already over; only its error was too big. It still has
+      // to end on the phone, or the phone waits for it forever.
+      this.sendFrame({ t: 'error', sid: frame.sid, error: { code: 'too-large', message: `the stream failed, and its error was too large to send (${megabytes} MB)`, details } })
     }
   }
 }
+
+/**
+ * What the wire adds to a frame's plaintext: Noise's 16-byte tag, and on the
+ * Relay path the 5-byte mux header. The ceiling is on the message the Relay
+ * sees, so a frame that only fits as plaintext does not fit.
+ */
+const WIRE_OVERHEAD_BYTES = 16 + 5
 
 /** A failure the Bridle makes itself. */
 function failure(code: string, message: string): CallResult {

@@ -151,3 +151,15 @@ test('a listener that throws does not stop the others', async (t) => {
   emit(ask('e1'))
   assert.equal(heard, true)
 })
+
+test('when dsh drops, nothing is believed to be waiting until it re-sends', async (t) => {
+  const { machine, emit, drop } = await started(t)
+  emit(ask('e1'))
+  let changes = 0
+  machine.onWaitingChanged(() => { changes += 1 })
+  drop()
+  // Answered in the browser while the Bridle could not hear it, or gone with a
+  // dsh restart: either way a ring now would be for a question nobody sees.
+  assert.deepEqual(machine.dueForRing(), [])
+  assert.equal(changes, 1, 'the relay must be told to decide again')
+})

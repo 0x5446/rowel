@@ -1,9 +1,11 @@
 /**
  * A phone, in TypeScript.
  *
- * This is the reference implementation of the app side of the tunnel: the same
- * Noise IK handshake and the same version-2 frames — unary calls and dsh
- * streams, passed through — that `ios/Rowel/Protocol` implements in Swift. Keeping it here does two things —
+ * This is the reference implementation of the app side of the tunnel: the
+ * Noise IK handshake and the version-2 frames — unary calls and dsh streams,
+ * passed through. `ios/Rowel/Protocol` implements the handshake in Swift and
+ * still speaks version 1 until milestone M2 of docs/dsh-0.2-migration.md ports
+ * it; until then this file, not the Swift one, is the reference for frames. Keeping it here does two things —
  * it lets the end-to-end tests drive a real Bridle against a real harness with
  * no simulator in the loop, and it gives the Swift code something authoritative
  * to be checked against.

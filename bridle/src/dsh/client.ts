@@ -153,7 +153,10 @@ export class DshClient implements AgentClient {
         signal: composite,
       })
     } catch (error) {
-      return carrierFailure(signal?.aborted === true ? 'cancelled' : 'internal', method, error)
+      // Three different endings, and the app retries two of them: the caller
+      // gave up, dsh did not answer in time, or the connection failed.
+      const code = signal?.aborted === true ? 'cancelled' : timeout.aborted ? 'timeout' : 'internal'
+      return carrierFailure(code, method, error)
     }
     if (!response.ok) {
       this.refused(response.status, sent)
@@ -186,12 +189,12 @@ export class DshClient implements AgentClient {
    * @param includeDescendants - whether subagent sessions ride along.
    * @returns the raw ZIP response from dsh.
    */
-  export(sessionId: string, includeDescendants: boolean): Promise<Response> {
+  export(sessionId: string, includeDescendants: boolean, signal?: AbortSignal): Promise<Response> {
     const url = new URL('/api/session.export', this.base)
     url.searchParams.set('sessionId', sessionId)
     if (includeDescendants) url.searchParams.set('includeDescendants', 'true')
     const sent = this.credentials()
-    return fetch(url, { headers: sent }).then((response) => {
+    return fetch(url, { headers: sent, ...(signal === undefined ? {} : { signal }) }).then((response) => {
       this.refused(response.status, sent)
       return response
     })

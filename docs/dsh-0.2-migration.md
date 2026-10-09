@@ -95,10 +95,10 @@ Bridle 开一条自己的 `$events` 流：收到 `approval/request` 或 `user-qu
 ### D6. 版本协商与旧 app
 
 - **哪些不变、哪些变**：Noise 握手、配对、中继与直连、外层多路帧都不变，所以三种新旧组合都能完成握手；变的只是隧道里请求与事件的载荷语法。
-- 隧道 `ready` 帧加 `api: 2` 和 `dsh` 版本。app 1.1 要求 `api ≥ 2`，否则在发出任何调用前提示"请在 Mac 上更新 Bridle"。
+- 隧道版本升到 **2**，在握手里协商（`docs/protocol.md` §3.3、§4.6）。Bridle 0.2 只支持 `[2]`，app 1.1 只说 2；任何一端不支持对方的版本，握手就以 `{ok:false, reason:"version", supported:[…]}` 结束，app 据此在发出任何调用前说清"请更新 app"或"请在 Mac 上更新 Bridle"。`ready` 帧另带 `dsh` 版本。（实现见 M1，2026-10-09。）
 - 旧 app（1.0，说旧方法名）连到 Bridle 0.2：**不做专门识别**（owner 决定，2026-10-09）。Bridle 0.2 不保留旧请求帧的解析，旧 app 的请求得到隧道 v2 的通用"无法识别的请求"错误，app 显示为普通错误。1.0 用户本来就少，发布时官网与 TestFlight 说明里写清"需要 app 1.1"即可，不为它在 Bridle 里长期养一段只回错误的代码。
 - 不做 Bridle 双栈（同时对接 dsh 0.1 与 0.2）：两代 dsh 的认证、接口、事件模型全都不同，双栈等于两套 Bridle，且 0.1 已不再分发；旧组合由不再改动的 Bridle 0.1.x 覆盖。
-- Bridle 0.1.x（旧 dsh）+ app 1.1：app 看到没有 `api: 2`，提示更新 Bridle，并说明需要 dsh ≥ 0.2。
+- Bridle 0.1.x（旧 dsh）+ app 1.1：握手被拒，`supported:[1]`，app 提示更新 Bridle，并说明需要 dsh ≥ 0.2。
 
 ### D7. 发布顺序（避免任何时刻"新 app 配旧 Bridle"或反之成为默认）
 
@@ -165,7 +165,7 @@ Bridle 开一条自己的 `$events` 流：收到 `approval/request` 或 `user-qu
 | # | 内容 | 验收 |
 |---|---|---|
 | M0 | Bridle：版本识别、认证两条路径（插件 ctx / 自起抓 token）、`bridle plugin install`；本地路径插件回归检查 | 对隔离的 dsh 0.2 `web` profile 两条认证路径都拿到 cookie、`session/list` 200；配了 `publicUrl` 时 (b) 仍用 loopback 换到 cookie；用户自起 dsh 且没装插件时给出"运行 `bridle plugin install`"的明确提示；读到真实版本号，0.1.1 与 0.1.7 都给出明确提示 |
-| M1 | Bridle：隧道 v2（call / open / item / end / cancel、流映射、32 MiB 边界）、`ready` 帧 `api: 2`；删除 event-log / history / resume；自己的 `$events` 推送 | e2e（JS 测试手机）对真 dsh 0.2：列表（含重连合并）、开会话快照、翻页、审批经 waterfall 作答、无手机时振铃且网络抖动不重复振铃、手机断线时其名下流被取消；D8 的 CI 契约任务（读、写、断线）上线 |
+| M1 | Bridle：隧道 v2（call / open / item / end / cancel、流映射、32 MiB 边界）、隧道版本 2（握手协商，只支持 `[2]`）；删除 event-log / history / resume；自己的 `$events` 推送 | e2e（JS 测试手机）对真 dsh 0.2：列表（含重连合并）、开会话快照、翻页、审批经 waterfall 作答、无手机时振铃且网络抖动不重复振铃、手机断线时其名下流被取消；D8 的 CI 契约任务（读、写、断线）上线 |
 | M2 | app：Harness v2、列表与工作区、打开会话（follow + page）、新记录折叠、流式帧、重连重订阅 | 单测覆盖折叠；模拟器对真 dsh 0.2 打开历史会话、看完整流式回答；接近与超过帧上限的大会话能打开（减半重开）；反复断网重连后列表、排队、未决审批都正确 |
 | M3 | app：发送（requestId、图片、排队/steer/取消）、审批与提问、命令/技能、模型、权限预设、子代理、搜索/重命名/分叉/归档 | 现有 UI 测试全部改到 0.2 并通过；真机走一遍审批；内嵌图片发送与历史图片读取；权限切换；默认 `web` profile 上搜索的启用与真实调用 |
 | M4 | 文档（inventory 换成 0.2、architecture、SECURITY、protocol）、CHANGELOG、TestFlight 1.1、按 D7 发布 | D7 每一步执行完毕；官网与 README 写明需要 dsh ≥ 0.2 |
