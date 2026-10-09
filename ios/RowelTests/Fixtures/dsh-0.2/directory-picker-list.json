@@ -1,0 +1,55 @@
+{
+  "endpoint": "directoryPicker/list",
+  "args": {},
+  "result": {
+    "ok": true,
+    "value": {
+      "path": "/tmp/dsh-home/user",
+      "home": "/tmp/dsh-home/user",
+      "crumbs": [
+        {
+          "name": "/",
+          "path": "/",
+          "hidden": false
+        },
+        {
+          "name": "var",
+          "path": "/var",
+          "hidden": false
+        },
+        {
+          "name": "folders",
+          "path": "/var/folders",
+          "hidden": false
+        },
+        {
+          "name": "00",
+          "path": "/tmp/elsewhere",
+          "hidden": false
+        },
+        {
+          "name": "s7tt4dgj53v123y8671yb3b00000gn",
+          "path": "/tmp/elsewhere",
+          "hidden": false
+        },
+        {
+          "name": "T",
+          "path": "/tmp/elsewhere",
+          "hidden": false
+        },
+        {
+          "name": "rowel-e2e-dsh-JAOb46",
+          "path": "/tmp/dsh-home",
+          "hidden": false
+        },
+        {
+          "name": "user",
+          "path": "/tmp/dsh-home/user",
+          "hidden": false
+        }
+      ],
+      "entries": [],
+      "truncated": false
+    }
+  }
+}

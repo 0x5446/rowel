@@ -124,6 +124,11 @@ public final class MachineSession {
     @ObservationIgnored private var listGeneration = 0
     /// Session list reads in flight; `listing` is whether there are any.
     @ObservationIgnored private var reads = 0
+    /// Subagents' parents, by child id: from the list, which names a child's
+    /// parent, and from the parent's catalog, which also says how it runs.
+    /// A child's log is read through its parent, and what it asks for is shown
+    /// in the conversation a person is actually looking at.
+    @ObservationIgnored private var parents: [String: SubagentParent] = [:]
 
     /// What a new conversation starts on, when the person has stated one.
     ///
@@ -412,7 +417,11 @@ public final class MachineSession {
     private func handleRequest(_ item: JSONValue) {
         guard let clientId = eventsClientId,
               let eventId = item["eventId"]?.stringValue,
-              let sessionId = item["agentId"]?.stringValue else { return }
+              let agentId = item["agentId"]?.stringValue else { return }
+        // A subagent asks in its own name; the card goes where a person is
+        // looking — the conversation that spawned it. The answer names the
+        // request, not the session, so it reaches the child all the same.
+        let sessionId = owner(of: agentId)
         let request = item["request"] ?? .emptyObject
         switch item["event"]?.stringValue {
         case "approval/request":
@@ -449,7 +458,8 @@ public final class MachineSession {
         case "api-session/added" where !holding:
             // Upsert: dsh sends this when a session appears and again when its
             // agent comes or goes, often twice in a row.
-            guard let summary = args.first.flatMap(SessionSummary.init), !summary.isSubagent else { return }
+            guard let summary = args.first.flatMap(SessionSummary.init) else { return }
+            guard !summary.isSubagent else { return learnParent(of: summary) }
             if let index = sessions.firstIndex(where: { $0.id == summary.id }) {
                 sessions[index] = summary
             } else {
@@ -549,7 +559,7 @@ public final class MachineSession {
         var maxMessages = followMessages
         var pause = MachineSession.firstPause
         while !Task.isCancelled, conversations[conversation.sessionId] === conversation {
-            let stream = await harness.follow(sessionId: conversation.sessionId, maxMessages: maxMessages)
+            let stream = await harness.follow(sessionId: conversation.sessionId, parent: parents[conversation.sessionId], maxMessages: maxMessages)
             do {
                 for try await item in stream.items {
                     pause = MachineSession.firstPause
@@ -726,6 +736,9 @@ public final class MachineSession {
         guard let found = try? await harness.subagents(parentSessionId: conversation.sessionId) else { return }
         conversation.subagents = found.children
         conversation.subagentsKnown = found.available
+        for child in found.children {
+            parents[child.id] = SubagentParent(id: conversation.sessionId, mode: child.mode.rawValue)
+        }
     }
 
     /// What the composer offers after a slash: the session's skills, and the
@@ -768,7 +781,7 @@ public final class MachineSession {
     /// workspaces come down their own stream.
     public func refreshSessions() async {
         guard listSync == nil, let items = await readList() else { return }
-        sessions = MachineSession.listed(items)
+        sessions = listed(items)
     }
 
     /// Read the list for one `$events` client, the way docs/dsh-0.2-migration.md
@@ -787,7 +800,7 @@ public final class MachineSession {
                 return
             }
             if listSync?.dirty == true, attempt == 0 { continue }
-            sessions = MachineSession.listed(items)
+            sessions = listed(items)
             listSync = nil
             return
         }
@@ -811,8 +824,26 @@ public final class MachineSession {
         return nil
     }
 
-    private static func listed(_ items: [SessionSummary]) -> [SessionSummary] {
-        items.filter { !$0.isSubagent }.sorted { $0.updatedAt > $1.updatedAt }
+    /// The rows the list shows — subagents left out, their parents noted.
+    private func listed(_ items: [SessionSummary]) -> [SessionSummary] {
+        for item in items where item.isSubagent { learnParent(of: item) }
+        return items.filter { !$0.isSubagent }.sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    /// Note a subagent's parent from its list row, keeping a mode the parent's
+    /// catalog already gave.
+    private func learnParent(of row: SessionSummary) {
+        guard let parent = row.parentSessionId, parents[row.id] == nil else { return }
+        parents[row.id] = SubagentParent(id: parent, mode: "unknown")
+    }
+
+    /// The conversation in the list a session belongs to: itself, or for a
+    /// subagent, the top of its line of parents.
+    private func owner(of sessionId: String) -> String {
+        var id = sessionId
+        var seen: Set<String> = [id]
+        while let parent = parents[id]?.id, seen.insert(parent).inserted { id = parent }
+        return id
     }
 
     /// Switch a conversation's model, and show it straight away.
@@ -859,6 +890,7 @@ public final class MachineSession {
             do {
                 let page = try await harness.page(
                     sessionId: conversation.sessionId,
+                    parent: parents[conversation.sessionId],
                     throughSeq: through,
                     beforeSeq: before,
                     maxMessages: maxMessages
@@ -1127,8 +1159,15 @@ public final class MachineSession {
     }
 
     public func createSession(cwd: String?, preset: String? = nil) async -> String? {
+        let workspace = await workspace(for: cwd)
         do {
-            let id = try await harness.createSession(cwd: cwd, agentPreset: preset)
+            // A workspace or a folder, never both: dsh refuses the pair, and a
+            // conversation started in a workspace runs in its folder anyway.
+            let id = try await harness.createSession(
+                cwd: workspace == nil ? cwd : nil,
+                workspaceId: workspace?.id,
+                agentPreset: preset
+            )
             if let defaultModel {
                 // Best effort. A model that has since been removed from the
                 // machine should not stop the conversation from opening; the
@@ -1141,11 +1180,10 @@ public final class MachineSession {
                 "running": .bool(false),
                 "blank": .bool(true),
             ]))
-            summary?.cwd = cwd
+            summary?.cwd = workspace?.path ?? cwd
             if let summary, !sessions.contains(where: { $0.id == id }) {
                 sessions.insert(summary, at: 0)
             }
-            await joinWorkspace(id, folder: cwd)
             return id
         } catch {
             problem = (error as? LocalizedError)?.errorDescription ?? "Could not start a conversation."
@@ -1153,56 +1191,35 @@ public final class MachineSession {
         }
     }
 
-    /// File a just-created conversation under the workspace for its folder.
+    /// The workspace a conversation started in this folder belongs in, made
+    /// on the spot when the folder has none.
     ///
-    /// A second call rather than creating it with `workspaceId` in the first
-    /// place, which the machine also supports: sending the folder is the thing
-    /// that must not be got wrong, and the grouping is a convenience that can
-    /// be attempted afterwards, where failing means an ungrouped conversation
-    /// rather than one in the wrong place.
+    /// Started with `workspaceId`, a conversation is filed in the machine's
+    /// ledger as it is made. Filing it afterwards does not work on dsh 0.2: the
+    /// ledger compares the session's folder with the workspace's as strings,
+    /// and the workspace's has been resolved (`/private/var/…` for `/var/…`),
+    /// so the two disagree and the filing is refused.
     ///
-    /// A folder nothing stands for is claimed on the way, so that there is
-    /// something to file the conversation into. The machine's ledger is written
-    /// only when a conversation is filed into a workspace, and nothing on the
-    /// wire backfills it: a conversation started before its folder had a
-    /// workspace is missing from the Mac's sidebar for good. That is the state
-    /// this app used to leave behind, one folder at a time — a conversation the
-    /// phone seats correctly by working directory and the Mac calls ungrouped.
-    /// Claiming at the moment the conversation starts closes it at the source,
-    /// and it spends nothing the person has not already decided: they chose this
-    /// folder for this conversation. What it costs is a section on the Mac that
-    /// nobody made there by hand — a row in a list, removable, with nothing on
-    /// disk behind it.
-    private func joinWorkspace(_ sessionId: String, folder: String?) async {
+    /// A folder nothing stands for is claimed on the way. The ledger is only
+    /// written when a conversation is started in a workspace and nothing on the
+    /// wire backfills it, so a conversation started before its folder had one
+    /// is missing from the Mac's sidebar for good. Claiming here spends nothing
+    /// the person has not already decided — they chose this folder — and costs
+    /// a removable row on the Mac with nothing on disk behind it.
+    ///
+    /// - Returns: nil when there is nothing to join or make — the machine has
+    ///   not described its workspaces, the folder is the Mac's own default, or
+    ///   the claim was refused — and the conversation starts in the folder.
+    private func workspace(for folder: String?) async -> Workspace? {
         switch placement(for: folder) {
         case .joins(let workspaceId, _):
-            await file(sessionId, into: workspaceId)
+            return workspaces.first { $0.id == workspaceId }
         case .ungrouped:
-            guard let folder, let made = try? await harness.createWorkspace(path: folder) else { return }
+            guard let folder, let made = try? await harness.createWorkspace(path: folder) else { return nil }
             adopt(made.workspace)
-            await file(sessionId, into: made.workspace.id)
+            return made.workspace
         case .unknown:
-            // The machine has never said it groups, or the folder is the Mac's
-            // own default — which cannot be named from here. Either way there is
-            // nothing to join and nothing to make.
-            break
-        }
-    }
-
-    /// Write a conversation into its workspace's ledger, best effort.
-    private func file(_ sessionId: String, into workspaceId: String) async {
-        do {
-            // The workspace stream reports the new member.
-            try await harness.fileSession(sessionId, into: workspaceId)
-        } catch {
-            // Not reported, deliberately, and this used to say "It's under
-            // Ungrouped". It no longer is: the board seats a conversation by
-            // its working directory whether or not the machine's ledger lists
-            // it, so nothing on this phone looks different when this write
-            // fails. The only audience left is the Mac's own sidebar, which
-            // stays one row short, and an alert about another machine's
-            // bookkeeping is not worth interrupting the conversation that
-            // just opened.
+            return nil
         }
     }
 

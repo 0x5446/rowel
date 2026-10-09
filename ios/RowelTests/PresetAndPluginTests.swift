@@ -90,6 +90,84 @@ final class PresetAndPluginTests: XCTestCase {
         XCTAssertNil(off.phase, "a null phase must come through as absence, not the string \"null\"")
     }
 
+    // MARK: - Sending
+
+    /// A message with a photo, sent the way the recording sent it — the photo
+    /// inline as base64, under the sender's request id.
+    func testAPromptWithAPhotoIsSentAsTheRecordingSentIt() async throws {
+        let transport = RecordedTransport()
+        let recording = try await transport.play("session-prompt")
+        let request = recording.path("args", "request") ?? .null
+        let image = request["content"]?.arrayValue?.last ?? .null
+        try await Harness(transport: transport).prompt(
+            sessionId: request["sessionId"]?.stringValue ?? "",
+            requestId: request["requestId"]?.stringValue ?? "",
+            text: "Hello from the fixture",
+            images: [PromptImage(mediaType: image["mediaType"]?.stringValue ?? "", base64: image["data"]?.stringValue ?? "", name: image["name"]?.stringValue)],
+            steer: false
+        )
+
+        guard case .object(var sent)? = await transport.payloads("session/prompt").first?["request"],
+              case .object(var recorded) = request else { return XCTFail("no prompt sent") }
+        // The phone's own zone, which the recording made in UTC.
+        XCTAssertNotNil(sent.removeValue(forKey: "clientTimeZone"))
+        recorded.removeValue(forKey: "clientTimeZone")
+        XCTAssertEqual(JSONValue.object(sent), JSONValue.object(recorded))
+    }
+
+    /// A photo in the history is named, not carried; the bytes come from here.
+    func testAnAttachmentIsFetchedByName() async throws {
+        let transport = RecordedTransport()
+        let recording = try await transport.play("session-attachment")
+        let request = recording.path("args", "request") ?? .null
+        let fetched = try await Harness(transport: transport).attachment(
+            sessionId: request["sessionId"]?.stringValue ?? "",
+            attachmentId: request["attachmentId"]?.stringValue ?? ""
+        )
+
+        let sent = await transport.payloads("session/attachment")
+        XCTAssertEqual(sent, [recording["args"] ?? .null])
+        XCTAssertEqual(fetched.mediaType, "image/png")
+        XCTAssertEqual(Data(base64Encoded: fetched.base64)?.count, 70)
+    }
+
+    // MARK: - Folders and search
+
+    /// The folder browser, as dsh answers it once the browse picker is composed
+    /// (the lines the app tells a person to add).
+    func testAFolderListingParses() async throws {
+        let transport = RecordedTransport()
+        _ = try await transport.play("directory-picker-list")
+        let listing = try await Harness(transport: transport).listDirectory(path: nil)
+
+        let sent = await transport.payloads("directoryPicker/list")
+        XCTAssertEqual(sent, [.emptyObject], "no path means the account's home")
+        XCTAssertEqual(listing.path, listing.home)
+        XCTAssertEqual(listing.crumbs.first?.path, "/")
+    }
+
+    /// Without the browse picker — dsh's default on a Mac — the call fails
+    /// with the code the folder sheet turns into instructions.
+    func testAMachineThatCannotBrowseSaysSoByCode() async throws {
+        let recording = try fixture("directory-picker-unavailable")
+        let error = CallError(recording.path("result", "error"), fallback: "")
+        XCTAssertEqual(error.code, "directory-picker/unavailable")
+    }
+
+    func testSearchParsesAndSaysWhenItIsOff() async throws {
+        let transport = RecordedTransport()
+        let recording = try await transport.play("session-search")
+        let found = try await Harness(transport: transport).search(query: "zebra")
+
+        let sent = await transport.payloads("session/search")
+        XCTAssertEqual(sent, [recording["args"] ?? .null])
+        XCTAssertEqual(found.hits.first?.snippet, "Where is the zebra crossing?")
+        XCTAssertFalse(found.hasMore)
+
+        let off = CallError(try fixture("session-search-disabled").path("result", "error"), fallback: "")
+        XCTAssertTrue(off.message.contains("session search is disabled"), off.message)
+    }
+
     // MARK: - Access
 
     /// What new conversations start as: read from the preset catalog, written

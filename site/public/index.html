@@ -298,10 +298,10 @@ open ios/Rowel.xcodeproj   # pick your iPhone, Run</code></pre>
     </details>
     <details>
       <summary>Search finds nothing</summary>
-      <p>dsh ships with its session index off. Add this to <code>~/.dsh/profiles/web/cordis.patch.yml</code> and restart dsh:</p>
+      <p>dsh ships with its session index off. Stop dsh, add this to <code>~/.dsh/profiles/web/cordis.patch.yml</code>, then start dsh again. (Added while dsh is running, it takes every conversation offline until dsh restarts.)</p>
       <pre><code>- id: session-query-sqlite
   config:
-    path: ~/.dsh/session-query.sqlite
+    path: ':memory:'
     openAt: first-search</code></pre>
     </details>
     <details>

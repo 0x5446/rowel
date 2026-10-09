@@ -2,7 +2,7 @@
   "endpoint": "session/updateQueue",
   "args": {
     "request": {
-      "sessionId": "session-a43fd407-8430-445a-892e-adea8dfcbea1",
+      "sessionId": "session-0344f751-738a-4b75-9a28-11565de7c831",
       "itemId": "nothing",
       "action": "remove"
     }

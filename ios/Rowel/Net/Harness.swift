@@ -104,9 +104,11 @@ public struct Harness: Sendable {
     ///
     /// dsh cannot resume a follow from a position: every open answers with a
     /// fresh snapshot, which the caller swaps in for what it held.
-    public func follow(sessionId: String, maxMessages: Int) async -> TunnelStream {
+    /// - Parameter parent: for a subagent's own conversation, the session
+    ///   that spawned it and how — dsh reads a child only through its parent.
+    public func follow(sessionId: String, parent: SubagentParent? = nil, maxMessages: Int) async -> TunnelStream {
         await transport.open("session/follow", .object(["request": .object([
-            "address": Harness.address(sessionId),
+            "address": Harness.address(sessionId, parent: parent),
             "assistantStream": .bool(true),
             "maxMessages": .number(Double(maxMessages)),
         ])]))
@@ -115,18 +117,28 @@ public struct Harness: Sendable {
     /// One page of a conversation's log, older than `beforeSeq`.
     /// - Parameter throughSeq: the cursor of the snapshot being paged back
     ///   from, which pins the page to the same log the snapshot read.
-    public func page(sessionId: String, throughSeq: Int, beforeSeq: Int?, maxMessages: Int) async throws -> JSONValue {
+    public func page(sessionId: String, parent: SubagentParent? = nil, throughSeq: Int, beforeSeq: Int?, maxMessages: Int) async throws -> JSONValue {
         try await transport.call("session/page", .object(["request": .object(dropping: [
-            "address": Harness.address(sessionId),
+            "address": Harness.address(sessionId, parent: parent),
             "throughSeq": .number(Double(throughSeq)),
             "beforeSeq": beforeSeq.map { JSONValue.number(Double($0)) },
             "maxMessages": .number(Double(maxMessages)),
         ])]))
     }
 
-    /// Where a conversation lives, in dsh's terms.
-    static func address(_ sessionId: String) -> JSONValue {
-        .object(["kind": .string("session"), "sessionId": .string(sessionId)])
+    /// Where a conversation lives, in dsh's terms. A subagent's has to name
+    /// its parent: addressed as a plain session it answers
+    /// `session/agent-busy` (docs/dsh-0.2-protocol.md §4.1).
+    static func address(_ sessionId: String, parent: SubagentParent? = nil) -> JSONValue {
+        guard let parent else {
+            return .object(["kind": .string("session"), "sessionId": .string(sessionId)])
+        }
+        return .object([
+            "kind": .string("subagent"),
+            "parentSessionId": .string(parent.id),
+            "childSessionId": .string(sessionId),
+            "mode": .string(parent.mode),
+        ])
     }
 
     // MARK: - Rearranging the sidebar
@@ -166,19 +178,6 @@ public struct Harness: Sendable {
     /// files and every conversation it held survive; they stop being grouped.
     public func deleteWorkspace(id: String) async throws {
         try await transport.call("workspace/delete", .object(["request": .object(["workspaceId": .string(id)])]))
-    }
-
-    /// Write a just-created conversation into its workspace's ledger.
-    ///
-    /// `session/create` is idempotent for an id that already exists: given both
-    /// a `sessionId` and a `workspaceId` dsh resolves the session it has and
-    /// attaches it. Only for a conversation created moments ago — the re-create
-    /// would otherwise load a cold session as a side effect.
-    public func fileSession(_ sessionId: String, into workspaceId: String) async throws {
-        try await transport.call("session/create", .object(["request": .object([
-            "sessionId": .string(sessionId),
-            "workspaceId": .string(workspaceId),
-        ])]))
     }
 
     /// The agent presets this machine can start a conversation as. dsh 0.2
@@ -562,6 +561,13 @@ public struct AgentPreset: Identifiable, Equatable, Sendable {
     public let detail: String
     /// What a conversation gets when nobody chooses.
     public let isDefault: Bool
+}
+
+/// The session a subagent's conversation belongs to, and how it was spawned:
+/// `one-shot`, `continuable`, or `unknown` when only the list has said.
+public struct SubagentParent: Equatable, Sendable {
+    public var id: String
+    public var mode: String
 }
 
 /// One plugin mounted in the machine's dsh.

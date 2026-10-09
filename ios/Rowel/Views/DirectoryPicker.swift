@@ -363,7 +363,7 @@ struct DirectoryPicker: View {
         do {
             listing = try await session.harness.listDirectory(path: path)
             browsingOff = false
-        } catch let failure as CallError where failure.code == "directory-picker-unavailable" {
+        } catch let failure as CallError where failure.code == "directory-picker/unavailable" {
             // Not a fault and not retryable: this machine has no browsable
             // picker mounted and will not grow one while the sheet is open.
             browsingOff = true

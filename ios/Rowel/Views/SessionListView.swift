@@ -241,16 +241,28 @@ struct SessionListView: View {
             // YAML, so it belongs here rather than in a support page: dsh ships
             // with the index off for everyone, which makes this the single most
             // likely thing a new user sees when they first tap search.
+            //
+            // `:memory:` is what dsh's own web bundle suggests: the index is
+            // built at the first search. A file path would survive restarts,
+            // but dsh does not expand `~` there — it makes a folder called `~`
+            // wherever it was started — and an absolute path cannot be written
+            // for someone else's Mac.
+            //
+            // Stop first, then edit: dsh reloads its profile live, and reloading
+            // this row takes its session service down until dsh restarts —
+            // measured on 0.2.0-rc.2, every session call answers
+            // `gateway/service-unavailable` in the meantime.
             Placeholder(
                 icon: "magnifyingglass",
                 title: "Search is off on this Mac",
                 detail: """
-                dsh ships with its session index disabled. To switch it on, add this to \
-                ~/.dsh/profiles/web/cordis.patch.yml and restart dsh:
+                dsh ships with its session index disabled. To switch it on, stop dsh, add this to \
+                ~/.dsh/profiles/web/cordis.patch.yml, then start dsh again — added while dsh runs, \
+                it takes every conversation offline until the restart:
 
                 - id: session-query-sqlite
                   config:
-                    path: ~/.dsh/session-query.sqlite
+                    path: ':memory:'
                     openAt: first-search
                 """
             )
