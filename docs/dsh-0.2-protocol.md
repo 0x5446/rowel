@@ -960,10 +960,21 @@ PromptContentPart = { type:'text', text }
 1. **已运行的用户 dsh 如何拿 token**：没有官方途径（§1.7）。需要产品决策：要求用户粘贴一次 URL 后长期保存 cookie、装 Bridle 插件，还是读 `.credentials.yaml` 自签（非官方，格式可能变）。
 2. **Desktop app**：Electron 壳如何把凭证交给页面、端口如何发现、是否打印 token，本包里没有，未实测（§1.8）。
 3. **prompt 去重的竞态**：`requestId` 在 inbox 移除和 `user/message` 写入之间的重试会产生重复消息（§7.1，已实测复现）。弱网重试策略需要考虑这一点。
-4. **子代理会话里的审批**：waterfall 的 `agentId` 对子代理是什么、能否被 UI 回答，未实测。`ask_user_question` 明确只允许运行时根 agent 提问（`assertLiveRoot`，`dsh-user-questions/lib/index.js:531-535`）。
+4. ~~**子代理会话里的审批**~~ 已实测（2026-10-09，见 §12）：默认配置下子代理不弹审批。`ask_user_question` 明确只允许运行时根 agent 提问（`assertLiveRoot`，`dsh-user-questions/lib/index.js:531-535`）。
 5. **timed 问题模式**（`attachWait`、`ASK_TIMED_OUT`、`userQuestions/answer`）只有源码阅读，未实测（默认关闭）。
 6. **`compaction/summary`、`assistant/attempt`、`turn/end` 的 `error`/`max-tokens`/`interrupted` 形状**只来自类型声明，未在实测中出现。
 7. **重连时保留旧窗口只补缺口**的做法是由 page 语义推出的，官方客户端是整体替换窗口（§4.4），未实测。
 8. **follow 的服务端缓冲**：服务端在快照之后用内存队列缓冲所有事件（`lib/index.js:1464-1481`），慢客户端不会丢事件但没有上限说明；长时间不读的影响未测。
 9. **`api-session/added` 重复发送、`status` 与 follow 事件的相对顺序**只是观察结果，不是协议保证（§6.3）。
 10. **0.1 侧的探测结果**（§9 表格的 0.1 列）没有实测，因为不允许碰用户在 3080 上运行的 dsh。
+
+## 12. M3 实测补充（2026-10-09，dsh 0.2.0-rc.2，一次性实例，模型 commandcode / deepseek/deepseek-v4.1-flash）
+
+- **子代理**：子代理日志带 `sandbox/mode {source:'delegation'}` 与 `approval/policy {policy:'never', source:'delegation'}`，越权操作直接拒绝，不产生 waterfall——默认配置下手机永远收不到子代理的审批。子代理会话必须用 subagent 地址读：`session/follow` 与 `session/page` 都接受 `{kind:'subagent', parentSessionId, childSessionId, mode:'unknown'}`；用 session 地址 `session/follow` 以 `session/agent-busy`（"subagent Sessions require their durable parent address"）结束。显式传 `assistantStream: false` 被拒为 `gateway/input-invalid`，省略该键或传 `true` 正常。
+- **审批**：只读档位下让模型写文件，约 6 秒出现 `approval/request`。两部手机同一 `eventId`；先答者生效（日志 `approval/decided` 记先答的值），另一部收到 `cancel`，迟到的回答 `{ok:true}`。手机断开后新连接立即重发同一 `eventId`。
+- **排队、steer、取消**：turn 运行中 `mode:'queue'` 的消息出现在 `inbox.next-turn`（`source.rpcId` 即发送时的 `requestId`）；`session/updateQueue {action:{kind:'steer'}}` 后移到 `inbox.next-step`；`session/cancel` 后 `turn/end.reason = {kind:'aborted', reason:{kind:'user'}}`。
+- **新会话放进工作区**：`session/create` 不接受同时带 `cwd` 与 `workspaceId`（`gateway/bad-request`）。先用 `cwd` 建、再用 `{sessionId, workspaceId}` 归入会失败：账本按字符串比对会话目录与工作区目录，而工作区的路径已解析（`/private/var/…` 对 `/var/…`），返回 `session/conflict`。应直接用 `{workspaceId}` 创建。
+- **目录选择器**：默认 web profile 组合 `directory-picker-auto`，在 Mac 上挂 native，`directoryPicker/list` 返回 `directory-picker/unavailable`（`details.capability: 'native'`）。在 profile 里禁用 `directory-picker`、插入 `dsh-host-directory-picker-browse` 与 `dsh-client-ui-directory-picker-browse` 后约 4 秒热生效；不带 `path` 时列出账户主目录。
+- **全文搜索**：`session-query-sqlite` 设 `openAt: first-search` 后 `session/search` 可用。`path` 里的 `~` **不展开**，会在 dsh 的工作目录下建出名为 `~` 的目录；dsh 自己的 web bundle 用 `':memory:'`。**运行中改这一行会热重载失败**：之后所有会话调用返回 `gateway/service-unavailable`（`active Service "sessionController" is unavailable`），直到重启 dsh。必须先停 dsh 再改。
+- **模型路由**：0.2 默认 profile 不组合 `dsh-llm-pi-ai`，首次启动导入 0.1 的 `settings.yaml` 时 `llm-pi-ai` 一节被丢弃（凭据移到 `.credentials.yaml`），只剩内置 DeepSeek 路由。要用其他 provider，需在 profile 里 `insert` `@deepseek-ai/dsh-llm-pi-ai` 并把原 `providers` 放进它的 `config`。**这条直接影响用户升级**：从 0.1 升上来、用 pi-ai provider 的人，升级后模型会全部不可用，需在发布说明里写清。
+
