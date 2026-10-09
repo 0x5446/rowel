@@ -99,15 +99,11 @@ export function speaksCurrentApi(version: string): boolean {
 export function describeIdentity(identity: DshIdentity): string {
   switch (identity.kind) {
     case 'legacy':
-      return 'dsh 0.1.1 or older (no sign-in)'
+      return 'dsh 0.1.1 or older — this Bridle needs dsh 0.2 or later; update dsh, or keep Bridle 0.1.x'
     case 'locked':
       return 'dsh 0.1.2 or newer, not signed in — run "bridle plugin install" and restart dsh, or let bridle start dsh itself'
     case 'signed-in':
-      // Until M1 of docs/dsh-0.2-migration.md: signed in, but the rest of
-      // this Bridle still speaks the 0.1 API. Delete the note with the switch.
-      return `dsh ${identity.version}${speaksCurrentApi(identity.version)
-        ? ' (signed in; this Bridle cannot serve dsh 0.2 yet — keep dsh 0.1.1 for now)'
-        : ' (a pre-0.2 transition release; update dsh)'}`
+      return `dsh ${identity.version}${speaksCurrentApi(identity.version) ? '' : ' (a pre-0.2 transition release; update dsh)'}`
     case 'unknown':
       return `not identified (${identity.detail})`
   }

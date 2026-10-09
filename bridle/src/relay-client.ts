@@ -276,6 +276,10 @@ export class RelayClient {
               socket.send(encodeMux(MuxType.Close, message.circuit, Buffer.from(reason, 'utf8')))
             }
           },
+          // One socket carries every phone on the Relay path, so this is how
+          // far behind all of them together the Relay connection is — the
+          // honest measure: a stream that outruns it slows every phone.
+          buffered: () => socket.bufferedAmount,
         }, {
           version: this.options.version,
           onAuthenticated: (_key, name) => { this.options.log?.(`${name} attached over the relay`) },

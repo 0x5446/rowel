@@ -168,6 +168,7 @@ export class DirectServer {
     const session = new TunnelSession(this.core, {
       send: (bytes: Buffer) => { socket.send(bytes, { binary: true }) },
       close: () => { socket.close() },
+      buffered: () => socket.bufferedAmount,
     }, {
       version: this.options.version,
       onAuthenticated: (_key, name) => {

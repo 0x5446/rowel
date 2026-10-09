@@ -260,20 +260,57 @@ Noise 明文即一个 JSON 对象，UTF-8 编码。所有帧有字符串字段 `
 编码规则：
 
 - 紧凑 JSON
-- **禁止**转义斜杠（方法名如 `goals/create` 必须原样）
+- **禁止**转义斜杠（端点名如 `session/follow` 必须原样）
 - 整数**必须**不带小数点（`8`，不是 `8.0`）
 - 顶层键顺序**必须**与下表一致
 
+**版本 2 就是 dsh 0.2 自己的接口，原样透传**（设计见 `docs/dsh-0.2-migration.md` D3）。一元调用 `call` 对应 `POST /api/<endpoint>`，`args` 就是 dsh 的 `payload.args`；流 `open` 对应 dsh `/api/remote.mux` 上的一条逻辑流，`item` / `end` / `cancel` / `error` 与 dsh 的帧一一对应（dsh 的协议见 `docs/dsh-0.2-protocol.md` §2–§5）。Bridle 负责登录 dsh、维持一条到 dsh 的连接、映射流 id，不解读任何端点的含义——dsh 加了新端点，只改 App。
+
 ### 4.1 App → Bridle
 
-**`req`** — 调用一个 agent 方法
+**`call`** — 调用一个 dsh 一元端点
 
 | 键 | 类型 | 说明 |
 |---|---|---|
-| `t` | `"req"` | |
+| `t` | `"call"` | |
 | `id` | string | App 铸造的关联 id，本隧道内唯一 |
-| `method` | string | 方法名，如 `session.prompt` |
-| `payload` | any | 方法载荷 |
+| `endpoint` | string | dsh 端点 `<命名空间>/<方法>`，如 `session/list` |
+| `args` | any | 端点参数，即 dsh 的 `payload.args`；参数名**必须**与 dsh 声明的完全一致 |
+
+唯一由 Bridle 自己回答的端点是 **`$export`**（`args: { sessionId, includeDescendants? }`）：dsh 把会话归档作为普通下载提供（`GET /api/session.export`），不是一元端点，Bridle 取回后以 `{ filename, contentType, base64 }` 作为 `result.value` 返回；归档超过帧上限时回 `too-large`，且**不会**先整份读进内存。
+
+**`abort`** — 放弃在途的 `call`
+
+| `t` = `"abort"` | `id` = 要放弃的调用 id |
+
+Bridle **必须**中止对应的上游请求。未知 id **必须**静默忽略。
+
+**`open`** — 打开一条 dsh 流
+
+| 键 | 类型 | 说明 |
+|---|---|---|
+| `t` | `"open"` | |
+| `sid` | string | App 铸造的流 id，在本隧道**仍打开**的流中唯一 |
+| `endpoint` | string | dsh 流端点，如 `session/follow`、`workspace/follow`，或内置的 `$events` |
+| `args` | any | 端点参数，同 `call` |
+
+对仍打开的 `sid` 再发 `open`，Bridle 以 `error`（`bad-request`）拒绝这一次，**禁止**关闭隧道（dsh 对同样的情况会关掉整个 socket，Bridle 不把这个代价转嫁给其他流）。
+
+**`item`** — 上行数据
+
+| `t` = `"item"` | `sid` | `value` = 任意 JSON |
+
+大多数 dsh 流不读上行（dsh 协议参考 §3.4）。对未知或已结束的 `sid` **必须**静默丢弃。
+
+**`end`** — 半关闭上行
+
+| `t` = `"end"` | `sid` |
+
+**`cancel`** — 停止一条流
+
+| `t` = `"cancel"` | `sid` |
+
+此后 Bridle **不再**为这条流发送任何帧，包括终止帧。
 
 **`hello`** — 重新要一份 `ready`
 
@@ -283,21 +320,7 @@ Noise 明文即一个 JSON 对象，UTF-8 编码。所有帧有字符串字段 `
 | `version` | number | app 期望的隧道版本 |
 | `client` | string | 客户端构建串，`bridle status` 里显示 |
 
-同样的内容握手载荷里已经带过一次（§3.3）。这里再发一次，是为了让重连的 app 不必区分"新隧道"和"复用的隧道" —— 两种情况都以收到 `ready` 结束。Bridle 收到后**必须**重发 `ready`，**禁止**因此重置事件序号。
-
-**`cancel`** — 放弃在途请求
-
-| `t` = `"cancel"` | `id` = 要放弃的请求 id |
-
-Bridle **必须**中止对应的上游请求。未知 id **必须**静默忽略。
-
-**`respond`** — 回答审批或提问
-
-| `t` = `"respond"` | `id` = 新的关联 id | `message` = agent 的 `client-response` 消息，原样透传 |
-
-**`resume`** — 重连后补齐
-
-| `t` = `"resume"` | `since` = 已持有的最高事件序号；`0` 表示全新订阅 | `epoch`（可选）= 刚收到的 `ready.epoch`，即 `since` 所属的纪元（纪元变了，App 先把 `since` 重置为 `ready.seq` 并自行重拉）；对方是不发 `epoch` 的旧 Bridle 时省略 |
+同样的内容握手载荷里已经带过一次（§3.3）。这里再发一次，是为了让重连的 app 不必区分"新隧道"和"复用的隧道" —— 两种情况都以收到 `ready` 结束。Bridle 收到后**必须**重发 `ready`，**禁止**因此关闭已打开的流。
 
 **`wake`** — 告诉机器：我不在线时往哪儿敲
 
@@ -326,33 +349,37 @@ App **必须**应答 Bridle 的每个 `ping`。Bridle 连续 2.5 个 ping 周期
 | `version` | number | 隧道版本 |
 | `bridle` | string | Bridle 版本 |
 | `machine` | string | 机器名 |
-| `dshReachable` | boolean | 本机 agent 当前是否可达 |
-| `harness` | object，可选 | `{ url, home }`：此身份指向的 agent 地址与 `ROWEL_HOME` 实际路径。一台机器可以跑多个 Bridle，app 靠它区分实例并在急救指引里带上正确目录。旧 Bridle 不发；app 缺省时不显示（§14） |
-| `host` | any | 可达时为 agent 的 `host.describe` 值；不可达时省略 |
-| `direct` | string[]，可选 | 本机当前可直连的地址，优先在前。空数组表示直连监听已关（app 应清掉存量地址）；缺省表示 Bridle 太老不发（app 保留存量地址） |
-| `seq` | number | Bridle 已产生的最高事件序号 |
-| `epoch` | string，可选 | 本 Bridle 进程的事件编号纪元。序号每个进程从 1 重来，App 在下一次 `resume` 里原样带回，Bridle 据此判断 `since` 是不是自己数的。旧 Bridle 不发 |
+| `dshReachable` | boolean | Bridle 当前是否持有一条已登录的 dsh 连接 |
+| `detail` | string，可选 | 不可达的原因，给人看（如"dsh 要求登录，运行 `bridle plugin install`"） |
+| `dsh` | string，可选 | dsh 版本，已知时 |
+| `harness` | object，可选 | `{ url, home }`：此身份指向的 dsh 地址与 `ROWEL_HOME` 实际路径。一台机器可以跑多个 Bridle，app 靠它区分实例并在急救指引里带上正确目录 |
+| `host` | object，可选 | `{ home }`：本机账户的主目录。dsh 0.2 删除了 `host.describe`，app 的目录选择器以此为起点 |
+| `direct` | string[]，可选 | 本机当前可直连的地址，优先在前。空数组表示直连监听已关（app 应清掉存量地址） |
 
-**`res`** — `req` 的应答
+**`result`** — `call` 的结果
 
 ```
-{ "t": "res", "id": "...", "result": { "ok": true, "value": ... } }
-{ "t": "res", "id": "...", "result": { "ok": false, "error": { "code", "message", "details" } } }
+{ "t": "result", "id": "...", "result": { "ok": true, "value": ... } }
+{ "t": "result", "id": "...", "result": { "ok": false, "error": { "code", "message", "details" } } }
 ```
 
-**`ev`** — 下行事件
+`result` 原样是 dsh 的 `server-response.result`，或 Bridle 自己产生的失败（§8.1）。
 
-| `t` = `"ev"` | `seq` = Bridle 进程级单调序号 | `stream` = `"mux"` \| `"host"` | `frame` = agent 的 `server-request` 帧，原样 |
+**`item`** — 下行数据
 
-**`resync`** — 有事件没送到这个 App
+| `t` = `"item"` | `sid` | `value` = dsh 的 item，原样 |
 
-| `t` = `"resync"` | `from` = 此后的事件照常送达 |
+**`end`** — 流正常结束
 
-三种情况发它：重放缓冲够不到 `since`；`resume.epoch` 不是本进程的（Bridle 重启过）；某个事件超过 32 MiB 被丢弃（`from` = 被丢事件的序号）。最后一种**必须**由 Bridle 主动说——被丢的恰是最后一条时，App 收不到任何后续序号，无从发现缺口。
+| `t` = `"end"` | `sid` |
 
-App 收到后**必须**重新拉取**当前屏幕上**的状态，而不是全部。
+**`error`** — 流失败并结束
 
-**`status`** — 本机 agent 起落
+| `t` = `"error"` | `sid` | `error` = `{ code, message, details }` |
+
+每条流最多一个终止帧（`end` 或 `error`）。`error` 是 dsh 的原样错误，或 Bridle 产生的：`upstream-lost`（Bridle 到 dsh 的连接断了）、`too-large`、`slow-consumer`、`busy`、`bad-request`（§8.1）。
+
+**`status`** — dsh 连接起落
 
 | `t` = `"status"` | `dshReachable` = boolean | `detail` = 不可达原因，可选 |
 
@@ -370,15 +397,14 @@ App 收到后**必须**重新拉取**当前屏幕上**的状态，而不是全�
 
 ### 4.4 并发上限
 
-Bridle **必须**限制单条隧道的在途 `req` 数量。当前实现为 **64**，超出时以 `code: "busy"` 立即应答，**禁止**排队。
+Bridle **必须**限制单条隧道的在途 `call` 与同时打开的流。当前实现为在途调用 **64**、同时打开的流 **64**；超出时立即以 `busy` 应答（`call` 回 `result`，`open` 回 `error`），**禁止**排队。
 
-### 4.5 事件序号与重放
+### 4.5 流的归属、重连与背压
 
-- `seq` 由 Bridle 进程分配，所有隧道共用一套编号，每个进程从 1 开始（以 `epoch` 区分进程）
-- Bridle 持有环形缓冲；默认容量 **2000** 条（`EventLog` 构造参数可覆盖，测试用小值验证溢出路径）
-- `resume{since, epoch}` 时：`epoch` 存在且不等于本进程的，或 `since` 大于当前最高序号 → `resync{from: 最高序号}`；否则若 `since >= 缓冲最早序号 - 1`，重放 `since` 之后全部；否则 `resync{from}`
-- **禁止**静默丢弃：超大事件丢弃后立即发 `resync`（`seq: 0` 的待处理请求快照除外——它不是日志中的位置）
-- 旧 App 不带 `epoch`：只有 `since` 大于当前最高序号才能识别重启。"新进程已数过旧水位"的窗口对旧 App 仍在，随 App 更新消失
+- **归属**：每条流属于打开它的那条隧道，只有这条隧道收得到它的帧。隧道关闭时，Bridle **必须**取消它名下的全部流，不在 dsh 上留下孤儿流。
+- **重连**：dsh 没有流级别的续传（dsh 协议参考 §3.6）。Bridle 与 dsh 之间的连接断开时，所有流以 `upstream-lost` 结束；App 重新 `open`，拿到新的基线（`session/follow` 的快照、`workspace/follow` 的 `baseline`、`$events` 的 `ready` 与重发的未决审批和提问）。隧道本身断开重连同理。Bridle **不**缓存、**不**重放任何事件。
+- **帧上限**：单帧超过 32 MiB 时，`result` 变成 `too-large` 失败；流的 `item` 使 Bridle 取消这条流并回 `error`（`too-large`）。只失败这一个调用或这一条流，**禁止**关闭隧道。
+- **背压**：dsh 下行不做流控。手机跟不上、承载的写缓冲超过 8 MiB 时，Bridle 取消正在写的那条流并回 `error`（`slow-consumer`），App 可以重新打开。
 
 ### 4.6 版本策略
 
@@ -390,6 +416,8 @@ Bridle **必须**限制单条隧道的在途 `req` 数量。当前实现为 **64
 - 每次版本推进**必须**跑新旧双向互通测试：新 app ↔ 旧 Bridle、旧 app ↔ 新 Bridle。
 
 应用层则**必须**向前兼容，且这条独立于版本协商：未知帧类型、未知事件类型、未知渲染意图一律容忍。即使版本相同，一端也可能带着另一端不认识的扩展。
+
+> **例外：版本 2 不兼容版本 1。** 版本 1 是 dsh 0.1 的接口透传，dsh 0.2 删除了这套接口，owner 决定不保留翻译层（`docs/dsh-0.2-migration.md` §0、D6）。所以支持版本 2 的 Bridle 只支持 `[2]`。只会说版本 1 的 App 在握手时收到 `{ok:false, reason:"version", supported:[2]}`，它本来就会据此提示"哪一端旧了"。新 App 连上只会说版本 1 的旧 Bridle 同理。发布顺序见迁移设计 D7。
 
 > **一次性破坏**：把版本移出 prologue 本身是破坏性的——prologue 一旦带上版本后缀，此后任何改动都会让握手直接失败。**这必须在公开发布之前完成**，那时代价是重新配对少数几台设备；上架之后再做，代价是全部用户。这是协议最后一次在没有协商机制的情况下破坏兼容。
 
@@ -510,24 +538,26 @@ Bridle 监听 `0.0.0.0:<port>`（`--direct-port`，`0` 表示由系统分配）�
 
 ## 8. 错误码
 
-### 8.1 隧道层（`res.result.error.code` 与 `fault.code`）
+### 8.1 隧道层（`result.error.code`、流的 `error.code` 与 `fault.code`）
 
 | code | 含义 | 可重试 |
 |---|---|---|
 | `disconnected` | 隧道不在 | 是 |
 | `timeout` | 上游未在期限内应答（当前 120 秒） | 是 |
-| `busy` | 在途请求超过上限 | 是 |
+| `busy` | 在途调用或打开的流超过上限 | 是 |
 | `internal` | Bridle 内部故障 | 是 |
+| `upstream-lost` | Bridle 到 dsh 的连接断了（或此刻未连上）；流以此结束，重新 `open` 即可 | 是 |
+| `slow-consumer` | 手机跟不上这条流，Bridle 取消了它；重新 `open` 即可 | 是 |
 | `version` | 隧道版本不匹配 | 否 |
 | `unpaired` | 设备未被认识 | 否 |
-| `bad-request` | 载荷不合法 | 否 |
-| `too-large` | 应答（如导出）超过 32 MiB 帧上限，Bridle 自己产生 | 否 |
+| `bad-request` | 载荷不合法，或重复的流 id | 否 |
+| `too-large` | 结果或流的一项超过 32 MiB 帧上限，Bridle 自己产生 | 否 |
 
-其余错误码由上游 agent 定义，Bridle **必须**原样透传，**禁止**改写。
+其余错误码由 dsh 定义（如 `gateway/arguments-invalid`），Bridle **必须**原样透传，**禁止**改写。
 
 ### 8.2 判定可重试
 
-`disconnected` / `timeout` / `internal` / `busy` 视为暂时性；其余视为终态。客户端**应当**只对暂时性错误自动重试。握手拒绝里的 `pending`（§3.2）同样是暂时性的。
+`disconnected` / `timeout` / `internal` / `busy` / `upstream-lost` / `slow-consumer` 视为暂时性；其余视为终态。客户端**应当**只对暂时性错误自动重试。握手拒绝里的 `pending`（§3.2）同样是暂时性的。
 
 ---
 

@@ -1,8 +1,9 @@
 /**
- * What an attacker gets. dsh ships with no authentication of its own, so every
- * guarantee in this product is the one the tunnel makes: only a paired device
- * reaches the harness, and nothing between the phone and the machine — the
- * Relay very much included — can read or alter a byte.
+ * What an attacker gets. Past dsh's own door — which only processes on this
+ * machine can open — every guarantee in this product is the one the tunnel
+ * makes: only a paired device reaches the harness, and nothing between the
+ * phone and the machine — the Relay very much included — can read or alter a
+ * byte.
  *
  * These are the tests that would have to fail before this is safe to ship.
  */
@@ -11,15 +12,19 @@ import assert from 'node:assert/strict'
 import { Socket, createServer } from 'node:net'
 import test from 'node:test'
 import WebSocket from 'ws'
-import { approveClaimant, probeDsh, reloadState, revokePeer } from '@rowel/bridle'
+import { approveClaimant, reloadState, revokePeer } from '@rowel/bridle'
 import { generateKeyPair } from '@rowel/protocol'
-import { HandshakeRefused, RowelPhone, startStack, waitFor } from '../lib/index.js'
+import { HandshakeRefused, RowelPhone, dshBinary, startDsh, startStack, waitFor } from '../lib/index.js'
 
-const DSH_URL = process.env.ROWEL_E2E_DSH_URL ?? await probeDsh()
-const skip = DSH_URL === undefined ? 'no DeepSeek Harness is running; set ROWEL_E2E_DSH_URL' : false
+// A throwaway dsh 0.2 for this file, isolated from the one on this machine
+// (see e2e/src/dsh.ts). Skipped without one.
+const dsh = dshBinary() === undefined ? undefined : await startDsh()
+test.after(() => dsh?.stop())
+const skip = dsh === undefined ? 'set ROWEL_E2E_DSH_BIN to a dsh 0.2 executable' : false
+const DSH = dsh === undefined ? {} : { dshUrl: dsh.url, dshToken: dsh.token }
 
 test('a device with no pairing token is refused', { skip, timeout: 60_000 }, async (t) => {
-  const stack = await startStack({ dshUrl: DSH_URL })
+  const stack = await startStack({ ...DSH })
   t.after(() => stack.stop())
   await stack.waitForRelay()
 
@@ -36,7 +41,7 @@ test('a device with no pairing token is refused', { skip, timeout: 60_000 }, asy
 })
 
 test('a stolen pairing token works exactly once', { skip, timeout: 60_000 }, async (t) => {
-  const stack = await startStack({ dshUrl: DSH_URL })
+  const stack = await startStack({ ...DSH })
   t.after(() => stack.stop())
   await stack.waitForRelay()
   const bundle = stack.invite().bundle
@@ -54,7 +59,7 @@ test('a stolen pairing token works exactly once', { skip, timeout: 60_000 }, asy
 })
 
 test('the token a Relay can read earns a request to pair, never a pairing', { skip, timeout: 60_000 }, async (t) => {
-  const stack = await startStack({ dshUrl: DSH_URL })
+  const stack = await startStack({ ...DSH })
   t.after(() => stack.stop())
   await stack.waitForRelay()
   const invitation = stack.invite()
@@ -76,7 +81,7 @@ test('the token a Relay can read earns a request to pair, never a pairing', { sk
 })
 
 test('a device believing the wrong machine key cannot complete a handshake', { skip, timeout: 60_000 }, async (t) => {
-  const stack = await startStack({ dshUrl: DSH_URL })
+  const stack = await startStack({ ...DSH })
   t.after(() => stack.stop())
   await stack.waitForRelay()
 
@@ -92,7 +97,7 @@ test('a device believing the wrong machine key cannot complete a handshake', { s
 })
 
 test('a revoked device cannot come back', { skip, timeout: 60_000 }, async (t) => {
-  const stack = await startStack({ dshUrl: DSH_URL })
+  const stack = await startStack({ ...DSH })
   t.after(() => stack.stop())
   await stack.waitForRelay()
   const bundle = stack.invite().bundle
@@ -110,7 +115,7 @@ test('a revoked device cannot come back', { skip, timeout: 60_000 }, async (t) =
 })
 
 test('the relay only ever sees ciphertext', { skip, timeout: 120_000 }, async (t) => {
-  const stack = await startStack({ dshUrl: DSH_URL, machineName: 'Watched Machine' })
+  const stack = await startStack({ ...DSH, machineName: 'Watched Machine' })
   t.after(() => stack.stop())
   await stack.waitForRelay()
 
@@ -133,24 +138,22 @@ test('the relay only ever sees ciphertext', { skip, timeout: 120_000 }, async (t
   assert.equal(ready.machine, 'Watched Machine', 'the tunnel still works through the tap')
 
   const marker = 'canary-a7f3d91c-plaintext'
-  const describe = await phone.call('host.describe', {})
-  assert.equal(describe.ok, true, JSON.stringify(describe))
-  const created = await phone.call('session.create', { cwd: describe.value.cwd })
+  const created = await phone.call('session/create', { request: { cwd: ready.host.home } })
   assert.equal(created.ok, true, JSON.stringify(created))
-  const renamed = await phone.call('session.rename', { sessionId: created.value.sessionId, title: marker })
+  const renamed = await phone.call('session/rename', { request: { sessionId: created.value.sessionId, title: marker } })
   assert.equal(renamed.ok, true, JSON.stringify(renamed))
 
   await waitFor(() => tapped.length > 0, 5_000, 'traffic to reach the tap')
   const wire = Buffer.concat(tapped)
   const text = wire.toString('latin1')
-  for (const secret of [marker, 'session.rename', 'session.create', 'Watched Machine', created.value.sessionId]) {
+  for (const secret of [marker, 'session/rename', 'session/create', 'Watched Machine', created.value.sessionId]) {
     assert.equal(text.includes(secret), false, `the relay path leaked ${JSON.stringify(secret)}`)
   }
   assert.ok(wire.length > 200, 'the tap actually captured the conversation')
 })
 
 test('a tampered frame tears the tunnel down instead of being accepted', { skip, timeout: 60_000 }, async (t) => {
-  const stack = await startStack({ dshUrl: DSH_URL })
+  const stack = await startStack({ ...DSH })
   t.after(() => stack.stop())
   await stack.waitForRelay()
   const bundle = stack.invite().bundle
@@ -158,7 +161,7 @@ test('a tampered frame tears the tunnel down instead of being accepted', { skip,
   const phone = new RowelPhone({ bundle, prefer: 'relay', name: 'Honest iPhone' })
   t.after(() => { phone.close() })
   await phone.connect()
-  assert.equal((await phone.call('host.describe', {})).ok, true)
+  assert.equal((await phone.call('session/list', { _request: {} })).ok, true)
 
   // An active attacker on the Relay flips one bit of a frame in flight. ChaCha20
   // -Poly1305 rejects it, and the session is disposed rather than resynchronized:
@@ -174,7 +177,7 @@ test('a tampered frame tears the tunnel down instead of being accepted', { skip,
   assert.ok(await Promise.race([closed, timeout(10_000)]), 'the bridle closed the forged circuit')
 
   // The honest phone is untouched by someone else's failed attempt.
-  assert.equal((await phone.call('host.describe', {})).ok, true, 'the real tunnel survived')
+  assert.equal((await phone.call('session/list', { _request: {} })).ok, true, 'the real tunnel survived')
 })
 
 /**
@@ -208,7 +211,7 @@ test('a client from the future is refused in a way it can act on', { skip, timeo
   // handshake failure. Before this, the version lived in the Noise prologue, so
   // a mismatch died inside the crypto with nothing sent back — the phone could
   // not tell version skew from a wrong machine key from tampering.
-  const stack = await startStack({ dshUrl: DSH_URL })
+  const stack = await startStack({ ...DSH })
   t.after(() => stack.stop())
 
   const phone = new RowelPhone({
@@ -228,29 +231,35 @@ test('a client from the future is refused in a way it can act on', { skip, timeo
   )
 })
 
-test('a client that predates negotiation still connects', { skip, timeout: 60_000 }, async (t) => {
-  // The oldest clients send no `versions` key at all. Refusing them would be a
-  // silent break for exactly the population the compatibility window exists to
-  // protect, and it is the case a naive implementation gets wrong.
-  const stack = await startStack({ dshUrl: DSH_URL })
+test('an app that only speaks version 1 is refused, and told so', { skip, timeout: 60_000 }, async (t) => {
+  // Version 2 is the deliberate exception to "speak N and N-1"
+  // (docs/protocol.md §4.6): version 1 was dsh 0.1's API, which dsh 0.2
+  // removed. An old app must get an answer it can act on — "update the app"
+  // — not a tunnel that opens and then fails every call. That includes the
+  // oldest clients, which send no `versions` key and mean `[1]`.
+  const stack = await startStack({ ...DSH })
   t.after(() => stack.stop())
 
-  const phone = new RowelPhone({ bundle: stack.invite().bundle, prefer: 'direct', versions: [] })
-  t.after(() => { phone.close() })
-
-  const ready = await phone.connect()
-  assert.equal(ready.version, 1, 'it is served version 1, which is all it can speak')
+  for (const versions of [[1], []]) {
+    const phone = new RowelPhone({ bundle: stack.invite().bundle, prefer: 'direct', versions })
+    t.after(() => { phone.close() })
+    await assert.rejects(() => phone.connect(), (error) => {
+      assert.ok(error instanceof HandshakeRefused, `expected a refusal, got ${String(error)}`)
+      assert.equal(error.reason, 'version')
+      return true
+    }, `versions ${JSON.stringify(versions)} should be refused as a version mismatch`)
+  }
 })
 
 test('a client offering several versions gets the highest shared one', { skip, timeout: 60_000 }, async (t) => {
-  const stack = await startStack({ dshUrl: DSH_URL })
+  const stack = await startStack({ ...DSH })
   t.after(() => stack.stop())
 
   // Offers a version this build does not have, plus one it does. The machine
   // must fall back rather than refuse.
-  const phone = new RowelPhone({ bundle: stack.invite().bundle, prefer: 'direct', versions: [7, 1] })
+  const phone = new RowelPhone({ bundle: stack.invite().bundle, prefer: 'direct', versions: [7, 2] })
   t.after(() => { phone.close() })
 
   const ready = await phone.connect()
-  assert.equal(ready.version, 1)
+  assert.equal(ready.version, 2)
 })

@@ -1,11 +1,12 @@
 /**
  * The one rule this client must never bend: it talks to a harness on this
- * machine, over loopback, and nowhere else. dsh ships with no authentication of
- * its own, so a Bridle pointed at a remote address would be handing a shell to
- * whoever answers.
+ * machine, over loopback, and nowhere else. A Bridle pointed at a remote
+ * address would be handing a shell — and dsh's sign-in cookie — to whoever
+ * answers.
  */
 
 import assert from 'node:assert/strict'
+import { createServer as createHttpServer } from 'node:http'
 import { createServer } from 'node:net'
 import test from 'node:test'
 import { DshClient, assertLoopback } from '../lib/index.js'
@@ -26,18 +27,9 @@ test('the client refuses to be constructed against a remote harness', () => {
   assert.throws(() => new DshClient({ baseUrl: 'http://example.com' }), /must be loopback/u)
 })
 
-test('an unreachable harness reports unreachable instead of throwing', async () => {
-  // Port 1 is reserved and never listening, which is exactly the "harness is
-  // not running" case a first-time user hits.
-  const client = new DshClient({ baseUrl: 'http://127.0.0.1:1', requestTimeoutMs: 1_000 })
-  const health = await client.health()
-  assert.equal(health.reachable, false)
-  assert.ok(typeof health.detail === 'string' && health.detail.length > 0)
-})
-
 test('a failed call folds into the error branch rather than rejecting', async () => {
   const client = new DshClient({ baseUrl: 'http://127.0.0.1:1', requestTimeoutMs: 1_000 })
-  const result = await client.call('session.list', {})
+  const result = await client.call('session/list', { _request: {} })
   assert.equal(result.ok, false)
   assert.equal(typeof result.error.message, 'string')
 })
@@ -57,9 +49,31 @@ test('a carrier failure names the method and its root cause', async () => {
   await new Promise((resolve) => { server.close(resolve) })
 
   const client = new DshClient({ baseUrl: `http://127.0.0.1:${port}`, requestTimeoutMs: 1_000 })
-  const result = await client.call('session.history', { sessionId: 's1' })
+  const result = await client.call('session/page', { request: { sessionId: 's1' } })
 
   assert.equal(result.ok, false)
-  assert.match(result.error.message, /^session\.history: /u, 'the method has to be in the message')
+  assert.match(result.error.message, /^session\/page: /u, 'the endpoint has to be in the message')
   assert.match(result.error.message, /ECONNREFUSED/u, 'the cause is what identifies the failure')
+})
+
+test('a call carries its args in the envelope dsh 0.2 wants', async () => {
+  let seen
+  const server = createHttpServer((request, response) => {
+    let body = ''
+    request.on('data', (chunk) => { body += String(chunk) })
+    request.on('end', () => {
+      seen = { url: request.url, body: JSON.parse(body) }
+      response.setHeader('content-type', 'application/json')
+      response.end(JSON.stringify({ type: 'server-response', rpcId: seen.body.rpcId, result: { ok: true, value: 7 } }))
+    })
+  })
+  await new Promise((resolve) => { server.listen(0, '127.0.0.1', resolve) })
+  const client = new DshClient({ baseUrl: `http://127.0.0.1:${server.address().port}` })
+  const result = await client.call('session/rename', { sessionId: 's1', title: 'x' })
+  server.close()
+  assert.deepEqual(result, { ok: true, value: 7 })
+  assert.equal(seen.url, '/api/session/rename')
+  assert.equal(seen.body.type, 'client-request')
+  assert.equal(seen.body.method, 'session/rename', 'dsh refuses a call whose method and URL disagree')
+  assert.deepEqual(seen.body.payload, { args: { sessionId: 's1', title: 'x' } })
 })

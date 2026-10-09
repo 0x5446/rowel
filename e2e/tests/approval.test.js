@@ -1,15 +1,15 @@
 /**
  * Human-in-the-loop, end to end.
  *
- * The architecture document claimed the end-to-end suite proved approvals. It
- * did not — there was no approval test anywhere, and "the code exists" had been
- * standing in for "the chain works". This closes that.
- *
  * A fake harness rather than a real one, deliberately. An approval only happens
  * when a model decides to run something that needs one, and waiting for that is
- * a hope, not a test. The fake implements the same five-method seam the Bridle
- * talks to, so everything above it — the tunnel, the frames, the rpcId
- * correlation, the response path — is the real thing.
+ * a hope, not a test. The fake behaves like dsh 0.2's `$events` (see
+ * `e2e/src/fake-agent.ts`), so everything above it — the tunnel, the stream
+ * mapping, the answer's way back — is the real thing.
+ *
+ * The phone opens its own `$events` through the Bridle, gets its own
+ * `clientId`, and answers as itself. The Bridle passes both directions through
+ * and answers nothing.
  */
 
 import assert from 'node:assert/strict'
@@ -31,53 +31,66 @@ async function waitFor(predicate, what, timeoutMs = 5_000) {
 }
 
 /**
+ * A phone with `$events` open through the Bridle.
  * @param {object} t - the node:test context.
- * @returns {Promise<object>} a connected phone and the fake it talks through.
+ * @param {object} [stackAndAgent] - reuse a stack and its fake.
+ * @returns {Promise<object>} the phone, its events stream and clientId, and the fake.
  */
-async function connected(t) {
-  const agent = new FakeAgent()
-  const stack = await startStack({ agent, dshUrl: 'http://127.0.0.1:3080' })
-  t.after(() => stack.stop())
+async function connected(t, stackAndAgent) {
+  const agent = stackAndAgent?.agent ?? new FakeAgent()
+  const stack = stackAndAgent?.stack ?? await startStack({ agent, dshUrl: 'http://127.0.0.1:3080' })
+  if (stackAndAgent === undefined) t.after(() => stack.stop())
 
   const phone = new RowelPhone({ bundle: stack.invite().bundle, prefer: 'direct' })
   t.after(() => { phone.close() })
-
-  const events = []
-  phone.onEvent(event => events.push(event))
-  const ready = await phone.connect()
-  phone.resume(ready.seq)
-  await waitFor(() => agent.isPumping('mux'), 'the Bridle to subscribe to the harness')
-  return { agent, phone, events }
+  await phone.connect()
+  const events = phone.open('$events', {})
+  await waitFor(() => events.items.some(item => item.type === 'ready'), 'the phone\'s own $events to be ready')
+  const clientId = events.items.find(item => item.type === 'ready').clientId
+  return { agent, stack, phone, events, clientId }
 }
+
+const waterfalls = (events, event) => events.items.filter(item => item.type === 'waterfall' && item.event === event)
 
 test('an approval reaches the phone with everything it needs to answer', async (t) => {
   const { agent, events } = await connected(t)
 
-  agent.requestApproval({ sessionId: 's1', toolName: 'bash', reason: 'rm -rf /tmp/x' })
+  const eventId = agent.requestApproval({ sessionId: 's1', toolName: 'bash', reason: 'rm -rf /tmp/x' })
 
-  await waitFor(() => events.length > 0, 'the approval to arrive on the phone')
-  const frame = events[events.length - 1].frame
-  assert.equal(frame.payload.type, 'approval/requested')
-  assert.equal(frame.payload.sessionId, 's1')
-  assert.equal(frame.payload.toolName, 'bash')
-  assert.equal(frame.payload.reason, 'rm -rf /tmp/x', 'the reason survives; it is what the person decides on')
-  assert.ok(typeof frame.rpcId === 'string' && frame.rpcId.length > 0,
-    'without the rpcId the answer has nothing to address')
+  await waitFor(() => waterfalls(events, 'approval/request').length > 0, 'the approval to arrive on the phone')
+  const item = waterfalls(events, 'approval/request')[0]
+  assert.equal(item.eventId, eventId, 'without the eventId the answer has nothing to address')
+  assert.equal(item.agentId, 's1')
+  assert.equal(item.request.toolName, 'bash')
+  assert.equal(item.request.reason, 'rm -rf /tmp/x', 'the reason survives; it is what the person decides on')
 })
 
-test('the answer gets back to the harness, addressed to the right request', async (t) => {
-  const { agent, phone, events } = await connected(t)
+test('the answer gets back to the harness as this phone, addressed to the right request', async (t) => {
+  const { agent, phone, events, clientId } = await connected(t)
 
-  const rpcId = agent.requestApproval({ sessionId: 's1', toolName: 'bash' })
-  await waitFor(() => events.length > 0, 'the approval')
+  const eventId = agent.requestApproval({ sessionId: 's1', toolName: 'bash' })
+  await waitFor(() => waterfalls(events, 'approval/request').length > 0, 'the approval')
 
-  await phone.answer(rpcId, { decision: "allow-once" })
+  const receipt = await phone.answer(clientId, eventId, 'allowed-once')
 
-  await waitFor(() => agent.responses.length > 0, 'the answer to reach the harness')
-  const answer = agent.responses[0]
-  assert.equal(answer.type, 'client-response')
-  assert.equal(answer.rpcId, rpcId, 'the harness routes by rpcId; a wrong one answers someone else')
-  assert.deepEqual(answer.result, { ok: true, value: { decision: 'allow-once' } })
+  assert.equal(receipt.ok, true)
+  assert.deepEqual(agent.answers, [{ clientId, eventId, outcome: { kind: 'result', value: 'allowed-once' } }])
+})
+
+test('the first answer wins, and a second phone is told the question is gone', async (t) => {
+  const first = await connected(t)
+  const second = await connected(t, first)
+
+  const eventId = first.agent.requestApproval({ sessionId: 's1', toolName: 'bash' })
+  await waitFor(() => waterfalls(second.events, 'approval/request').length > 0, 'the approval on the second phone')
+
+  await first.phone.answer(first.clientId, eventId, 'rejected')
+
+  await waitFor(() => second.events.items.some(item => item.type === 'cancel' && item.eventId === eventId),
+    'the second phone to hear the request was settled')
+  const late = await second.phone.answer(second.clientId, eventId, 'allowed-once')
+  assert.equal(late.ok, true, 'a late answer is accepted')
+  assert.equal(first.agent.answers.length, 1, 'and changes nothing')
 })
 
 test('a question reaches the phone with its options intact', async (t) => {
@@ -85,44 +98,32 @@ test('a question reaches the phone with its options intact', async (t) => {
 
   agent.askQuestion({ sessionId: 's1', question: 'Which branch?', options: ['main', 'develop'] })
 
-  await waitFor(() => events.length > 0, 'the question')
-  const payload = events[events.length - 1].frame.payload
-  assert.equal(payload.type, 'question/requested')
-  assert.equal(payload.questions[0].question, 'Which branch?')
-  assert.deepEqual(payload.questions[0].options.map(o => o.label), ['main', 'develop'],
+  await waitFor(() => waterfalls(events, 'user-questions/request').length > 0, 'the question')
+  const { request } = waterfalls(events, 'user-questions/request')[0]
+  assert.equal(request.questions[0].question, 'Which branch?')
+  assert.deepEqual(request.questions[0].options.map(o => o.label), ['main', 'develop'],
     'options that do not survive leave the person unable to answer')
 })
 
-test('an approval raised while the phone is away is replayed on reconnect', async (t) => {
-  // The case that matters most: approvals arrive while the phone is asleep, and
-  // the whole product is worthless if they are lost. This is the replay buffer
-  // doing its job on the one frame type where losing it is unrecoverable.
-  const { agent, phone, events } = await connected(t)
-  const seen = phone.seq
-
+test('an approval raised while the phone is away is waiting for it when it comes back', async (t) => {
+  // The case that matters most: approvals arrive while the phone is asleep.
+  // dsh re-sends every pending one to each new `$events` stream, under the
+  // same id, so a phone that reconnects and reopens its stream sees it — no
+  // buffer in the Bridle is needed for that, and none is kept.
+  const { agent, stack, phone } = await connected(t)
   phone.close()
-  agent.requestApproval({ sessionId: 's1', toolName: 'write' })
+  const eventId = agent.requestApproval({ sessionId: 's1', toolName: 'write' })
 
-  const ready = await phone.connect()
-  phone.resume(seen)
-
-  await waitFor(
-    () => events.some(e => e.frame?.payload?.type === 'approval/requested'),
-    'the missed approval to be replayed',
-  )
-  assert.ok(ready.seq >= seen)
+  const again = await connected(t, { agent, stack })
+  await waitFor(() => waterfalls(again.events, 'approval/request').some(item => item.eventId === eventId),
+    'the pending approval to be re-sent to the reconnected phone')
 })
 
 test('an answer too big for the tunnel fails the call instead of the connection', { timeout: 120_000 }, async (t) => {
-  // The failure this prevents was observed, not imagined: a `session.history`
-  // page came back as 22 MB of streaming chunks. `thinHistory` keeps that one
-  // under the ceiling now, but `session.export` has no such guard and a long
-  // session's archive has no upper bound at all.
-  //
   // Every WebSocket on the path enforces a size limit by closing the
   // *connection* with a 1009, so writing an oversized frame produces a tunnel
-  // that drops, reconnects, resumes, answers with the same frame and drops
-  // again — with no error anywhere naming the cause.
+  // that drops, reconnects, asks again and drops again — with no error
+  // anywhere naming the cause.
   const agent = new FakeAgent()
   const stack = await startStack({ agent })
   t.after(() => stack.stop())
@@ -132,43 +133,27 @@ test('an answer too big for the tunnel fails the call instead of the connection'
   t.after(() => { phone.close() })
   await phone.connect()
 
-  agent.answers.set('host.describe', { ok: true, value: { fat: 'x'.repeat(33 * 1024 * 1024) } })
-  const answer = await phone.call('host.describe', {})
+  agent.results.set('session/list', { ok: true, value: { fat: 'x'.repeat(33 * 1024 * 1024) } })
+  const answer = await phone.call('session/list', { _request: {} })
 
   assert.equal(answer.ok, false, 'the call should fail')
   assert.equal(answer.error.code, 'too-large')
   assert.match(answer.error.message, /MB/u, 'the message should say how big it was')
 
   // The point of the whole exercise: the tunnel is still usable afterwards.
-  agent.answers.set('host.describe', { ok: true, value: { cwd: '/tmp' } })
-  const after = await phone.call('host.describe', {})
+  agent.results.set('session/list', { ok: true, value: { items: [] } })
+  const after = await phone.call('session/list', { _request: {} })
   assert.equal(after.ok, true, 'the connection survived')
-  assert.equal(after.value.cwd, '/tmp')
 })
 
-test('a history page too big to send comes back shorter instead of failing', { timeout: 120_000 }, async (t) => {
-  // The observed shape: a 25-message page arrived as 22 MB of streaming
-  // chunks. Thinning handles the usual version of that, but a page still
-  // streaming has nothing superseded to drop — so the remaining answer is to
-  // ask for fewer messages, which is what `maxMessages` is for.
+test('a stream item too big for the tunnel ends that stream and nothing else', { timeout: 120_000 }, async (t) => {
+  // A conversation's snapshot has no byte ceiling of its own — a page is
+  // bounded by messages, and one message can be megabytes of streamed output.
+  // The app reopens with fewer messages; the tunnel must survive to let it.
   const agent = new FakeAgent()
-
-  // Stand in for a harness whose pages are proportional to what was asked for.
-  // Four megabytes a message puts 25 and 12 over the 32 MiB ceiling and 6 under.
-  const perMessage = 4 * 1024 * 1024
-  const asks = []
-  agent.handle('session.history', (payload) => {
-    const messages = payload.maxMessages
-    asks.push(messages)
-    return {
-      ok: true,
-      value: {
-        events: [{ event: { type: 'user/message', seq: 1, time: 0, data: { pad: 'x'.repeat(messages * perMessage) } } }],
-        hasMore: true,
-      },
-    }
+  agent.serve('session/follow', (args, emit) => {
+    emit.item({ type: 'snapshot', pad: 'x'.repeat(33 * 1024 * 1024) })
   })
-
   const stack = await startStack({ agent })
   t.after(() => stack.stop())
   await stack.waitForRelay()
@@ -177,9 +162,10 @@ test('a history page too big to send comes back shorter instead of failing', { t
   t.after(() => { phone.close() })
   await phone.connect()
 
-  const page = await phone.call('session.history', { sessionId: 's1', maxMessages: 25 })
-
-  assert.equal(page.ok, true, 'the caller gets a page, not an error')
-  assert.deepEqual(asks, [25, 12, 6], 'the ask halves until it fits')
-  assert.equal(page.value.hasMore, true, 'and can still page back for the rest')
+  const follow = phone.open('session/follow', { request: { sessionId: 's1' } })
+  const outcome = await follow.done
+  assert.equal(outcome.kind, 'error')
+  assert.equal(outcome.error.code, 'too-large')
+  const after = await phone.call('session/list', { _request: {} })
+  assert.equal(after.ok, true, 'the connection survived')
 })
