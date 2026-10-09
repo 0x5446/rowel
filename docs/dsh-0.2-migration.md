@@ -1,6 +1,6 @@
 # 迁移到 dsh 0.2（设计，2026-10-03；2026-10-08 按 0.2.1-alpha.1 复核）
 
-状态：**设计稿，待评审**。线协议的事实依据见 [`dsh-0.2-protocol.md`](dsh-0.2-protocol.md)（带源码出处与实测标记）；0.1 的旧接口见 [`dsh-api-inventory.md`](dsh-api-inventory.md)。
+状态：**M0–M3 已实现并合并，M4（文档与发布）进行中**。线协议的事实依据见 [`dsh-0.2-protocol.md`](dsh-0.2-protocol.md)（带源码出处与实测标记）；app 实际用到的 0.2 接口见 [`dsh-api-inventory.md`](dsh-api-inventory.md)（0.1 的旧清单在 git 历史里）。
 
 ## 0. 为什么要做
 

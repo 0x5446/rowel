@@ -7,6 +7,41 @@ Versions are the tags `install.sh` can install. `ROWEL_REF` in that script names
 the one it installs by default, so a release here and a change to that line are
 the same decision.
 
+## Unreleased (0.2.0)
+
+**For dsh 0.2, and only dsh 0.2.** dsh 0.2 replaced its whole API — how a
+client signs in, every method name, the event stream — and this Bridle, with
+app 1.1, speaks the new one. dsh 0.1 stays served by Bridle 0.1.x and app 1.0
+(`ROWEL_REF=v0.1.7`). Back up `~/.dsh` before upgrading dsh: it rewrites the
+directory, and 0.1 cannot read what 0.2 writes. The README's *Upgrading from
+dsh 0.1* has the steps, including putting back gateway models (Command Code,
+OpenRouter, …) that dsh 0.2's import drops.
+
+- **Signs in to dsh.** dsh 0.2 answers nothing without the token it prints.
+  Bridle reads it when it starts dsh itself, or receives it as dsh's plugin —
+  `bridle plugin install` puts it there, for a dsh that is already running.
+  `bridle status` and `bridle doctor` say which dsh this is and whether Bridle
+  is signed in to it.
+
+- **Passes dsh through instead of translating it.** The phone calls dsh's own
+  endpoints and opens its own streams through the tunnel (tunnel version 2), so
+  a new dsh feature needs an app update, not a Bridle one. The replay buffer and
+  the history thinning are gone: after a reconnect the app opens each stream
+  again and dsh sends it the whole current state.
+
+- **Rings the phone from dsh's own requests.** Bridle listens to dsh's
+  approval and question requests itself, rings once per request when no phone
+  is attached, and forgets a request the moment anyone answers it — across dsh
+  restarts and network blips without ringing twice.
+
+- **The installer says when Bridle and dsh do not match**, rather than
+  installing a Bridle that cannot talk to the dsh on this Mac.
+
+- **Search and folder browsing instructions corrected** on the site: the search
+  index takes `path: ':memory:'` (dsh does not expand `~`, and makes a folder
+  named `~`), and dsh has to be stopped before adding it — added while dsh runs,
+  it takes every conversation offline until dsh restarts.
+
 ## 0.1.7 — 2026-09-30
 
 - **`bridle pair --code` works on a fresh install too.** The app's "Enter a

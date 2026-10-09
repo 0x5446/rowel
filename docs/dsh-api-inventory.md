@@ -1,116 +1,76 @@
-# dsh WebUI API 完整清单
+# dsh 0.2 接口清单（Rowel 实际用到的部分）
 
-来源：deepseek-harness 源码（`packages/host/webserver`、`packages/client/connection`、`packages/host/apiproxy`、`packages/api/gateway`、`docs/api-gateway.md`），版本 `0.1.0-rc.5`。
+dsh 0.2 有上百个端点，插件还会再加。这里只列 **app 真正调用的**，以及谁调用它。每个端点的完整语义、实测样本和错误码见 [`dsh-0.2-protocol.md`](dsh-0.2-protocol.md)，本文不重复。
 
-## 1. 服务器形态
+版本：`@deepseek-ai/dsh 0.2.0-rc.2`（CI 钉住的版本；D8 的每周任务对 `@latest` / `@alpha` 跑同一套契约）。参数形状以录制为准：`e2e/scripts/capture-fixtures.mjs` 把真 dsh 的回答录进 `ios/RowelTests/Fixtures/dsh-0.2/`，iOS 测试按录制核对 app 发出的参数（`PresetAndPluginTests`）。
 
-- `dsh web` 启动一个 node:http 服务器，默认 `127.0.0.1:3080`（`--host 0.0.0.0`、`--port`、`--trusted-host` 可改）。
-- 所有 API 挂在 `/api` 前缀下；其余路径由 SPA 静态服务兜底（miss → index.html，SPA 路由）。
-- **没有认证层**。安全模型 = 绑定 loopback + Host 头信任栅栏（防 DNS rebinding / 跨站）：
-  - Host 头必须是 loopback 或 `trustedHosts` 里声明的 authority，否则 403。
-  - `sec-fetch-site: cross-site` 一律拒绝；带 Origin 时必须同源。
-  - **特权方法钉死 loopback**（即使配了 trustedHosts）：`agentPreset.read/copy/openDocument/remove`、`host.pickDirectory`、`host.openPath`、`settings.*`（全部）、`credentials.*`（全部）、`llm.discoverModels`。
-  - → 对我们的 sidecar 是好消息：sidecar 与 dsh 同机、走 loopback，全部方法可用，Host 头天然合法。
+## 1. 怎么到达 dsh
 
-## 2. RPC 线上模型（四象限）
+- 隧道版本 2 **透传**：app 的 `call {endpoint, args}` 由 Bridle 变成 `POST /api/<endpoint>`，`open {endpoint, args}` 变成 Bridle 那条 `remote.mux` 上的一条流（`docs/protocol.md` §4）。Bridle 不翻译、不白名单。
+- 认证由 Bridle 负责：它作为 dsh 插件拿到 launch token，或者自己启动 dsh 时从输出里读到，再换成 cookie（`dsh-0.2-protocol.md` §1）。app 看不到 cookie。
+- dsh 对参数名**精确**校验：多一个、少一个都是 `gateway/arguments-invalid`。下文的 `args` 就是 dsh 的 `payload.args`。
+- 唯一由 Bridle 自己回答的端点是 `$export`（会话归档，`docs/protocol.md` §4.1）；app 目前没有调用它。
 
-所有消息是四member判别联合（`type` 字段）：
+## 2. 流（`open`）
 
-| type | 载体 | 方向 |
-|---|---|---|
-| `client-request` | `POST /api/<method>` 请求体 | 客户端发起调用 |
-| `server-response` | 该 POST 的响应体 | 应答（echo rpcId） |
-| `server-request` | WS 下行帧（或进程内 SSE） | 服务器推送/提问 |
-| `client-response` | `POST /api/respond` 请求体 | 回答 approval/question（echo rpcId） |
+| 端点 | `args` | 用途 | 调用方 |
+|---|---|---|---|
+| `$events` | `{}` | 首项 `ready {clientId}`；之后 `waterfall`（`approval/request`、`user-questions/request`）、`cancel {eventId}`、`emit`（`api-session/added\|removed\|status\|activity\|error` 等） | `Harness.events` ← `MachineSession.attach` / `handleEvent` |
+| `workspace/follow` | `{}` | `baseline {items, archivedSessionIds, pinnedSessionIds}`，之后 `upsert` / `remove` / `archived` 等增量 | `Harness.followWorkspaces` ← `attach` / `handleWorkspaces` |
+| `session/control` | `{}` | 所有已挂载会话的 projection：`baseline`，之后逐键 `projection {sessionId, key, value, seq}` | `Harness.followControl` ← `attach` / `handleControl` |
+| `session/follow` | `{request: {address, assistantStream: true, maxMessages}}` | 一个会话：快照，然后事件与 `assistant-stream` 帧。子代理用 `{kind: "subagent", parentSessionId, childSessionId, mode}` 地址 | `Harness.follow` ← `MachineSession.run(follow:)` |
 
-- `client-request` 体：`{ type: 'client-request', rpcId, method, payload }`，`method` 必须与 URL 路径段一致；`Content-Type: application/json` 强制（否则 415）。
-- `server-response` 体：`{ type: 'server-response', rpcId, result }`，`result = { ok: true, value } | { ok: false, error: { code, message, details } }`。业务错误恒为 HTTP 200；4xx/5xx 只表达载体层错误。
-- `POST /api/respond` 响应是载体回执：`{ accepted: true } | { accepted: false, reason: 'not-pending' | 'bad-response' }`。
-- 错误码闭集（`RpcErrorDetailsMap`）：`bad-request` `cancelled` `session-not-found` `model-unavailable` `session-conflict` `agent-busy` `attachment-error` `queue-item-not-found` `steer-unavailable` `command-error` `unknown-command` `settings-rejected` `settings-conflict` `settings-not-exposed` `credential-rejected` `model-discovery-failed` `title-invalid` `fork-unavailable` `subagent-*`（7种）`workspace-*`（5种）`directory-*`（3种）`agent-preset-*`（5种）`invalid-time-zone` `internal`。
+每次握手、或 Bridle 报告 dsh 恢复时，`MachineSession.attach` 把这些流全部重开；每条流的第一项就是完整基线，替换已有状态（迁移设计 D4）。
 
-## 3. 一元方法全集（`POST /api/<method>`，共 51 个）
+## 3. 一元调用（`call`）
 
-### session（12）
-| 方法 | 说明 |
-|---|---|
-| `session.list` | 会话摘要列表（title、running、blank、cwd、preset、lineage） |
-| `session.search` | 会话全文搜索（带 AbortSignal） |
-| `session.create` | 建会话（cwd、agentPreset 可选） |
-| `session.history` | 拉历史（分页 tail page，含 projections 基线块） |
-| `session.models` | 该会话可用模型 |
-| `session.selectModel` | 切模型 |
-| `session.rename` | 改标题 |
-| `session.fork` | 分叉会话 |
-| `session.prompt` | 发消息（支持斜杠命令；附件引用；queue/steer 语义） |
-| `session.attachment` | 上传附件（base64 图片，走 JSON 体，服务端限制约数 MB） |
-| `session.updateQueue` | 编辑/删除排队中的消息 |
-| `session.cancel` | 打断当前 turn |
+调用方一栏里没写类名的，都是 `MachineSession` 的方法。
 
-### subagent（4）
-`subagent.list`、`subagent.history`、`subagent.prompt`、`subagent.interrupt` — 子代理会话的查看与交互。
+### 会话
 
-### host（5）
-`host.describe`（能力/版本/cwd 描述）、`host.pickDirectory`†、`host.listDirectory`、`host.createDirectory`、`host.openPath`†（† = loopback 特权）。
+| 端点 | `args` | 用途 | 调用方 |
+|---|---|---|---|
+| `session/list` | `{_request: {}}` | 会话列表（含子代理行，app 过滤掉并记下父子关系） | `Harness.listSessions` ← `readList` |
+| `session/page` | `{request: {address, throughSeq, beforeSeq?, maxMessages}}` | 窗口之前的更早一页 | `Harness.page` ← `loadOlder` |
+| `session/create` | `{request: {cwd?, workspaceId?, agentPreset?}}`（`cwd` 与 `workspaceId` 二选一） | 新会话；落在工作区里时只传 `workspaceId` | `Harness.createSession` ← `createSession` |
+| `session/prompt` | `{request: {requestId, sessionId, mode: "queue"\|"steer", content, clientTimeZone}}` | 发消息；`content` 含内嵌 base64 图片 | `Harness.prompt` ← `send` |
+| `session/cancel` | `{request: {sessionId}}` | 停止当前 turn | `Harness.cancel` ← `cancel` |
+| `session/updateQueue` | `{request: {sessionId, itemId, action: {kind: "edit"\|"remove"\|"steer", …}}}` | 编辑、撤回、插队一条排队消息 | `Harness.updateQueue` ← `promote`、`ConversationView` |
+| `session/rename` | `{request: {sessionId, title}}` | 改标题 | `Harness.rename` ← `rename` |
+| `session/fork` | `{request: {sessionId}}` | 分叉 | `Harness.fork` ← `fork` |
+| `session/search` | `{request: {query}}` | 全文搜索；默认 profile 关闭，返回 `gateway/internal` "session search is disabled" | `Harness.search` ← `SessionListView` |
+| `session/attachment` | `{request: {sessionId, attachmentId}}` | 取历史里一张图片的字节 | `Harness.attachment` ← `Store/Attachments.swift` |
+| `session/projections` | `{request: {sessionId}}` | 单个会话的 projection（模型选择、子代理目录） | `Harness.projections` ← `Harness.models`、`Harness.subagents` |
+| `session/modelCatalog` | `{}` | 机器可路由的模型与默认模型 | `Harness.models` / `machineModels` ← `loadModel`、`ModelPicker`、`DefaultModelPicker` |
+| `session/selectModel` | `{request: {sessionId, provider, model, reasoningEffort?}}` | 切模型 | `Harness.selectModel` ← `selectModel`、`createSession` |
 
-### workspace（7）
-`workspace.list / create / rename / delete / insertBefore / insertSessionBefore / archiveSession` — 侧栏工作区分组与排序、归档。
+### 工作区
 
-### skill / agentPreset（1 + 6）
-`skill.list`；`agentPreset.list / select / read† / copy† / openDocument† / remove†`。
+| 端点 | `args` | 用途 | 调用方 |
+|---|---|---|---|
+| `workspace/create` | `{request: {path}}` | 把文件夹认领为工作区（已存在则返回已有的） | `Harness.createWorkspace` ← `createWorkspace`、`createSession` |
+| `workspace/rename` | `{request: {workspaceId, title}}` | 改名 | `Harness.renameWorkspace` ← `renameWorkspace` |
+| `workspace/delete` | `{request: {workspaceId}}` | 取消分组（目录与会话都保留） | `Harness.deleteWorkspace` ← `deleteWorkspace` |
+| `workspace/archiveSession` | `{request: {sessionId}}` | 归档 | `Harness.archive` ← `archive` |
+| `workspace/unarchiveSession` | `{request: {sessionId}}` | 取消归档（已封装，界面暂无入口） | `Harness.unarchive` |
 
-### goal（6）
-`goal.create / edit / pause / resume / complete / clear`。
+### 命令、技能、权限、杂项
 
-### settings / credentials（5 + 3，全特权）
-`settings.describe / openDocument / update / replace / mutate`（带 expectedRevision 乐观并发）；`credentials.describe / set / unset`。
+| 端点 | `args` | 用途 | 调用方 |
+|---|---|---|---|
+| `commands/list` | `{agentId}`（值为 sessionId） | 机器会执行的斜杠命令 | `Harness.commands` ← `loadCommands` |
+| `commands/execute` | `{agentId, line, submittedAttachments: []}` | 执行一行命令，如 `/permission read-only` | `Harness.command` ← `runCommand`、`setSessionPermission` |
+| `skills/list` | `{request: {sessionId}}` | 会话可用技能 | `Harness.skills` ← `loadCommands` |
+| `permissionPresets/catalog` | `{}` | 档位可选项与新会话的默认档位 | `Harness.permissionPresets` ← `refreshAccessDefault` |
+| `settings/describe` | `{}` | 读 `permission` 命名空间的 revision | `Harness.setPermission` |
+| `settings/update` | `{ns: "permission", patch: {defaultPreset}, expectedRevision}` | 改新会话的默认档位（乐观并发） | `Harness.setPermission` ← `setPermission` |
+| `agentPresets/list` | `{}` | 可选的 agent 预设（0.2 只给 id） | `Harness.presets` ← `loadPresets` |
+| `pluginInventory/list` | `{}` | 已挂载的插件 | `Harness.pluginInventory` ← `plugins` |
+| `directoryPicker/list` | `{path?}` | 浏览 Mac 上的目录；默认 profile 是 native 选择器，返回 `directory-picker/unavailable` | `Harness.listDirectory` ← `DirectoryPicker` |
+| `$events/result` | `{clientId, eventId, outcome: {kind: "result", value}}` | 回答审批（`allowed-once` / `rejected`）或提问（`{answers: [...]}`）；先答者生效 | `Harness.answerApproval` / `answerQuestion` ← `answer(approval:)`、`answer(question:)` |
 
-### llm（3）
-`llm.providers`、`llm.models`（模型目录，非特权）、`llm.discoverModels`†（探测自定义端点，特权）。
+## 4. 没有用到、但容易以为要用的
 
-## 4. Typert Remote 方法（同样走 `POST /api/<namespace>/<method>`）
-
-新一代生成式 RPC，与上面共用 `/api` 通道，路径是两段式 `<namespace>/<method>`，payload 是 `{ args: {...} }`：
-
-- `goals/create|edit|pause|resume|complete|clear`（与 goal.* 并存的新通道）
-- `messageFeedback/list|put|delete`（消息点赞/点踩）
-- `pluginInventory/list`（设置页插件清单）
-- `cordisRunner/*`（self-modification 面板：runHostHalf、getClientCode、invoke 等 ~12 个，手机端 v1 可不做）
-
-## 5. 事件流（下行）
-
-浏览器走 **WebSocket**（HTTP GET 到这两个路径会得到 426）：
-
-- `WS /api/events.mux` — 全会话聚合流。打开即发每个已挂会话的 `session/subscribed` 控制帧 + 重放未决 approval/question（rpcId 原样复用 = 刷新恢复基线）。
-- `WS /api/events.host` — 主机级流：会话增删、running 翻转、agent 错误、workspace 变更。
-
-帧是 `server-request` 全形：`{ type: 'server-request', rpcId, method: <帧type>, payload: <帧> }`。客户端在 WS 上**不许发消息**（发了就被 1008 关闭）；上行永远走 HTTP POST。
-
-### mux 帧类型
-- `session/event` — 原始会话事件透传（+ 可选 `view` 渲染意图）。事件词表：`turn/start|end`、`step/start|end`、`user/message`、`assistant/chunk`（流式文本）、`tool/call`、`tool/result`、`approval/asked|decided`、`session/title`、`plan/mode`、`compaction/start|summary`、`goal/change`、`subagent/descriptor`、`command/run|done`、`agent-preset/selected`、`permission/preset`、`llm/retry`、`hook/invoked|result` 等（merge 扩展，未知类型必须容忍）。
-- `session/subscribed`（lastSeq）
-- `approval/requested`（**可应答**：sessionId、approvalId、toolName、reason；用 `POST /api/respond` echo rpcId 回 `outcome: 'allowed-once' | 'rejected'`）
-- `approval/resolved`
-- `question/requested`（**可应答**：questions 批量；回 `answer` 整批）
-- `question/resolved`
-- `session/queue` — 排队/steering 收件箱全量快照
-- `session/jobs` — 后台任务全量快照
-- `session/projection` — 投影单元值推送（seq 高者胜，history tail 页给基线）
-- `stream/error`
-
-### host 帧类型
-`host/session-added`（lineage、cwd、preset、blank）、`host/session-removed`、`host/session-status`（running 翻转）、`host/agent-error`、`host/workspace-changed|removed|order-changed`、`host/archived-sessions-changed`、`host/remote-event`（白名单转发的 cordis 事件）、`stream/error`。
-
-### tool 渲染意图（`view`）
-`tool/call`/`tool/result` 帧带 host 端算好的 `ToolCallView / ToolResultView`（`generic`/`terminal`/`diff` + locations），客户端不用理解每个工具就能渲染。**不持久化**，重放时 host 重算。
-
-## 6. 下载通道
-
-- `GET /api/session.export?sessionId=...&includeDescendants=` — 会话日志 ZIP（attachment 响应）。400 缺参 / 404 无会话。
-
-## 7. 对 sidecar 转发的含义
-
-1. 上行只有两种：`POST /api/*`（JSON in/out，一问一答）和 `GET /api/session.export`（流式二进制）。全部可无状态代理。
-2. 下行两条 WS 长连（mux + host），只收不发，断线重连语义 = 重开流 + 重拉 history/list（服务端为此设计了 subscribed/重放/全量快照机制，手机端弱网友好）。
-3. `session.prompt` 的取消靠 `session.cancel`（业务级），`session.search` 等长调用靠断开载体（AbortSignal 挂在请求上）——代理需要把「手机端放弃」映射为「对 dsh 的请求中断」。
-4. 附件上传是 JSON base64（上限约几 MB + 1MB envelope headroom），转发时注意帧大小限制。
-5. 无认证 → 信任边界完全由我们的 E2E 加密层承担；sidecar 绝不能把 dsh 端口暴露到公网，只走 loopback。
+- `userQuestions/answer`、`userQuestions/attachWait`：只属于 timed 提问模式，默认关闭（`dsh-0.2-protocol.md` §5.3）。
+- `fileUploads/upload`：app 把图片直接内嵌在 `session/prompt` 的 `content` 里。
+- `session/initializeDefaultModel`、`credentials/*`、`settings/*` 的其他命名空间：属于 Mac 上的配置，不在手机上做。
