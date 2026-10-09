@@ -37,16 +37,38 @@ function authority(base: string): string {
 
 function loaded(): Map<string, string> {
   if (cookies !== undefined) return cookies
-  cookies = new Map()
+  cookies = readStore()
+  return cookies
+}
+
+/** The file as it is now. */
+function readStore(): Map<string, string> {
+  const store = new Map<string, string>()
   try {
     const saved = JSON.parse(readFileSync(storePath(), 'utf8')) as Record<string, unknown>
     for (const [key, value] of Object.entries(saved)) {
-      if (typeof value === 'string') cookies.set(key, value)
+      if (typeof value === 'string') store.set(key, value)
     }
   } catch {
     // None saved yet, or unreadable: either way there is nothing to reuse.
   }
-  return cookies
+  return store
+}
+
+/**
+ * Change one entry, on top of what is on disk now.
+ *
+ * Two processes write this file — the dsh plugin and a `bridle status` typed
+ * in a terminal — and each holds its own copy in memory. Writing a whole copy
+ * back would undo the other's change: a terminal dropping a stale cookie would
+ * put back the table it read before the plugin saved a fresh one. So the file
+ * is re-read and only the one entry changes.
+ */
+function change(mutate: (store: Map<string, string>) => boolean): void {
+  const memory = loaded()
+  mutate(memory)
+  const disk = readStore()
+  if (mutate(disk)) persist(disk)
 }
 
 function persist(store: Map<string, string>): void {
@@ -80,19 +102,23 @@ export function cookieFor(base: string): string | undefined {
  * @param cookie - the `name=value` pair.
  */
 export function rememberCookie(base: string, cookie: string): void {
-  const store = loaded()
-  if (store.get(authority(base)) === cookie) return
-  store.set(authority(base), cookie)
-  persist(store)
+  const key = authority(base)
+  change((store) => {
+    if (store.get(key) === cookie) return false
+    store.set(key, cookie)
+    return true
+  })
 }
 
 /**
- * Drop the cookie for a dsh address — it was refused, so it is expired or the
- * key behind it was replaced.
+ * Drop a cookie dsh refused — it expired, or the key behind it was replaced.
+ *
+ * Only that cookie: a request still in flight with an old one can be refused
+ * after a fresh one has been saved, and must not take the fresh one with it.
  * @param base - the dsh base URL.
+ * @param refused - the `name=value` pair that was refused.
  */
-export function forgetCookie(base: string): void {
-  const store = loaded()
-  if (!store.delete(authority(base))) return
-  persist(store)
+export function forgetCookie(base: string, refused: string): void {
+  const key = authority(base)
+  change((store) => store.get(key) === refused && store.delete(key))
 }

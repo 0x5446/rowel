@@ -13,7 +13,7 @@
  * other shape is left alone, with the lines to add by hand.
  */
 
-import { readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
@@ -55,8 +55,13 @@ function entry(modulePath: string): string {
   return `- insert:\n    - id: ${PLUGIN_ID}\n      name: ${JSON.stringify(modulePath)}\n`
 }
 
-/** Our entry in its written shape, whatever path it points at. */
-const OURS = new RegExp(`^- insert:\\n {4}- id: ${PLUGIN_ID}\\n {6}name: .*\\n?`, 'mu')
+/**
+ * Our entry in its written shape, whatever path it points at — and only when
+ * nothing else has been added under it: an indented line right after it means
+ * the person put more into the same `insert`, and cutting our three lines out
+ * of that would leave the rest hanging under nothing.
+ */
+const OURS = new RegExp(`^- insert:\\n {4}- id: ${PLUGIN_ID}\\n {6}name: .*(?:\\n(?![ \\t])|(?![\\s\\S]))`, 'mu')
 
 /**
  * Add the plugin to a home's web profile, or point an existing entry at a new
@@ -73,7 +78,7 @@ export function installPlugin(home: string, modulePath: string): PluginEdit {
   const existing = OURS.exec(text)
   if (existing !== null) {
     if (existing[0].trimEnd() === wanted.trimEnd()) return { result: 'unchanged', file }
-    writeFileSync(file, text.replace(OURS, wanted))
+    replaceFile(file, text.replace(OURS, wanted))
     return { result: 'updated', file }
   }
   if (text.includes(`id: ${PLUGIN_ID}`)) {
@@ -83,11 +88,11 @@ export function installPlugin(home: string, modulePath: string): PluginEdit {
   if (body === '[]') {
     // dsh's own starting content: an empty flow list. Replaced, not appended
     // to — a block entry after `[]` is not YAML.
-    writeFileSync(file, text.replace(/^\[\]\s*$/mu, wanted.trimEnd()))
+    replaceFile(file, text.replace(/^\[\]\s*$/mu, wanted.trimEnd()))
     return { result: 'added', file }
   }
   if (body === '' || body.startsWith('- ')) {
-    writeFileSync(file, `${text}${text === '' || text.endsWith('\n') ? '' : '\n'}${wanted}`)
+    replaceFile(file, `${text}${text === '' || text.endsWith('\n') ? '' : '\n'}${wanted}`)
     return { result: 'added', file }
   }
   return { result: 'manual', file, lines: wanted }
@@ -110,13 +115,25 @@ export function uninstallPlugin(home: string): PluginEdit {
     let next = text.replace(OURS, '')
     // Back to what dsh wrote if nothing else is left, so the file stays YAML.
     if (withoutComments(next) === '') next = `${next}${next === '' || next.endsWith('\n') ? '' : '\n'}[]\n`
-    writeFileSync(file, next)
+    replaceFile(file, next)
     return { result: 'removed', file }
   }
   if (text.includes(`id: ${PLUGIN_ID}`)) {
     return { result: 'manual', file, lines: `remove the entry for ${PLUGIN_ID} by hand; it is not in the form bridle writes` }
   }
   return { result: 'unchanged', file }
+}
+
+/**
+ * Write a file whole or not at all. dsh reads this file at start, and a file
+ * cut off half-written is a dsh that will not start — so the new content goes
+ * to a temporary file beside it and is renamed into place, keeping the
+ * person's permissions on it.
+ */
+function replaceFile(file: string, content: string): void {
+  const temporary = `${file}.${String(process.pid)}.tmp`
+  writeFileSync(temporary, content, { mode: statSync(file).mode & 0o777 })
+  renameSync(temporary, file)
 }
 
 /** The file with comment lines and surrounding blank space removed. */

@@ -9,7 +9,7 @@
 
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { installPlugin, patchFile, uninstallPlugin } from '@rowel/bridle'
@@ -89,4 +89,21 @@ test('uninstall takes out exactly what install put in, and leaves valid YAML', (
   uninstallPlugin(other)
   assert.equal(readFileSync(patchFile(other), 'utf8'), mine)
   assert.equal(uninstallPlugin(other).result, 'unchanged')
+})
+
+test('an entry the person added to is not cut out, and the file is left as it was', (t) => {
+  // Our three lines with a sibling under the same insert: removing just ours
+  // would leave the sibling indented under nothing.
+  const shared = `- insert:\n    - id: rowel-bridle\n      name: "${PLUGIN}"\n    - id: other\n      name: /x.js\n`
+  const root = home(t, shared)
+  assert.equal(uninstallPlugin(root).result, 'manual')
+  assert.equal(installPlugin(root, '/elsewhere/index.js').result, 'manual')
+  assert.equal(readFileSync(patchFile(root), 'utf8'), shared)
+})
+
+test('the file keeps its permissions through an edit', (t) => {
+  const root = home(t, FRESH)
+  chmodSync(patchFile(root), 0o640)
+  installPlugin(root, PLUGIN)
+  assert.equal(statSync(patchFile(root)).mode & 0o777, 0o640)
 })
