@@ -591,6 +591,15 @@ final class ConversationFoldTests: XCTestCase {
         XCTAssertTrue(held.planning)
     }
 
+    /// `session/control` and `session/follow` are separate streams. A value the
+    /// first delivered after the snapshot was taken must survive the snapshot.
+    func testASnapshotDoesNotPutBackAnOlderProjection() {
+        let held = conversation()
+        held.applyProjection(key: "title", value: .string("Newer"), seq: 20)
+        held.adopt(snapshot: snapshot([event("turn/start", seq: 19)], projections: .object(["title": .string("Older")])))
+        XCTAssertEqual(held.title, "Newer")
+    }
+
     /// The `session/control` baseline a real dsh sent, applied as a block.
     func testARecordedProjectionBaselineApplies() throws {
         let control = try fixture("session-control")

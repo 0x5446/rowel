@@ -279,6 +279,8 @@ app 自己那把锁（`ios/Rowel/Store/AppLock.swift`）不解决这件事，它
 
 单条隧道复用全部流量，手机只持有一个 socket。
 
+> **本节描述的是隧道版本 1，已过时。**现行的版本 2 透传 dsh 0.2 自己的端点和流（`call`/`result`、`open`/`item`/`end`/`error`/`cancel`），Bridle 不再缓冲、不再重放；app 重连后重新打开各条流，以新基线替换旧状态。见 `docs/protocol.md` §4 和 `docs/dsh-0.2-migration.md` D3/D4。本节将在迁移的文档里程碑（M4）重写。
+
 | 帧 | 方向 | 语义 |
 |---|---|---|
 | `req {id, method, payload}` | app→bridle | 一元调用 |

@@ -167,7 +167,9 @@ public final class Conversation {
         toolIndex = [:]
         seen = []
         runningCommands = [:]
-        projectionSeq = [:]
+        // Projection watermarks are kept: `session/control` is a separate
+        // stream, and a value it delivered after this snapshot was taken must
+        // not be put back by the snapshot's older one.
         streaming = nil
         oldestSeq = nil
         cursor = nil

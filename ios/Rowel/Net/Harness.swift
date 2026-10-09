@@ -227,8 +227,11 @@ public struct Harness: Sendable {
     ///
     /// - Parameters:
     ///   - requestId: names this message for good. dsh logs it on the message
-    ///     (`source.rpcId`) and ignores a second send under the same id, so a
-    ///     send whose answer was lost can be repeated safely — with the same id.
+    ///     (`source.rpcId`), which is how the copy shown before the machine
+    ///     answered is matched to the real one. dsh also ignores a second send
+    ///     under the same id — but not in the moment between a turn claiming
+    ///     the message and logging it (docs/dsh-0.2-protocol.md §7.1), so a
+    ///     send whose answer was lost is checked against the log, not resent.
     ///   - steer: interrupt the running turn; otherwise queue behind it.
     public func prompt(sessionId: String, requestId: String, text: String, images: [PromptImage] = [], steer: Bool) async throws {
         var content: [JSONValue] = []
