@@ -160,4 +160,43 @@ try {
   await stack.stop()
   await dsh.stop()
 }
+
+// The two things a person can switch on in their profile, with exactly the
+// lines the app tells them to add: a folder browser a phone can use, and the
+// full-text index.
+const patched = await startDsh({ profilePatch: [
+  '- id: session-query-sqlite',
+  '  config:',
+  "    path: ':memory:'",
+  '    openAt: first-search',
+  '',
+  '- id: directory-picker',
+  '  disabled: true',
+  '',
+  '- insert:',
+  '    - id: directory-picker-browse',
+  "      name: '@deepseek-ai/dsh-host-directory-picker-browse'",
+  '    - id: ui-directory-picker-browse',
+  "      name: '@deepseek-ai/dsh-client-ui-directory-picker-browse'",
+  '',
+].join('\n') })
+throwaway.push(patched.home, patched.home.replace(/^\/var\//u, '/private/var/'))
+const patchedStack = await startStack({ dshUrl: patched.url, dshToken: patched.token, machineName: 'Fixture Mac' })
+const patchedPhone = new RowelPhone({ bundle: patchedStack.invite().bundle, prefer: 'direct' })
+await patchedPhone.connect()
+try {
+  const listed = await patchedPhone.call('directoryPicker/list', {})
+  save('directory-picker-list', { endpoint: 'directoryPicker/list', args: {}, result: listed })
+  const made = await patchedPhone.call('session/create', { request: { cwd: patched.home } })
+  await patchedPhone.call('session/prompt', {
+    request: { requestId: randomUUID(), sessionId: made.value.sessionId, mode: 'queue', content: [{ type: 'text', text: 'Where is the zebra crossing?' }], clientTimeZone: 'UTC' },
+  })
+  await new Promise((resolve) => { setTimeout(resolve, 2000) })
+  const found = await patchedPhone.call('session/search', { request: { query: 'zebra' } })
+  save('session-search', { endpoint: 'session/search', args: { request: { query: 'zebra' } }, result: found })
+} finally {
+  patchedPhone.close()
+  await patchedStack.stop()
+  await patched.stop()
+}
 process.exit(0)

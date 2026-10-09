@@ -294,6 +294,36 @@ final class LoadingTests: XCTestCase {
         XCTAssertEqual(reads, 1)
     }
 
+    // MARK: - Subagents
+
+    /// A subagent's log is read through its parent; addressed as a plain
+    /// session, dsh answers `session/agent-busy`.
+    func testASubagentIsFollowedThroughItsParent() async throws {
+        let transport = ScriptedTransport()
+        let session = machine(transport)
+        let child: JSONValue = .object([
+            "sessionId": .string("3c0e4ed8"), "updatedAt": .number(1_700_000_000_000), "running": .bool(true),
+            "blank": .bool(false), "origin": .string("subagent"), "parentSessionId": .string("s1"),
+        ])
+        try await connect(session, transport, list: [row("s1"), child])
+        try await until("the list") { session.sessions.map(\.id) == ["s1"] }
+
+        _ = session.conversation("3c0e4ed8")
+        try await until("the follow") { transport.desk.count("session/follow") == 1 }
+        XCTAssertEqual(transport.desk.args("session/follow").first?.path("request", "address"), .object([
+            "kind": .string("subagent"), "parentSessionId": .string("s1"),
+            "childSessionId": .string("3c0e4ed8"), "mode": .string("unknown"),
+        ]))
+
+        // What the child asks for is shown in the conversation that spawned it.
+        transport.desk.send("$events", .object([
+            "type": .string("waterfall"), "event": .string("approval/request"), "eventId": .string("e1"),
+            "agentId": .string("3c0e4ed8"), "request": .object(["toolName": .string("bash")]),
+        ]))
+        try await until("the card") { session.approvals["s1"] != nil }
+        XCTAssertEqual(session.approvals["s1"]?.id, "e1")
+    }
+
     // MARK: - Failures
 
     /// `gateway/internal` is how dsh fails a follow that skipped a sequence

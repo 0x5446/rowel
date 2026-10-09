@@ -25,7 +25,7 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -59,11 +59,13 @@ export function modelAllowed(): boolean {
 /**
  * Start a throwaway dsh 0.2.
  * @param options - `model: true` to hand it this process's environment,
- *   provider credentials included; `timeoutMs` to wait for its token line.
+ *   provider credentials included; `timeoutMs` to wait for its token line;
+ *   `profilePatch` to write as its web profile's `cordis.patch.yml`, the
+ *   file a person edits to compose plugins in or out.
  * @returns the running instance.
  * @throws {@link Error} when `ROWEL_E2E_DSH_BIN` is unset or dsh does not come up.
  */
-export async function startDsh(options: { model?: boolean; timeoutMs?: number } = {}): Promise<ThrowawayDsh> {
+export async function startDsh(options: { model?: boolean; timeoutMs?: number; profilePatch?: string } = {}): Promise<ThrowawayDsh> {
   const timeoutMs = options.timeoutMs ?? 60_000
   const bin = dshBinary()
   if (bin === undefined) throw new Error('ROWEL_E2E_DSH_BIN is not set')
@@ -71,6 +73,10 @@ export async function startDsh(options: { model?: boolean; timeoutMs?: number } 
   const port = await freePort()
   const userHome = join(home, 'user')
   mkdirSync(userHome, { recursive: true })
+  if (options.profilePatch !== undefined) {
+    mkdirSync(join(home, 'profiles', 'web'), { recursive: true })
+    writeFileSync(join(home, 'profiles', 'web', 'cordis.patch.yml'), options.profilePatch)
+  }
   const bare: Record<string, string> = { DSH_HOME: home, HOME: userHome, DSH_TELEMETRY_DISABLED: '1' }
   for (const name of ['PATH', 'TMPDIR', 'LANG']) {
     const value = process.env[name]

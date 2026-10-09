@@ -1,0 +1,20 @@
+{
+  "endpoint": "session/search",
+  "args": {
+    "request": {
+      "query": "zebra"
+    }
+  },
+  "result": {
+    "ok": true,
+    "value": {
+      "items": [
+        {
+          "sessionId": "session-5ae1e3ff-5e58-4a00-9899-5441d2e1c8ae",
+          "snippet": "Where is the zebra crossing?"
+        }
+      ],
+      "hasMore": false
+    }
+  }
+}

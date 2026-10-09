@@ -2,8 +2,8 @@
   "endpoint": "session/prompt",
   "args": {
     "request": {
-      "requestId": "74168f6f-ee57-40b8-8a79-b947a548780d",
-      "sessionId": "session-a43fd407-8430-445a-892e-adea8dfcbea1",
+      "requestId": "3278bcee-30a8-4278-8feb-178fca04ef03",
+      "sessionId": "session-0344f751-738a-4b75-9a28-11565de7c831",
       "mode": "queue",
       "content": [
         {

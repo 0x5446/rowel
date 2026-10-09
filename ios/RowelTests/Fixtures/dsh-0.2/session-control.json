@@ -6,7 +6,7 @@
       "type": "baseline",
       "value": {
         "projections": {
-          "session-a43fd407-8430-445a-892e-adea8dfcbea1": {
+          "session-0344f751-738a-4b75-9a28-11565de7c831": {
             "asOfSeq": 16,
             "values": {
               "title": "Hello from the fixture",
@@ -79,7 +79,7 @@
               },
               "sessionListMetadata": {
                 "blank": false,
-                "lastPromptAt": 1791542103371
+                "lastPromptAt": 1791547673750
               },
               "imageLimits": {
                 "maxImageBytes": 20971520,

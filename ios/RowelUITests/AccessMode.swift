@@ -97,7 +97,10 @@ final class AccessMode: XCTestCase {
         // from a popover is how one is dismissed. (Measured — the tree for that
         // screen holds one button, the destructive one, and a person reading it
         // sees the dimmed backdrop behind.)
-        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.06)).tap()
+        // Below the popover, on the token counts, which do nothing when tapped.
+        // Not the very top: on iOS 26 a tap in the status bar's band does not
+        // count as outside the popover.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.6)).tap()
         Thread.sleep(forTimeInterval: 1)
         XCTAssertFalse(confirm.exists, "the question stayed up after a tap outside it")
         XCTAssertFalse(row("danger-full-access").isSelected,

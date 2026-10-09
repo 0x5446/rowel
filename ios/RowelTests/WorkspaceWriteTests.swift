@@ -345,10 +345,11 @@ final class WorkspaceWriteTests: XCTestCase {
 
     // MARK: - Starting a conversation in a workspace
 
-    /// The folder goes out as `cwd`, never as `workspaceId`, and the grouping is
-    /// a second call: the wrong folder is a worse failure than the wrong
-    /// section, and the folder is what the person chose.
-    func testStartingInAWorkspaceFolderSendsTheFolderThenJoins() async {
+    /// Started in a workspace's folder, the conversation is started *in the
+    /// workspace*: one call, `workspaceId` alone. dsh refuses `cwd` with it,
+    /// and filing afterwards fails on dsh 0.2 — the ledger compares the two
+    /// folders as strings, and the workspace's has been resolved.
+    func testStartingInAWorkspaceFolderStartsInTheWorkspace() async {
         let session = await loaded()
         await stub.answer("session/create", .object(["sessionId": .string("fresh")]))
 
@@ -356,21 +357,17 @@ final class WorkspaceWriteTests: XCTestCase {
         let sent = await stub.payloads("session/create")
 
         XCTAssertEqual(id, "fresh")
-        XCTAssertEqual(sent.count, 2)
-        XCTAssertEqual(sent.first, request(["cwd": .string("/code/one")]))
-        XCTAssertEqual(sent.last, request([
-            "sessionId": .string("fresh"),
-            "workspaceId": .string("w1"),
-        ]))
+        XCTAssertEqual(sent, [request(["workspaceId": .string("w1")])])
         XCTAssertNil(session.problem)
+        let board = SessionBoard(sessions: session.sessions, workspaces: session.workspaces)
+        XCTAssertEqual(board.groups.first { $0.id == "w1" }?.sessions.first?.id, "fresh")
     }
 
     /// A folder nothing stands for is claimed as the conversation starts, so
-    /// that there is something to file it into. Without this the conversation
-    /// sits in a folder no workspace names, the ledger write has nowhere to go,
-    /// and the Mac's sidebar — which reads the ledger and nothing else — calls
-    /// it ungrouped for the rest of its life.
-    func testStartingInAnUnclaimedFolderClaimsItThenJoins() async {
+    /// that there is a workspace to start it in. Without this the conversation
+    /// sits in a folder no workspace names, and the Mac's sidebar — which reads
+    /// the ledger and nothing else — calls it ungrouped for the rest of its life.
+    func testStartingInAnUnclaimedFolderClaimsItFirst() async {
         let session = await loaded()
         await stub.answer("session/create", .object(["sessionId": .string("fresh")]))
         await stub.answer("workspace/create", .object([
@@ -383,16 +380,10 @@ final class WorkspaceWriteTests: XCTestCase {
         let claims = await stub.payloads("workspace/create")
         XCTAssertEqual(claims, [request(["path": .string("/code/two")])],
                        "the folder the person chose, and nothing else")
-
         let sent = await stub.payloads("session/create")
         XCTAssertEqual(id, "fresh")
-        XCTAssertEqual(sent.count, 2)
-        XCTAssertEqual(sent.first, request(["cwd": .string("/code/two")]),
-                       "the folder still goes out as cwd, never as workspaceId")
-        XCTAssertEqual(sent.last, request([
-            "sessionId": .string("fresh"),
-            "workspaceId": .string("w2"),
-        ]), "and the conversation is filed into the workspace just made for it")
+        XCTAssertEqual(sent, [request(["workspaceId": .string("w2")])],
+                       "started in the workspace just made for its folder")
         XCTAssertNil(session.problem)
 
         let board = SessionBoard(sessions: session.sessions, workspaces: session.workspaces)
@@ -414,8 +405,10 @@ final class WorkspaceWriteTests: XCTestCase {
         let id = await session.createSession(cwd: "/code/two")
 
         let attempts = await stub.count("session/create")
+        let sent = await stub.payloads("session/create")
         XCTAssertEqual(id, "fresh")
-        XCTAssertEqual(attempts, 1, "nothing to file into, so nothing is filed")
+        XCTAssertEqual(attempts, 1)
+        XCTAssertEqual(sent, [request(["cwd": .string("/code/two")])], "no workspace, so the folder itself")
         XCTAssertEqual(session.workspaces.map(\.id), ["w1"],
                        "a workspace the machine refused is not on the phone either")
         XCTAssertNil(session.problem)
@@ -436,24 +429,6 @@ final class WorkspaceWriteTests: XCTestCase {
         XCTAssertEqual(claims, 0)
         XCTAssertEqual(attempts, 1)
         XCTAssertNil(session.problem)
-    }
-
-    /// This used to raise "It's under Ungrouped", and that stopped being true:
-    /// the board seats a conversation by its working directory whether or not
-    /// the ledger write lands, so a failure here changes nothing this phone
-    /// shows. Silence is only honest while that holds — which is what the
-    /// board assertion pins.
-    func testAConversationThatStartsButCannotJoinStaysSeatedAndSaysNothing() async {
-        let session = await loaded()
-        await stub.answer("session/create", .object(["sessionId": .string("fresh")]))
-        await stub.fail("session/create", code: "workspace-attach-failed", message: "could not attach", after: 1)
-
-        let id = await session.createSession(cwd: "/code/one")
-        XCTAssertEqual(id, "fresh", "the conversation exists and is in the right folder")
-        XCTAssertNil(session.problem, "an alert about the Mac's own bookkeeping interrupts nothing this phone got wrong")
-        let board = SessionBoard(sessions: session.sessions, workspaces: session.workspaces)
-        XCTAssertEqual(board.groups.first { $0.id == "w1" }?.sessions.first?.id, "fresh",
-                       "the silence is only honest because the board seats it anyway")
     }
 
     // MARK: - Archiving

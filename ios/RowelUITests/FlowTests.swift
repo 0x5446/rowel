@@ -167,7 +167,13 @@ final class FlowTests: XCTestCase {
     /// asking someone to type an absolute path on a phone is not an option.
     func testComposeOffersTheMachinesFolders() throws {
         try launchPaired()
-        composeButton.tap()
+        // A tap starts a conversation in the last folder used; choosing one is
+        // in the button's menu.
+        XCTAssertTrue(composeButton.waitForExistence(timeout: remote))
+        composeButton.press(forDuration: 1.0)
+        let choose = app.buttons["Choose a folder…"]
+        XCTAssertTrue(choose.waitForExistence(timeout: 10), "the menu offers no way to pick a folder")
+        choose.tap()
 
         let picker = app.navigationBars.firstMatch
         XCTAssertTrue(picker.waitForExistence(timeout: remote))
