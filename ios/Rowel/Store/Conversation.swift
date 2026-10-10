@@ -680,6 +680,20 @@ public final class Conversation {
         queue.removeAll { $0.id == id }
     }
 
+    /// Whether the machine has listed this queue entry. Until it has, the
+    /// entry has no id the machine knows, so it cannot be steered or taken
+    /// back yet.
+    public func isListed(_ item: QueuedMessage) -> Bool {
+        !provisional.contains { $0.id == item.id }
+    }
+
+    /// Show an entry as steering into the running turn, or as queued again,
+    /// before the machine's `inbox` says so — which it does, and wins.
+    public func setPlacement(_ placement: String, of id: String) {
+        guard let index = queue.firstIndex(where: { $0.id == id }) else { return }
+        queue[index].placement = placement
+    }
+
     /// Show a message optimistically, before the machine has logged it, under
     /// the `requestId` it is sent with. The real `user/message` names that
     /// request and replaces it.
