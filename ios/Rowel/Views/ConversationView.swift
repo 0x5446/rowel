@@ -492,7 +492,8 @@ struct ConversationView: View {
                         },
                         onPromote: { item in
                             Task { await session.promote(sessionId: sessionId, item: item) }
-                        }
+                        },
+                        canPromote: { conversation.isListed($0) }
                     )
                 }
             }

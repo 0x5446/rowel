@@ -227,6 +227,9 @@ struct QueueStrip: View {
     let onRemove: (QueuedMessage) -> Void
     /// Cut this one into the turn already running.
     var onPromote: ((QueuedMessage) -> Void)?
+    /// Whether the machine knows this entry yet; one it has not listed cannot
+    /// be steered.
+    var canPromote: (QueuedMessage) -> Bool = { _ in true }
 
     var body: some View {
         VStack(spacing: 4) {
@@ -235,12 +238,22 @@ struct QueueStrip: View {
                     Image(systemName: item.placement == "steering" ? "arrow.turn.up.right" : "clock")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
-                    Text(item.text)
-                        .font(.system(size: 13))
-                        .lineLimit(1)
-                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(item.text)
+                            .font(.system(size: 13))
+                            .lineLimit(1)
+                            .foregroundStyle(.secondary)
+                        if item.placement == "steering" {
+                            // dsh cuts it in when the step being written ends,
+                            // not mid-sentence; without this the strip looks
+                            // unchanged for as long as that step takes.
+                            Text("Goes in when this step ends")
+                                .font(.system(size: 11))
+                                .foregroundStyle(Palette.accent)
+                        }
+                    }
                     Spacer(minLength: 0)
-                    if let onPromote, item.placement != "steering" {
+                    if let onPromote, item.placement != "steering", canPromote(item) {
                         // dsh's own client offers this and the app did not: a
                         // queued message waits for the turn to finish, and
                         // sometimes what you have just typed is the reason the

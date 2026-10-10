@@ -1066,10 +1066,17 @@ public final class MachineSession {
 
     /// Cut a queued message into the running turn. dsh moves it from the
     /// next turn's queue to the running one's; the `inbox` projection shows it.
+    ///
+    /// Shown as steering at once: dsh hands it to the model only when the step
+    /// being written ends, which can be a long answer away, and a tap with no
+    /// visible effect for that long reads as one that missed.
     public func promote(sessionId: String, item: QueuedMessage) async {
+        let conversation = existing(sessionId)
+        conversation?.setPlacement("steering", of: item.id)
         do {
             try await harness.updateQueue(sessionId: sessionId, itemId: item.id, action: .steer)
         } catch {
+            conversation?.setPlacement(item.placement, of: item.id)
             problem = (error as? LocalizedError)?.errorDescription ?? "That message could not be moved up."
         }
     }

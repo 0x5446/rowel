@@ -529,6 +529,42 @@ final class LoadingTests: XCTestCase {
         XCTAssertNil(session.problem, "a message that arrived was reported as not sent")
     }
 
+    /// Steering shows at once — dsh cuts the message in only when the current
+    /// step ends — and a refusal puts the entry back as it was and says why.
+    func testSteeringShowsAtOnceAndARefusalPutsItBack() async throws {
+        let transport = ScriptedTransport()
+        let session = machine(transport)
+        let conversation = session.conversation("s1")
+        session.receiveForTesting(follow: snapshot([event("turn/start", seq: 1, data: .object(["turn": 1]))]), sessionId: "s1")
+        conversation.applyProjection(key: "inbox", value: .object([
+            "next-turn": .array([.object(["id": .string("i1"), "content": .array([.object(["type": .string("text"), "text": .string("next")])]),
+                                          "source": .object(["kind": .string("user"), "rpcId": .string("r1")])])]),
+            "next-step": .array([]),
+        ]), seq: 2)
+        let item = try XCTUnwrap(conversation.queue.first)
+        XCTAssertTrue(conversation.isListed(item))
+
+        await transport.answer("session/updateQueue", .object(["accepted": .bool(true)]))
+        await session.promote(sessionId: "s1", item: item)
+        XCTAssertEqual(conversation.queue.first?.placement, "steering")
+        let sent = await transport.payloads("session/updateQueue").first
+        XCTAssertEqual(sent?.path("request", "action", "kind")?.stringValue, "steer")
+        XCTAssertEqual(sent?.path("request", "itemId")?.stringValue, "i1")
+
+        conversation.setPlacement("queued", of: "i1")
+        await transport.fail("session/updateQueue", code: "session/steer-unavailable")
+        await session.promote(sessionId: "s1", item: try XCTUnwrap(conversation.queue.first))
+        XCTAssertEqual(conversation.queue.first?.placement, "queued", "refused, so it is still waiting for the next turn")
+        XCTAssertNotNil(session.problem)
+    }
+
+    /// An entry the machine has not listed yet has no id it knows.
+    func testAnUnlistedEntryCannotBeSteered() {
+        let held = Conversation(sessionId: "s1")
+        held.showQueued(text: "just sent", id: "req-1")
+        XCTAssertFalse(held.isListed(held.queue[0]))
+    }
+
     /// A rename made on this phone must not outrank the Mac's later ones.
     func testARenameHereDoesNotFreezeTheTitle() async throws {
         let transport = ScriptedTransport()
