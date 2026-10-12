@@ -15,6 +15,9 @@ struct SessionListView: View {
     @State private var query = ""
     @State private var hits: [SearchHit] = []
     @State private var searching = false
+    /// The query the current results answer. Until it equals what is typed,
+    /// there is no result to report — empty is not yet "nothing matched".
+    @State private var answered: String?
     /// Why the machine could not run a full-text search, when it could not.
     ///
     /// Shown rather than swallowed. The first version used `try?`, which turned
@@ -266,6 +269,17 @@ struct SessionListView: View {
                     openAt: first-search
                 """
             )
+        } else if !query.isEmpty, answered != query.trimmingCharacters(in: .whitespaces) {
+            // The machine has not answered this query yet. Usually that is a
+            // moment; the first search after dsh starts builds the index from
+            // every conversation first, which took over ten seconds on a Mac
+            // with 250 of them — long enough that "Nothing matched" in the
+            // meantime read as search being broken.
+            Placeholder(
+                icon: "magnifyingglass",
+                title: "Searching…",
+                detail: "The first search after dsh starts reads every conversation first, which can take a little while."
+            )
         } else if !query.isEmpty {
             Placeholder(icon: "magnifyingglass", title: "Nothing matched", detail: "Try a word from the conversation itself.")
         } else if !session.isOnline {
@@ -498,6 +512,9 @@ struct SessionListView: View {
         // local half quietly returns rows the machine would not have. Half a
         // search that disagrees with the machine is worse than no search that
         // says so.
+        // Only results for what is typed now; the last query's would otherwise
+        // sit under the new one until its answer arrived.
+        guard answered == query.trimmingCharacters(in: .whitespaces) else { return [] }
         let byId = Dictionary(uniqueKeysWithValues: visible.map { ($0.id, $0) })
         return hits.compactMap { hit in
             guard let summary = byId[hit.id] else { return nil }
@@ -509,6 +526,7 @@ struct SessionListView: View {
         let text = query.trimmingCharacters(in: .whitespaces)
         guard text.count >= 2 else {
             hits = []
+            answered = text
             return
         }
         // A keystroke-per-request would hammer the tunnel; a beat of quiet first
@@ -518,10 +536,16 @@ struct SessionListView: View {
         searching = true
         defer { searching = false }
         do {
-            hits = try await session.harness.search(query: text).hits
+            let found = try await session.harness.search(query: text).hits
+            // A slower answer to an earlier query must not stand for this one.
+            guard !Task.isCancelled else { return }
+            hits = found
+            answered = text
             searchUnavailable = nil
         } catch {
+            guard !Task.isCancelled else { return }
             hits = []
+            answered = text
             // dsh says "session search is disabled: … openAt \"never\"" when the
             // index was never opened, which is a deployment choice rather than a
             // fault. Either way the local matches below still stand, so this is
