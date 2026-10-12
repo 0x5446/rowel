@@ -7,6 +7,23 @@ Versions are the tags `install.sh` can install. `ROWEL_REF` in that script names
 the one it installs by default, so a release here and a change to that line are
 the same decision.
 
+## 0.2.1 — 2026-10-12
+
+- **`bridle --version` prints the version.** It used to fall through to
+  starting a Bridle — and, with no dsh running, launching one, which on a Mac
+  part-way through upgrading dsh was the old dsh, holding the port the new one
+  needed. `--version`/`-v` and `--help`/`-h` now do what they say, and an
+  option no command reads is refused instead of ignored.
+
+- **The installer builds the dsh plugin.** `bridle plugin install` — how
+  Bridle signs in to a dsh that is already running — needs it, and a fresh
+  0.2.0 install answered it with "the plugin is not built". (The installer
+  is served from the repository, so this was live within the hour; the note
+  is here for anyone who installed 0.2.0 in that window: run the installer
+  again.)
+
+- **Contact: rowel@novabox.ai**, for questions, conduct and security reports.
+
 ## 0.2.0 — 2026-10-12
 
 **For dsh 0.2, and only dsh 0.2.** dsh 0.2 replaced its whole API — how a
