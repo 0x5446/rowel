@@ -11,7 +11,7 @@ representing this project.
 
 ## Reporting
 
-`hi@novabox.ai`, subject starting with `CONDUCT`.
+`rowel@novabox.ai`, subject starting with `CONDUCT`.
 
 Be aware of what that means here. One person maintains this project, and that
 person receives, investigates, and decides on reports. There is no committee and
