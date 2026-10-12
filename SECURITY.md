@@ -9,7 +9,7 @@ That is the product, and it is why this file is longer than the template.
 
 1. **GitHub private advisory** — [report it here](https://github.com/0x5446/rowel/security/advisories/new).
    Preferred, because the discussion, the fix, and the CVE all stay in one place.
-2. **Email** — `hi@novabox.ai`, subject starting with `SECURITY`. Use this if you
+2. **Email** — `rowel@novabox.ai`, subject starting with `SECURITY`. Use this if you
    would rather not have a GitHub account attached to the report. There is no
    PGP key; if you need one, say so in a first message with no details in it.
 
