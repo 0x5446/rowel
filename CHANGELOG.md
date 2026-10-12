@@ -7,7 +7,7 @@ Versions are the tags `install.sh` can install. `ROWEL_REF` in that script names
 the one it installs by default, so a release here and a change to that line are
 the same decision.
 
-## Unreleased (0.2.0)
+## 0.2.0 — 2026-10-12
 
 **For dsh 0.2, and only dsh 0.2.** dsh 0.2 replaced its whole API — how a
 client signs in, every method name, the event stream — and this Bridle, with
