@@ -1,4 +1,4 @@
-# App Store Metadata — Rowel v1.0
+# App Store Metadata — Rowel v1.1
 
 Everything on this page is calibrated against the repo (README, CHANGELOG,
 `site/public/*.html`, `ios/` source) and against the policy research in
@@ -9,8 +9,12 @@ Keywords 100).
 **2026-09-30:** the Description's Approvals and Notifications paragraphs were
 corrected here (the push does not wake the app; an approval carries the tool
 call and a reason, the command or diff is in the card it belongs to). App Store
-Connect still holds the old text for 1.0, which was in review — put this in
-with the next version.
+Connect was brought up to date on 2026-10-08.
+
+**2026-10-12:** 1.1 needs dsh 0.2 — the Requirements line says so, here and in
+App Store Connect, where 1.1 (build 207) is in review. The review notes now say
+the demo video was recorded with build 178 and that 1.1 changes how the app
+talks to the Mac, not the flow it shows.
 
 ---
 
@@ -150,7 +154,7 @@ when you open the app and held only in memory.
 REQUIREMENTS
 
 A Mac running the companion program, and a coding agent installed on it. Rowel
-currently works with DeepSeek Harness (dsh). Setup takes about a minute and is
+works with DeepSeek Harness (dsh) 0.2 or later. Setup takes about a minute and is
 documented at rowel.novabox.ai. The app is free and the source is public.
 ```
 
