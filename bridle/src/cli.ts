@@ -44,6 +44,16 @@ interface Options {
  */
 async function main(argv: string[]): Promise<void> {
   const options = parse(argv)
+  // A flag nothing reads used to be ignored, and the command left standing was
+  // `start` — so `bridle --version` started a Bridle, and with no dsh running,
+  // a dsh too. An unknown flag is a mistake, and is said to be one.
+  const unknown = [...options.flags.keys()].filter(name => name !== '_' && !KNOWN_FLAGS.has(name))
+  if (unknown.length > 0) {
+    process.stderr.write(`unknown option${unknown.length > 1 ? 's' : ''}: ${unknown.map(name => `--${name}`).join(' ')}\n\n`)
+    usage()
+    process.exitCode = 1
+    return
+  }
   switch (options.command) {
     case 'start':
       await start(options)
@@ -94,6 +104,15 @@ async function main(argv: string[]): Promise<void> {
   }
 }
 
+/** Every flag some command reads. See `main`. */
+const KNOWN_FLAGS = new Set([
+  'advertise', 'code', 'direct-port', 'dsh', 'dsh-command', 'dsh-home', 'force', 'install', 'link',
+  'no-auto-start', 'no-direct', 'pair', 'relay',
+])
+
+/** What people type for `version` and `help`, wherever they put it. */
+const COMMAND_SPELLINGS: Record<string, string> = { '--version': 'version', '-v': 'version', '--help': 'help', '-h': 'help' }
+
 function parse(argv: string[]): Options {
   const flags = new Map<string, string | true>()
   let command = 'start'
@@ -101,6 +120,12 @@ function parse(argv: string[]): Options {
   const positional: string[] = []
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index] ?? ''
+    const spelled = COMMAND_SPELLINGS[token]
+    if (spelled !== undefined) {
+      command = spelled
+      seenCommand = true
+      continue
+    }
     if (token.startsWith('--')) {
       const [name, inline] = splitFlag(token.slice(2))
       const next = argv[index + 1]
