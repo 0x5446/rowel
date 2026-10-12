@@ -302,7 +302,7 @@ struct StatusLine: View {
                 // the person to guess, and they will guess wrong half the time.
                 return appIsOlder
                     ? "Rowel is older than the Bridle on \(machineLabel). Update Rowel."
-                    : "The Bridle on \(machineLabel) is older than Rowel. Run `npm update` there, or update the dsh plugin."
+                    : "The Bridle on \(machineLabel) is older than this Rowel, which needs Bridle 0.2 and dsh 0.2. Upgrade both on the Mac (rowel.novabox.ai/help has the steps), or keep using the previous Rowel from TestFlight while that Mac stays on dsh 0.1."
             case .machineError(let detail):
                 return detail
             }

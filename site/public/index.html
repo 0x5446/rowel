@@ -277,6 +277,10 @@ open ios/Rowel.xcodeproj   # pick your iPhone, Run</code></pre>
       <p>Bridle is fine; the DeepSeek Harness isn't. Start it, and the app notices within a few seconds — nothing to restart on the phone.</p>
     </details>
     <details>
+      <summary>"The Bridle is older than this Rowel"</summary>
+      <p>Rowel 1.1 needs Bridle 0.2, which needs dsh 0.2. Upgrade both on the Mac — back up <code>~/.dsh</code> first, the upgrade is one-way — following <a href="https://github.com/0x5446/rowel#upgrading-from-dsh-01">the upgrade notes</a>. To keep that Mac on dsh 0.1 for now, install the previous Rowel build from TestFlight (TestFlight → Rowel → Previous Builds).</p>
+    </details>
+    <details>
       <summary>"dsh asks to sign in"</summary>
       <p>dsh 0.2 lets in only clients holding the token it printed, and Bridle cannot read that from a dsh someone else started. Run Bridle inside dsh instead: <code>bridle plugin install</code>, then restart dsh. (A dsh that Bridle starts itself needs nothing.)</p>
     </details>
