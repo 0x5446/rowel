@@ -109,7 +109,9 @@ step "Building"
 # Bridle ships as source rather than as a published tarball.
 ( cd "$SRC_DIR" && npm ci --silent --no-audit --no-fund >/dev/null 2>&1 \
   || npm install --silent --no-audit --no-fund >/dev/null )
-( cd "$SRC_DIR" && npx tsc -b protocol bridle )
+# The dsh plugin too: for a dsh that is already running, it is the only way
+# Bridle can sign in (`bridle plugin install` points dsh at what this builds).
+( cd "$SRC_DIR" && npx tsc -b protocol bridle dsh-plugin )
 
 # --- PATH -------------------------------------------------------------------
 #
@@ -155,4 +157,7 @@ say "  ${bold}bridle pair${off}"
 say ""
 say "${dim}If no Bridle was running yet, it stays in that terminal. Once the phone is in,${off}"
 say "${dim}Ctrl-C and run ${bold}bridle service install${off}${dim} to keep it running after login.${off}"
+say ""
+say "${dim}dsh already running — a login item, a terminal tab? Bridle cannot sign in to it${off}"
+say "${dim}from outside. Run ${bold}bridle plugin install${off}${dim}, restart dsh, then ${bold}bridle pair${off}${dim}.${off}"
 say ""
