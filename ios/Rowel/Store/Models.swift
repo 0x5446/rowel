@@ -794,6 +794,53 @@ public struct ModelCatalog: Equatable {
     }
 }
 
+/// What the model sheet will apply on Done: chosen on screen, sent once.
+///
+/// Tapping a model used to switch the session and close the sheet, which left
+/// no way to pick that model's thinking level without reopening it. The draft
+/// holds both choices until Done, so a model and its level travel together.
+public struct ModelDraft: Equatable {
+    public let base: ModelCatalog
+    public private(set) var option: ModelOption?
+    /// nil means no level is named, and the model decides for itself.
+    public private(set) var effort: String?
+    /// The live level as the sheet shows it, so a stale one is not a change.
+    private let liveEffort: String?
+
+    public init(_ catalog: ModelCatalog) {
+        base = catalog
+        option = catalog.current
+        liveEffort = catalog.current.flatMap { Self.offered(catalog.currentEffort, by: $0, in: catalog) }
+        effort = liveEffort
+    }
+
+    /// Point the draft at a model. Picking the one in use restores its live
+    /// level; any other starts from that model's own default, never from the
+    /// level the previous model happened to be on.
+    public mutating func choose(_ next: ModelOption) {
+        guard next != option else { return }
+        option = next
+        let level = next == base.current ? liveEffort : base.defaultEffort(for: next)
+        effort = Self.offered(level, by: next, in: base)
+    }
+
+    public mutating func choose(effort level: String) {
+        guard let option else { return }
+        effort = Self.offered(level, by: option, in: base)
+    }
+
+    /// Whether Done has anything to send.
+    public var changed: Bool {
+        guard let option else { return false }
+        return option != base.current || effort != liveEffort
+    }
+
+    private static func offered(_ level: String?, by option: ModelOption, in catalog: ModelCatalog) -> String? {
+        guard let level else { return nil }
+        return catalog.efforts(for: option).contains { $0.id == level } ? level : nil
+    }
+}
+
 /// What the machine says about itself.
 public struct MachineDescription: Equatable {
     public var version: String

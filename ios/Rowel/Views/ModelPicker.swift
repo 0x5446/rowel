@@ -4,6 +4,10 @@
 /// people think about them. Providers that failed to load are listed rather than
 /// dropped: a missing model is otherwise indistinguishable from a model that was
 /// never installed, and the fix is different.
+///
+/// Nothing is sent until Done. Tapping a model selects it in the sheet and shows
+/// its thinking levels underneath; Done applies the model and level together,
+/// Cancel (or swiping the sheet away) applies neither.
 
 import SwiftUI
 
@@ -12,17 +16,17 @@ struct ModelPicker: View {
     let sessionId: String
 
     @Environment(\.dismiss) private var dismiss
-    @State private var catalog: ModelCatalog?
+    @State private var draft: ModelDraft?
     @State private var problem: String?
-    @State private var switching: String?
-    /// The level chosen for the current model, before it is sent.
-    @State private var effort: String?
+    /// Why Done did not go through; the sheet stays open so it can be retried.
+    @State private var failure: String?
+    @State private var applying = false
 
     var body: some View {
         NavigationStack {
             Group {
-                if let catalog {
-                    list(catalog)
+                if let draft {
+                    list(draft)
                 } else if let problem {
                     Placeholder(icon: "exclamationmark.triangle", title: "Couldn’t list models", detail: problem)
                 } else {
@@ -32,21 +36,39 @@ struct ModelPicker: View {
             .navigationTitle("Model")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Cancel") { dismiss() }
+                        .disabled(applying)
+                }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { dismiss() }
+                    if applying {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Button("Done") { Task { await apply() } }
+                            .fontWeight(.semibold)
+                    }
                 }
             }
+            .interactiveDismissDisabled(applying)
         }
         .task { await load() }
     }
 
-    private func list(_ catalog: ModelCatalog) -> some View {
-        List {
+    private func list(_ draft: ModelDraft) -> some View {
+        let catalog = draft.base
+        return List {
+            if let failure {
+                Section {
+                    Label(failure, systemImage: "exclamationmark.triangle")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                }
+            }
             ForEach(groups(catalog), id: \.provider) { group in
                 Section(group.name) {
                     ForEach(group.options) { option in
                         Button {
-                            Task { await select(option) }
+                            self.draft?.choose(option)
                         } label: {
                             HStack(alignment: .top, spacing: Metrics.gap) {
                                 VStack(alignment: .leading, spacing: 2) {
@@ -59,9 +81,7 @@ struct ModelPicker: View {
                                     }
                                 }
                                 Spacer()
-                                if switching == option.id {
-                                    ProgressView().controlSize(.small)
-                                } else if catalog.current?.id == option.id {
+                                if draft.option?.id == option.id {
                                     Image(systemName: "checkmark")
                                         .font(.system(size: 13, weight: .bold))
                                         .foregroundStyle(Palette.accent)
@@ -70,25 +90,31 @@ struct ModelPicker: View {
                         }
                         .foregroundStyle(.primary)
 
-                        // Under the model it belongs to, and only for the one
-                        // in use. Showing every model's levels would triple the
-                        // list to answer a question nobody asked about models
-                        // they are not on.
-                        if catalog.current?.id == option.id {
+                        // Under the model it belongs to, and only for the selected
+                        // one. Showing every model's levels would triple the list
+                        // to answer a question nobody asked about models they
+                        // are not choosing.
+                        if draft.option?.id == option.id {
                             let levels = catalog.efforts(for: option)
                             if !levels.isEmpty {
-                                Picker("Thinking", selection: Binding(
-                                    get: { effort ?? catalog.currentEffort ?? catalog.defaultEffort(for: option) ?? levels[0].id },
-                                    set: { chosen in
-                                        effort = chosen
-                                        Task { await select(option, effort: chosen, keepOpen: true) }
+                                VStack(alignment: .leading, spacing: 6) {
+                                    // "" matches no segment: a level nobody named is
+                                    // shown as unnamed, not as the first one.
+                                    Picker("Thinking", selection: Binding(
+                                        get: { draft.effort ?? "" },
+                                        set: { self.draft?.choose(effort: $0) }
+                                    )) {
+                                        ForEach(levels) { level in
+                                            Text(level.name).tag(level.id)
+                                        }
                                     }
-                                )) {
-                                    ForEach(levels) { level in
-                                        Text(level.name).tag(level.id)
+                                    .pickerStyle(.segmented)
+                                    if draft.effort == nil {
+                                        Text("Model default. Pick a level to set one.")
+                                            .font(.system(size: 12))
+                                            .foregroundStyle(.secondary)
                                     }
                                 }
-                                .pickerStyle(.segmented)
                                 .listRowInsets(EdgeInsets(top: 4, leading: Metrics.gutter, bottom: 10, trailing: Metrics.gutter))
                             }
                         }
@@ -128,35 +154,31 @@ struct ModelPicker: View {
 
     private func load() async {
         do {
-            catalog = try await session.harness.models(sessionId: sessionId)
+            draft = ModelDraft(try await session.harness.models(sessionId: sessionId))
         } catch {
             problem = (error as? LocalizedError)?.errorDescription ?? "The Mac didn’t answer."
         }
     }
 
-    /// Apply a model, and the thinking level that goes with it.
+    /// Send the model and level chosen in the sheet, then close it.
     ///
-    /// - Parameters:
-    ///   - effort: nil lets the machine keep whatever the model defaults to.
-    ///   - keepOpen: true when only the level changed. Dismissing then would
-    ///     make trying two levels a matter of reopening the sheet each time.
-    private func select(_ option: ModelOption, effort chosen: String? = nil, keepOpen: Bool = false) async {
-        switching = option.id
-        defer { switching = nil }
-        // Switching model carries the new model's own default rather than the
-        // level the previous one happened to be on — "Max" on a small model and
-        // "Max" on a large one are not the same amount of money.
-        let level = chosen ?? catalog?.defaultEffort(for: option)
+    /// The draft already carries the new model's own default when no level was
+    /// picked, so nil here really means "name none" and the machine keeps
+    /// whatever the model defaults to.
+    private func apply() async {
+        guard let draft, draft.changed, let option = draft.option else {
+            dismiss()
+            return
+        }
+        applying = true
+        defer { applying = false }
         // Through the session, not the harness. The header reads the
         // conversation, so a write that only touched this sheet's copy left the
         // two disagreeing until the next turn.
-        if let failure = await session.selectModel(sessionId: sessionId, option: option, effort: level) {
-            problem = failure
+        if let refused = await session.selectModel(sessionId: sessionId, option: option, effort: draft.effort) {
+            failure = refused
             return
         }
-        catalog?.current = option
-        catalog?.currentEffort = level
-        effort = level
-        if !keepOpen { dismiss() }
+        dismiss()
     }
 }
