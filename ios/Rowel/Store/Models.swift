@@ -805,7 +805,7 @@ public struct ModelDraft: Equatable {
     /// nil means no level is named, and the model decides for itself.
     public private(set) var effort: String?
     /// The live level as the sheet shows it, so a stale one is not a change.
-    private let liveEffort: String?
+    public let liveEffort: String?
 
     public init(_ catalog: ModelCatalog) {
         base = catalog

@@ -5,8 +5,9 @@
 /// dropped: a missing model is otherwise indistinguishable from a model that was
 /// never installed, and the fix is different.
 ///
-/// Nothing is sent until Done. Tapping a model selects it in the sheet and shows
-/// its thinking levels underneath; Done applies the model and level together,
+/// Nothing is sent until Done. Tapping a model selects it; the selected model
+/// and its thinking levels sit at the top, so what Done will apply is always in
+/// view however long the list is. Done applies the model and level together,
 /// Cancel (or swiping the sheet away) applies neither.
 
 import SwiftUI
@@ -64,6 +65,9 @@ struct ModelPicker: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            if let selected = draft.option {
+                selectedSection(selected, draft)
+            }
             ForEach(groups(catalog), id: \.provider) { group in
                 Section(group.name) {
                     ForEach(group.options) { option in
@@ -89,35 +93,6 @@ struct ModelPicker: View {
                             }
                         }
                         .foregroundStyle(.primary)
-
-                        // Under the model it belongs to, and only for the selected
-                        // one. Showing every model's levels would triple the list
-                        // to answer a question nobody asked about models they
-                        // are not choosing.
-                        if draft.option?.id == option.id {
-                            let levels = catalog.efforts(for: option)
-                            if !levels.isEmpty {
-                                VStack(alignment: .leading, spacing: 6) {
-                                    // "" matches no segment: a level nobody named is
-                                    // shown as unnamed, not as the first one.
-                                    Picker("Thinking", selection: Binding(
-                                        get: { draft.effort ?? "" },
-                                        set: { self.draft?.choose(effort: $0) }
-                                    )) {
-                                        ForEach(levels) { level in
-                                            Text(level.name).tag(level.id)
-                                        }
-                                    }
-                                    .pickerStyle(.segmented)
-                                    if draft.effort == nil {
-                                        Text("Model default. Pick a level to set one.")
-                                            .font(.system(size: 12))
-                                            .foregroundStyle(.secondary)
-                                    }
-                                }
-                                .listRowInsets(EdgeInsets(top: 4, leading: Metrics.gutter, bottom: 10, trailing: Metrics.gutter))
-                            }
-                        }
                     }
                 }
             }
@@ -131,6 +106,55 @@ struct ModelPicker: View {
                 }
             }
         }
+    }
+
+    /// The model Done will apply, and its levels. One place for both, at the
+    /// top: levels drawn under a row deep in the list were off screen as often
+    /// as not, and the row that was checked was easy to scroll past.
+    private func selectedSection(_ option: ModelOption, _ draft: ModelDraft) -> some View {
+        let levels = draft.base.efforts(for: option)
+        return Section {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(option.name)
+                    .font(.system(size: 15, weight: .semibold))
+                Text(option.providerName)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(.secondary)
+            }
+            if !levels.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    // "" matches no segment: a level nobody named is shown as
+                    // unnamed, not as the first one.
+                    Picker("Thinking", selection: Binding(
+                        get: { draft.effort ?? "" },
+                        set: { self.draft?.choose(effort: $0) }
+                    )) {
+                        ForEach(levels) { level in
+                            Text(level.name).tag(level.id)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    if draft.effort == nil {
+                        Text("Model default. Pick a level to set one.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .listRowInsets(EdgeInsets(top: 8, leading: Metrics.gutter, bottom: 10, trailing: Metrics.gutter))
+            }
+        } header: {
+            Text("Selected")
+        } footer: {
+            if draft.changed, let live = draft.base.current {
+                Text("In use: \(summary(live, effort: draft.liveEffort, in: draft.base)). Done switches.")
+            }
+        }
+    }
+
+    private func summary(_ option: ModelOption, effort: String?, in catalog: ModelCatalog) -> String {
+        guard let effort else { return option.name }
+        let name = catalog.efforts(for: option).first { $0.id == effort }?.name ?? effort
+        return "\(option.name) · \(name)"
     }
 
     private struct ProviderGroup {

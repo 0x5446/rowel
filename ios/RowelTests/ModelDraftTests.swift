@@ -73,6 +73,7 @@ final class ModelDraftTests: XCTestCase {
         draft.choose(flash)
 
         XCTAssertEqual(draft.effort, "max")
+        XCTAssertEqual(draft.liveEffort, "max", "the In use line names the level the session is on")
         XCTAssertFalse(draft.changed)
     }
 
@@ -96,6 +97,7 @@ final class ModelDraftTests: XCTestCase {
         var draft = ModelDraft(catalog(current: pro, effort: "low"))
         XCTAssertNil(draft.effort, "a stale live level outside the model's set is not shown as chosen")
         XCTAssertFalse(draft.changed, "and hiding it is not an edit to send")
+        XCTAssertNil(draft.liveEffort, "nor is it named as the level in use")
 
         draft.choose(effort: "medium")
         XCTAssertNil(draft.effort)
