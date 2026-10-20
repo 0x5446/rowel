@@ -40,8 +40,9 @@ test('the App Review demo video is served', { timeout: TIMEOUT_MS }, async () =>
   // The review notes in App Store Connect send the reviewer to this address.
   // The file is kept out of git on purpose (too large for history), so a deploy
   // from any checkout without it — a worktree, a fresh clone — replaces the
-  // site's assets and silently drops it; on 2026-10-20 it had been 404 for a
-  // week while 1.1 sat in the review queue pointing at it. Restore it by
+  // site's assets and silently drops it; on 2026-10-20 it was found 404 while
+  // 1.1 sat in the review queue pointing at it, after two deploys on 10-12.
+  // Restore it by
   // putting the file in site/public/review/ and deploying from that checkout.
   const response = await fetch(new URL('/review/demo-1.0.mp4', SITE), {
     method: 'HEAD',
