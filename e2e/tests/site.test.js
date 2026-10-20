@@ -36,6 +36,21 @@ test('every page the app links to is served', { timeout: TIMEOUT_MS }, async () 
   }
 })
 
+test('the App Review demo video is served', { timeout: TIMEOUT_MS }, async () => {
+  // The review notes in App Store Connect send the reviewer to this address.
+  // The file is kept out of git on purpose (too large for history), so a deploy
+  // from any checkout without it — a worktree, a fresh clone — replaces the
+  // site's assets and silently drops it; on 2026-10-20 it had been 404 for a
+  // week while 1.1 sat in the review queue pointing at it. Restore it by
+  // putting the file in site/public/review/ and deploying from that checkout.
+  const response = await fetch(new URL('/review/demo-1.0.mp4', SITE), {
+    method: 'HEAD',
+    signal: AbortSignal.timeout(15_000),
+  })
+  assert.equal(response.status, 200, '/review/demo-1.0.mp4 should be served')
+  assert.equal(response.headers.get('content-type'), 'video/mp4')
+})
+
 test('the old page addresses land on their sections', { timeout: TIMEOUT_MS }, async () => {
   // The site is one page now, but `/help` is the app's Help button and the App
   // Store's support URL, and `/get` is printed by the CLI and in the README —
