@@ -134,12 +134,12 @@ public final class Conversation {
     /// Projection watermarks, so an out-of-order projection frame cannot go backwards.
     private var projectionSeq: [String: Int] = [:]
     /// Optimistic bubbles, by the `requestId` they were sent under, holding the
-    /// text they were shown with.
+    /// text they were shown with and the photos, still in hand, sent beside it.
     ///
     /// The harness mints its own id for a message, but logs the sender's
     /// `requestId` on it as `source.rpcId` — that is the join. Without it the
     /// optimistic copy stays on screen and every message appears twice.
-    private var pending: [(id: String, text: String)] = []
+    private var pending: [(id: String, text: String, images: [ImageAttachment])] = []
     /// Queue entries shown before the machine listed them, by `requestId`.
     /// Kept across `inbox` updates until the machine's own entry, or the
     /// message itself, says where it went.
@@ -189,7 +189,7 @@ public final class Conversation {
         }
         // Whatever the log did not confirm goes back where it was: at the end.
         for entry in pending {
-            append(.user(UserTurn(id: entry.id, text: entry.text, images: [], synthetic: false, at: Date())))
+            append(.user(UserTurn(id: entry.id, text: entry.text, images: entry.images, synthetic: false, at: Date())))
         }
         loaded = true
     }
@@ -471,21 +471,40 @@ public final class Conversation {
         // under comes back as `source.rpcId`. Its optimistic bubble and its
         // provisional queue entry are retired here rather than by the `inbox`
         // update, which can be missed across a reconnect.
+        var shown = images
         if let requestId = message.path("source", "rpcId")?.stringValue {
-            clearPending(requestId)
+            shown = Conversation.carry(clearPending(requestId), into: images)
             provisional.removeAll { $0.id == requestId }
             queue.removeAll { $0.id == requestId }
         }
         let id = message["id"]?.stringValue ?? "u\(seq)"
-        append(.user(UserTurn(id: id, text: text, images: images, synthetic: false, at: at)))
+        append(.user(UserTurn(id: id, text: text, images: shown, synthetic: false, at: at)))
     }
 
     /// Remove the optimistic bubble sent under this `requestId`.
-    private func clearPending(_ requestId: String) {
-        guard let index = pending.firstIndex(where: { $0.id == requestId }) else { return }
-        pending.remove(at: index)
+    /// - Returns: the photos it was showing, for the real copy to keep.
+    @discardableResult
+    private func clearPending(_ requestId: String) -> [ImageAttachment] {
+        guard let index = pending.firstIndex(where: { $0.id == requestId }) else { return [] }
+        let images = pending.remove(at: index).images
         items.removeAll { $0.id == requestId }
         reindex()
+        return images
+    }
+
+    /// The real copy's attachments, wearing the bytes this device already has.
+    ///
+    /// The machine names each photo by attachment id only, and fetching it back
+    /// means the thumbnail blinks to a placeholder at the moment the message is
+    /// confirmed — for a photo that never left the phone's memory. The machine
+    /// keeps the order it was given, so the local copies pair up by position;
+    /// when the counts disagree the pairing is a guess, and the real ids fetch
+    /// as usual instead.
+    static func carry(_ local: [ImageAttachment], into real: [ImageAttachment]) -> [ImageAttachment] {
+        guard !local.isEmpty, local.count == real.count else { return real }
+        return zip(real, local).map { real, local in
+            ImageAttachment(id: real.id, mediaType: real.mediaType, base64: real.base64 ?? local.base64)
+        }
     }
 
     private func applyChunk(_ chunk: JSONValue, turn: Int, step: Int, at: Date) {
@@ -697,9 +716,16 @@ public final class Conversation {
     /// Show a message optimistically, before the machine has logged it, under
     /// the `requestId` it is sent with. The real `user/message` names that
     /// request and replaces it.
-    public func showPending(text: String, id: String) {
-        pending.append((id: id, text: text.trimmingCharacters(in: .whitespacesAndNewlines)))
-        append(.user(UserTurn(id: id, text: text, images: [], synthetic: false, at: Date())))
+    ///
+    /// Photos show at once from the bytes being sent. Uploading them is the slow
+    /// part of a send, and a bubble that showed the words but not the photos for
+    /// those seconds read as the photos having been dropped.
+    public func showPending(text: String, id: String, images: [PromptImage] = []) {
+        let local = images.enumerated().map { index, image in
+            ImageAttachment(id: "\(id)#\(index)", mediaType: image.mediaType, base64: image.base64)
+        }
+        pending.append((id: id, text: text.trimmingCharacters(in: .whitespacesAndNewlines), images: local))
+        append(.user(UserTurn(id: id, text: text, images: local, synthetic: false, at: Date())))
     }
 
     /// Whether an optimistic message is still waiting for the machine's copy.

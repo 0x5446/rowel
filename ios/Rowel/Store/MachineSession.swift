@@ -992,7 +992,7 @@ public final class MachineSession {
             }
             return
         }
-        conversation.showPending(text: text, id: requestId)
+        conversation.showPending(text: text, id: requestId, images: images)
         do {
             try await harness.prompt(sessionId: sessionId, requestId: requestId, text: text, images: images, steer: steer)
         } catch {

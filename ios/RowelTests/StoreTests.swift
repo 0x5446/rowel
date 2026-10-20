@@ -770,6 +770,62 @@ final class OptimisticSendTests: XCTestCase {
         XCTAssertEqual(user.id, "m-abc", "the surviving copy is the real one, so later events can address it")
     }
 
+    private func userMessage(_ text: String, id: String, seq: Int, requestId: String, attachments: [String]) -> JSONValue {
+        let photos: [JSONValue] = attachments.map { attachmentId in
+            .object(["type": .string("image"), "attachment": .object([
+                "attachmentId": .string(attachmentId), "mediaType": .string("image/jpeg"),
+            ])])
+        }
+        return event("user/message", seq: seq, data: .object([
+            "id": .string(id),
+            "content": .array([.object(["type": .string("text"), "text": .string(text)])] + photos),
+            "source": .object(["kind": .string("user"), "rpcId": .string(requestId)]),
+        ]))
+    }
+
+    private let photoA = PromptImage(mediaType: "image/jpeg", base64: "QUFB", name: nil)
+    private let photoB = PromptImage(mediaType: "image/jpeg", base64: "QkJC", name: nil)
+
+    /// The reported bug: two photos and a line sent, and the bubble showed only
+    /// the line until the conversation was reopened. The photos are in hand at
+    /// send time; they show from those bytes, at once.
+    func testPhotosShowTheMomentTheyAreSent() {
+        let held = Conversation(sessionId: "s1")
+        held.showPending(text: "what is in the context", id: "req-1", images: [photoA, photoB])
+
+        guard case .user(let user) = held.items.last else { return XCTFail("expected a user turn") }
+        XCTAssertEqual(user.images.map(\.base64), ["QUFB", "QkJC"])
+    }
+
+    /// When the machine confirms the message, the real copy takes its ids but
+    /// keeps the bytes already here — no blink to a placeholder and a refetch of
+    /// photos that never left the phone.
+    func testTheConfirmedMessageKeepsThePhotosWithoutFetching() {
+        let held = Conversation(sessionId: "s1")
+        held.showPending(text: "look", id: "req-1", images: [photoA, photoB])
+
+        held.apply(event: userMessage("look", id: "m-1", seq: 5, requestId: "req-1", attachments: ["sha256:a", "sha256:b"]))
+
+        XCTAssertEqual(held.items.count, 1)
+        guard case .user(let user) = held.items[0] else { return XCTFail("expected a user turn") }
+        XCTAssertEqual(user.id, "m-1")
+        XCTAssertEqual(user.images.map(\.id), ["sha256:a", "sha256:b"], "the machine's ids, so a reopen addresses the same photos")
+        XCTAssertEqual(user.images.map(\.base64), ["QUFB", "QkJC"])
+    }
+
+    /// Counts that disagree make pairing by position a guess; the real copy
+    /// then fetches by id rather than risk showing one photo as another.
+    func testMismatchedPhotoCountsFallBackToFetching() {
+        let held = Conversation(sessionId: "s1")
+        held.showPending(text: "look", id: "req-1", images: [photoA, photoB])
+
+        held.apply(event: userMessage("look", id: "m-1", seq: 5, requestId: "req-1", attachments: ["sha256:a"]))
+
+        guard case .user(let user) = held.items[0] else { return XCTFail("expected a user turn") }
+        XCTAssertEqual(user.images.map(\.id), ["sha256:a"])
+        XCTAssertNil(user.images[0].base64)
+    }
+
     /// Two sends of the same text consume one bubble each — the one each was
     /// sent under.
     func testRepeatedTextClearsOneBubblePerEcho() {
