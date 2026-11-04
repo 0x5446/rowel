@@ -28,7 +28,9 @@ struct ScannerView: View {
                     title: "Point at the code",
                     detail: "Rowel needs the camera to read the pairing code on your Mac."
                 ) {
-                    Button("Allow camera") {
+                    // App Review (5.1.1(iv)) refuses a pre-permission button that
+                    // asks for the grant; it has to read as moving on.
+                    Button("Continue") {
                         AVCaptureDevice.requestAccess(for: .video) { granted in
                             Task { @MainActor in
                                 authorization = granted ? .authorized : .denied

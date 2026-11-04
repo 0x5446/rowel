@@ -20,8 +20,18 @@ talks to the Mac, not the flow it shows.
 
 ## App Name (limit 30)
 
+**Current:** `Rowel — Coding Agent Remote` (27/30), since 2026-11-04.
+
 **Registered:** `Rowel: DeepSeek Harness Remote` (30/30) — App ID 6807263060,
 SKU `rowel-ios`, bundle `ai.novabox.rowel`, created 2026-09-01.
+
+**2026-11-03:** App Review rejected 1.1 (218) under guideline 4.1(a) —
+"the app's name includes references to DeepSeek" — and warned that repeat
+submissions with the same issue get extended review. The first fallback below
+is now the name. `Rowel: Mobile dsh Client` was passed over: dsh is DeepSeek
+Harness's own short name and the description spells that out, so it invites the
+same reading. The description still says what the app works with; the
+rejection named only the name.
 
 The product was called Reins until the day this record was made. An app named
 `Reins: for Ollama & LM Studio` has been live in Developer Tools since January
@@ -189,7 +199,7 @@ ssh,terminal,remote,ai,llm,developer,devtools,code,shell,encrypted,e2ee,tunnel,g
 ```
 (99 characters)
 
-**If the fallback name is used** (remote/coding/agent now indexed via the
+**If the fallback name is used** — live in ASC since 2026-11-04 (remote/coding/agent now indexed via the
 name — remove `remote`, gain room):
 
 ```
